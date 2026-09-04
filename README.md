@@ -1,144 +1,131 @@
-# howdy-hackathon
+# REMATCH — the boss that learns
 
-Ver [spec.md](spec.md).
+A 2D arena boss fight where, between rounds, an agent studies how you won and rewrites the
+boss's strategy to counter you. A second, deterministic verifier refuses to ship that
+rewrite until it proves the fight is still fair — and you watch it happen, rejections
+included.
 
-## Workspace
+**Status: `pnpm verify` green — 749 tests. Deployed URL: pending.**
 
-pnpm workspaces, Node >= 22 (developed on 25), TypeScript strict ESM. No build step:
-packages resolve to TypeScript source.
+## 60-second demo
 
-| Package | Status | Responsibility |
+```bash
+pnpm install && pnpm dev          # web on :5173, api on :8787 — one Ctrl-C stops both
+open 'http://localhost:5173/?agent=mock&autostart=1'
+```
+
+No API key needed. `?agent=mock` plays the whole four-beat interlude offline; without a key
+the real server answers in fallback-only mode and says so on screen — nothing is fabricated.
+
+**Controls:** `WASD` / arrows to move · `Space` to dash (invulnerable, 10 ticks) · mouse to
+aim · hold click to shoot. Beat the boss inside 60 s and the interlude starts.
+
+**In a hurry?** Winning Round 1 by hand takes ~30 s. On the dev server, in the console:
+
+```js
+const f = await (await fetch('/e2e/fixtures/inputlog-round1.json')).json();
+await __rematch.driveWith(f.log); __rematch.fastForward();   // → straight to the interlude
+```
+
+## The four beats
+
+The interlude *is* the demo. Everything on screen is real output.
+
+| Beat | What you see | What runs |
 |---|---|---|
-| `@rematch/contract` | **implemented** | Boss Contract types, action validator, Gate 1 static check. Zero workspace deps. |
-| `@rematch/sandbox` | **implemented** | QuickJS containment for generated strategies: no host bindings, seeded `rand`, 2 ms deadline, 64 MB heap |
-| `@rematch/engine` | in progress | Deterministic 60 Hz simulation, seeded PRNG |
-| `@rematch/harness` | **implemented** | The four gates + CLI. Gate 1 static, Gate 2 fuzz, Gate 3 balance (worker-parallel sim vs bot panel + Mimic), Gate 4 perf |
-| `@rematch/agents` | **implemented** | Analyst + Coder prompts, context assembly, and the autonomous rewrite loop: four attempts under the harness's back pressure, no human message anywhere (§6.3) |
-| `@rematch/server` | **implemented** | `POST /api/rewrite` over SSE, `/api/health`, `/api/fallback/:round`, the pre-approved fallback pool, deadline + rate limit + CORS |
-| `@rematch/web` | placeholder | Vite + Canvas renderer + interlude UI |
+| **Replay** | your position heat map, dash rose, attack timeline | deterministic replay from seed + input log — the same three pictures the Analyst gets |
+| **Analysis** | streamed prose: *"Player camped the bottom-left corner…"* | **Analyst agent** reads the compressed replay. It is shown no code, ever |
+| **Rewrite** | a unified diff, old strategy → new, labelled with the boss's new name | **Coder agent** writes a `strategy.js` against the frozen Boss Contract |
+| **Trial** | gates tick past, a meter fills, verdicts land: `✗ 0.78 vs panel — too hard` … `↻` … `✓ APPROVED` | **harness**, 4 deterministic gates, no LLM. A rejection goes back to the Coder verbatim. Max 4 attempts, then a pre-approved fallback, visibly |
 
-Dependency direction differs from spec §5.1 on one point, deliberately: `contract` has
-**no** workspace dependencies (it is types + validator + static check only) and `engine`
-depends on `contract`, not the reverse. The spec's table would make the two circular. The
-reference bots §5.1 places in `contract` will live in `harness`; the reference *strategies*
-live in `packages/contract/test/fixtures/strategies/good/`.
+## Packages
 
-`@rematch/sandbox` is not in the spec's package table either: §4.4 places the QuickJS sandbox
-inside the engine. It is its own package because three consumers need it (`engine` for the
-live fight, `harness` for Gates 2-4, and the balance simulator) and none of them should own
-it — and because it is the project's security boundary, which is easier to review, test and
-keep dependency-free on its own.
+pnpm workspaces, Node ≥ 22 (developed on 25), TypeScript strict ESM. **No build step** —
+every package entry point resolves to TypeScript source.
 
-### Commands
+| Package | Depends on | Responsibility |
+|---|---|---|
+| `@rematch/contract` | *(nothing)* | The Boss Contract: types, `CONSTANTS`, `validateAction`, `staticCheck` (Gate 1). Zero workspace deps by design — everything else consumes it |
+| `@rematch/engine` | `contract` | Deterministic 60 Hz simulation, seeded xorshift PRNG, replay + state hash |
+| `@rematch/sandbox` | `contract` | QuickJS containment for generated strategies: no host bindings, seeded `rand()`, 2 ms deadline, 64 MB heap. The security boundary |
+| `@rematch/harness` | `contract`, `engine`, `sandbox` | The four gates + CLI. Gate 1 static, Gate 2 fuzz, Gate 3 balance (worker-parallel sim vs the bot panel + Mimic), Gate 4 perf |
+| `@rematch/agents` | `contract`, `engine`, `harness` | Analyst + Coder prompts, context assembly, and the autonomous rewrite loop — four attempts under the harness's back pressure, no human message anywhere |
+| `@rematch/server` | `contract`, `engine`, `harness`, `agents` | `POST /api/rewrite` over SSE, `/api/health`, `/api/fallback/:round`, the 8-strategy fallback pool, deadline + rate limit + CORS |
+| `@rematch/web` | `contract`, `engine`, `sandbox` | Vite + Canvas 2D fight and the four-beat interlude. Deliberately **not** on `agents` — that would pull workers and the SDK into a browser bundle |
+
+Two deliberate departures from the spec's package table, plus eight more, are listed in
+[`docs/SPEC.md` §13](docs/SPEC.md#13-implementation-deltas).
+
+## Commands
 
 | Command | What it does |
 |---|---|
-| `pnpm install` | Install the workspace |
-| `pnpm dev` | The game (Vite, 5173) and the API server (8787) together; one Ctrl-C stops both |
-| `pnpm dev:web` / `pnpm dev:server` | One half of `pnpm dev` on its own |
-| `pnpm typecheck` | `tsc` every package |
-| `pnpm lint` | The determinism lint rule — see [Deterministic controls](#deterministic-controls). Nothing else; no style rules |
-| `pnpm test` | Every package's tests |
-| `pnpm test:contract` | Contract validator + static-check suites |
-| `pnpm test:sandbox` | Sandbox containment, determinism and leak suites |
-| `pnpm harness <file.js>` | Run the gates against one strategy file (`--gates 1,2`, `--json`) |
-| `pnpm test:engine` / `test:harness` / `test:balance` | Per-layer suites (§7) |
-| `pnpm verify` | `typecheck` + `lint` + all tests — the gate-all from §7. Runs on every commit and in CI |
+| `pnpm install` | Install the workspace (also installs the pre-commit hook) |
+| `pnpm dev` | Game + API server together; `pnpm dev:web` / `pnpm dev:server` for one half |
+| `pnpm verify` | `typecheck` + `lint` + every test — the gate-all. Runs on every commit and in CI |
+| `pnpm typecheck` / `pnpm lint` / `pnpm test` | The three steps on their own |
+| `pnpm test:contract` / `test:engine` / `test:sandbox` / `test:harness` | Per-layer suites |
+| `pnpm test:balance` | Balance regression: every pooled fallback still lands in its round's band |
+| `pnpm test:e2e` | Playwright (chromium, 12 tests); builds and previews first. Screenshots → `artifacts/` |
+| `pnpm harness <file.js>` | Run the gates against one strategy (`--gates 1,2`, `--seed`, `--json`). Exit 0 approved / 1 rejected / 2 usage error |
+| `pnpm eval:agents` | **Opt-in, spends money.** The loop over 10 canned replays vs spec §7's ≥80% target. Exits 0 with a message if no key is set |
+| `pnpm build` | Production web bundle |
+
+## Environment
+
+Everything is optional; with none of it set the game is playable and the server runs in
+fallback-only mode.
+
+| Variable | Effect |
+|---|---|
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | present → the real rewrite loop runs; absent → fallback-only |
+| `REMATCH_MODEL` | model for both agents. Default `claude-sonnet-5` |
+| `REMATCH_ANALYST_MODEL` / `REMATCH_CODER_MODEL` | per agent; wins over `REMATCH_MODEL` |
+| `REMATCH_DEADLINE_MS` | loop deadline, default `40000` |
+| `REMATCH_MATCHES` | Gate 3 matches per attempt, default `200` |
+| `REMATCH_WORKERS` | Gate 3 simulation threads, default `availableParallelism() - 1` |
+| `REMATCH_ORIGIN` | extra allowed CORS origins, comma-separated |
+| `REMATCH_ARTIFACT_DIR` | where event logs go, default `artifacts/server/` |
+| `PORT` / `HOST` | default `8787`, `127.0.0.1` |
+
+`.env` at the repo root is read by Node itself (`--env-file-if-exists`) — no `dotenv`
+dependency, and a missing `.env` is a log line rather than a crash. Useful URL parameters
+(`?seed=`, `?round=`, `?agent=sse`, `?speed=`, `?deadline=`) are in
+`packages/web/README.md`.
+
+## Docs
+
+- **[`docs/SYSTEM.md`](docs/SYSTEM.md)** — the agentic architecture: the contract as a
+  boundary, the three agents and what each is denied, the four gates and their real
+  thresholds, the **Autonomous Loop Evidence**, determinism, and the honest limitations.
+- **[`docs/SPEC.md`](docs/SPEC.md)** — the spec the whole thing was measured against,
+  unedited, with an **Implementation deltas** section at the end.
+- **[`docs/AI-DEV-LOG.md`](docs/AI-DEV-LOG.md)** — how it was built: one orchestrator
+  session, parallel package-scoped subagents, what each decided, and what went wrong.
 
 ## Deterministic controls
 
-Three checks that spec §7 deliberately does **not** delegate to an agent's memory. Each
-one is a file in the repo, not a convention: an agent cannot forget them, and reading the
+Three checks spec §7 deliberately does **not** delegate to an agent's memory. Each is a
+file in the repo, not a convention: an agent cannot forget them, and reading the
 instructions is not what makes them hold.
 
-| # | Control | Where it lives | What it stops |
+| # | Control | Where | What it stops |
 |---|---|---|---|
-| 1 | **`pnpm verify` on every commit** | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all ~700 tests |
-| 2 | **Determinism lint rule** | [`eslint.config.mjs`](eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `performance.now` in `packages/engine/src` or `packages/contract/src` |
-| 3 | **Contract CHANGELOG gate** | [`.github/workflows/verify.yml`](.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all 749 tests |
+| 2 | Determinism lint rule | [`eslint.config.mjs`](eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` — including `Math['random']`, `const { now } = Date`, and `node:perf_hooks` |
+| 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry. The contract is the API the boss agent writes against, so its changes are human-gated |
 
-All three run the same way locally and in CI, because the hook and the workflow both
-call `scripts/verify.sh` rather than each maintaining its own list of steps.
+All three run identically locally and in CI, because the hook and the workflow both call
+`scripts/verify.sh` rather than each keeping its own list of steps.
 
-### 1. The pre-commit hook
+Three details are what make these controls rather than suggestions. **The lint rule cannot
+be waved away** — `noInlineConfig` + `reportUnusedDisableDirectives: 'error'` means an
+`// eslint-disable-next-line` neither suppresses the error nor passes silently; it fails the
+commit twice over. **The escape hatch is a human's** — `git commit --no-verify` is for a WIP
+commit, an offline commit, an unfinished rebase; the hook's own message says *"If you are an
+agent: do not use --no-verify. Fix the failure."*, and CI runs the same script on every push
+anyway. **The CHANGELOG gate has no bypass**, and is its own CI job so its verdict is
+readable on a PR without scrolling past a test suite.
 
-`pnpm install` runs the root `prepare` script, which does `git config core.hooksPath
-.githooks`. That is the whole installation — the hook is a committed, reviewable shell
-script, with no husky dependency and no generated files to drift out of date.
-
-It runs `scripts/verify.sh` against the working tree: `typecheck`, then `lint`, then every
-package's tests, stopping at the first failure and re-printing the last 40 lines of it
-(under `git commit` the useful output otherwise scrolls away). ~45 s when green.
-
-It deliberately skips itself in two cases where a failure would be someone else's: when
-nothing is staged, and mid-`merge` / `rebase` / `cherry-pick` / `revert`. CI still covers
-both.
-
-**Bypassing it — the human escape hatch:**
-
-```
-git commit --no-verify
-```
-
-That is for a human with a reason: a WIP commit on a scratch branch, an offline commit, a
-rebase you want to finish before fixing anything. It is **not** an agent's hatch — an
-agent reaching for `--no-verify` is working around the one control that keeps `main`
-green, and a reviewer should read it that way. It also only buys minutes: the `verify`
-workflow runs the identical script on every push and PR, and cannot be skipped.
-
-### 2. The determinism lint rule
-
-Spec §7: *"A lint rule forbids `Math.random` and `Date.now` in `engine/`."*
-
-`pnpm lint` is ESLint with a flat config and **no style rules at all** — only these
-restrictions, over `packages/engine/src/**` and `packages/contract/src/**`:
-
-| Forbidden | Why |
-|---|---|
-| `Math.random()` | Unseeded entropy. Use the seeded PRNG in `packages/engine/src/prng.ts` |
-| `Date.now()`, `new Date()`, `Date()` | Wall-clock. Replays would diverge run to run |
-| `performance.now()` | Still a clock, and it does not exist inside QuickJS |
-| `Math['random']`, `const { now } = Date` | The same things spelled to dodge a naive check |
-| `import … from 'node:perf_hooks' \| 'node:crypto'` | Node clocks and entropy have no business in a pure simulation |
-
-Scope is those two packages only, because they are the ones that must produce identical
-results in the browser and in Node (AC 3). The rest of the workspace legitimately needs
-clocks and is not linted — notably `packages/sandbox/src/loadStrategy.ts`, which uses
-`performance.now()` as the default clock for the 2 ms `decide()` deadline (§4.4). That is
-the host measuring untrusted guest code, never an input to the simulation, and it sits
-outside the rule's globs, so the exemption needs no inline disable.
-
-Which matters, because **inline disables do not work here**. The scoped config sets
-`noInlineConfig` with `reportUnusedDisableDirectives: 'error'`, so an
-`// eslint-disable-next-line no-restricted-properties` does not suppress the error *and*
-is itself reported — writing one fails the commit twice over. If an engine file genuinely
-needs a clock, that is a design conversation (pass the value in from the caller and keep
-the simulation a pure function of `(seed, inputs)`), not a comment.
-
-### 3. The contract CHANGELOG gate
-
-Spec §7: *"CI rejects any PR touching `contract/` without an updated `CHANGELOG` entry in
-that package — the contract is the API the boss agent depends on, so its changes are
-human-gated."*
-
-A separate `contract-changelog-gate` job on every PR to `main`. It diffs against the merge
-base (`git diff --name-only origin/<base>...HEAD`, so commits that landed on `main` after
-you branched don't count as yours) and fails if anything under `packages/contract/`
-changed while `packages/contract/CHANGELOG.md` did not. Editing only the CHANGELOG does
-not trip it.
-
-There is no bypass. Adding the entry *is* the work: a change to `BossView`,
-`BossAction`, `validateAction` or the static check changes what every generated strategy
-and every pre-approved fallback is allowed to do, and that needs to be written down where
-a human will read it.
-
-### CI
-
-[`.github/workflows/verify.yml`](.github/workflows/verify.yml), on push and PR to `main`:
-
-- **`verify + e2e`** — pnpm (pinned by the root `packageManager` field) + Node 25 with a
-  pnpm store cache, `pnpm install --frozen-lockfile`, `pnpm verify`, then
-  `playwright install --with-deps chromium` and `pnpm test:e2e`. Uploads `artifacts/`
-  (screenshots, traces — the §7 browser evidence, and demo material) on pass *or* fail.
-- **`contract CHANGELOG gate`** — control 3 above. Its own job, so its verdict is
-  readable on the PR without scrolling past a test suite.
+Longer version, including why `sandbox` is exempt from control 2, in
+[`docs/SYSTEM.md` §7](docs/SYSTEM.md#7-determinism-and-the-deterministic-controls).

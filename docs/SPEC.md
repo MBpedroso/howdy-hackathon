@@ -332,11 +332,36 @@ Cut order if behind: Round 5 → sound → Round 4 → `Dodger` bot. Never cut: 
 
 ## 12. Open decisions (human)
 
-- [ ] Arena size and shape — square 800×800 or 16:9? Affects `Kiter` viability.
-- [ ] Whether the player sees the *previous* round's strategy name during the fight (probably yes — makes the boss feel like a character).
-- [ ] Whether to expose a "watch the sim" toggle in the interlude for technical judges (200 matches at 8× speed). Nice-to-have; decide by Sep 9.
-- [ ] Final name. REMATCH is a placeholder.
+- [x] Arena size and shape — **square 800×800**. Frozen in `CONSTANTS.arena` (contract CHANGELOG 0.1.0).
+- [x] Whether the player sees the *previous* round's strategy name during the fight — **yes**. The HUD carries a boss strategy panel showing `meta.name` and `meta.rationale` for the whole round.
+- [x] Whether to expose a "watch the sim" toggle in the interlude — **not built**. Cut as a nice-to-have; the Trial beat shows measured `trial.progress` counts and the per-bot rate breakdown inside each Gate 3 reason instead.
+- [x] Final name — **still REMATCH**. The placeholder stuck; the workspace, every package scope (`@rematch/*`) and the debug surface (`window.__rematch`) all carry it.
 
 ---
 
 *Everything the agents build is measured against this document. If the document is wrong, fix the document first.*
+---
+
+## 13. Implementation deltas
+
+Where the shipped system differs from the spec above, and why. The spec text is left
+unedited on purpose — this section is the diff, so a reader can see what the plan said
+and what survived contact with the code.
+
+| # | Spec said | Shipped | Reason |
+|---|---|---|---|
+| 1 | §5.1: `contract` depends on `engine`, and holds the reference bots | `contract` has **zero** workspace deps; `engine` depends on `contract`; the bots live in `harness/src/bots/` | The spec's table is circular (`engine` ← `contract` ← `engine`). The contract is types + validator + static check, consumed by all five other packages, so it must consume none of them |
+| 2 | §4.4: the QuickJS sandbox sits inside the engine | `@rematch/sandbox` is a 7th package | It is the project's security boundary and has three consumers (`engine`/`web` for the live fight, `harness` for Gates 2–4, the balance simulator for Gate 3). Owning it separately keeps it dependency-free and reviewable on its own |
+| 3 | §4.3: `burst.count: 3 \| 5 \| 8` widens a cone | `count` selects a **shape**: 3 and 5 are aimed cones (0.44 / 0.88 rad), **8 fires a full 2π ring** | A 1.54 rad 8-shot cone was a slightly wider 5, and a strategy had no way to ask for area denial. See `ENGINE_CONSTANTS.burst.ringCount` |
+| 4 | §2.1: the round ends at ~60 s | Reaching `maxTicks` (3600) is outcome `timeout`, and the simulator scores it as a **boss win** (`bossWon: state.outcome !== 'playerWon'`) | Gate 3's win rate needs a total function of the outcome. A boss that survives the clock was not beaten, so a stalling strategy cannot farm a low panel rate by running out the timer |
+| 5 | §4.2: `history.playerPosHeat` is "normalized" | Normalized so the 64 cells **sum to 1** (a share of dwell time), rounded to 1e-4 | "Normalized" was ambiguous between sum-to-1 and max-to-1. Sum-to-1 is the useful one for a strategy ("the player spends 40% of the round here") and is stable across round lengths |
+| 6 | §4.4: `Math.random` is "replaced with a seeded PRNG injected by the engine" | The **sandbox** injects a non-writable global `rand()` (seeded xorshift32, implemented inside the VM); `Math.random` is deleted | The engine never imports QuickJS — it is handed a `StrategyRunner`. So the injection point is the sandbox, not the engine. In-VM rather than a host callback: no wasm boundary crossing per call, and determinism does not depend on host state. Recorded in contract CHANGELOG 0.1.1 |
+| 7 | §8: the Analyst outputs JSON | The Analyst emits **3–6 plain sentences first, then a fenced JSON block**, and `analysisGate` stops the streamed deltas at the opening fence | §2.2 asks for streaming prose the player reads ("Player camped the bottom-left corner…"). The player watches sentences, never `{"observations": [`. The full reply, both halves, is kept on `analysis.done.raw` for the run log |
+| 8 | §2.2: "a meter fills as simulated matches run" | `trial.progress` is **batched** — ~20 events per gate from the worker pool, throttled to one per 100 ms — and carries measured `matchesDone`/`matchesTotal`, never an estimate | 200 SSE frames for a 4-second gate is noise on the wire and a re-layout per match in the browser. The batching also means the meter's denominator is `gate3Plan().total`, which rounding makes 62 at 60 requested — a meter that started at 60 and finished at 62 would be the only dishonest number on the Trial beat |
+| 9 | §5.2: "Agent model: Claude via API" | Default `claude-sonnet-5` for both agents, overridable per agent (`REMATCH_CODER_MODEL=claude-opus-5`) | Latency is the binding constraint inside AC 5's 45 s, not depth: one Analyst call, up to four Coder calls and four gates including 200 simulated matches. The Coder writes ~80 lines against a frozen contract with a deterministic verifier behind it, so a weaker answer costs one more cheap attempt rather than a wrong result |
+| 10 | §5.2 / AC 9: deploy web + serverless server to Vercel | **Recommendation split**: `packages/web`'s static bundle on Vercel, `@rematch/server` as a single always-on Node process (Fly.io / Railway), browser pointed at it by `VITE_API_BASE`. **Pending decision** | Gate 3 is a CPU-bound worker pool sized from `availableParallelism()`, and a Vercel function gets 1–2 vCPU while reporting the host's core count — the single most likely way AC 5 fails on the deployed URL. All-Vercel is survivable but degraded (`REMATCH_MATCHES=60` coarsens the verifier, which is the thing the project is arguing for). Full analysis in `packages/server/README.md` § Deploying |
+
+Two things the spec asked for that are **not deltas but gaps**, tracked in
+`docs/AI-DEV-LOG.md`: AC 4 (human playtest) and AC 6 (a recorded *real*-API run). Every
+agent path shipped so far was built and tested against a mock provider, because no API
+key has been available in the build environment.

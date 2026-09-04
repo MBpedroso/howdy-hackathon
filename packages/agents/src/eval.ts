@@ -159,7 +159,7 @@ export async function runEval(opts: EvalOptions): Promise<EvalReport> {
   const probe = opts.makeProviders(names[0] ?? CANNED_NAMES[0]);
 
   return {
-    spec: 'spec.md §7 — agent eval; AC 6 — autonomous loop evidence',
+    spec: 'docs/SPEC.md §7 — agent eval; AC 6 — autonomous loop evidence',
     generatedAt: new Date().toISOString(),
     round,
     matches,

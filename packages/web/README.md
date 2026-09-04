@@ -12,7 +12,7 @@ pnpm test                      # unit tests + the Node-side replay regression
 pnpm test:e2e                  # Playwright (chromium); builds and previews first
 ```
 
-## What exists today (Milestone 3)
+## What exists today (Milestone 4)
 
 A five-round fight, and **the interlude** (spec §2.2) between rounds: after a win, a
 full-screen overlay plays the four beats — Replay, Analysis, Rewrite, Trial — from a

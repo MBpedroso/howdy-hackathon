@@ -9,8 +9,8 @@ which is what makes the rejections in the interlude evidence rather than anecdot
 |---|---|---|---|
 | 1 | `static` | **implemented** | forbidden names, imports, wrong module shape — before any code runs |
 | 2 | `fuzz` | **implemented** | throws, timeouts, memory growth, invalid actions, ignored cooldowns |
-| 3 | `balance` | stub — `not implemented` | too hard / too easy / didn't adapt (spec §6.2) |
-| 4 | `perf` | stub — `not implemented` | `decide()` p99 over budget |
+| 3 | `balance` | worker-parallel sim vs Camper/Kiter/Rusher/Dodger + Mimic; FAIR band per round, ADAPTED ≥ 0.70 | `0.78 vs panel — too hard (band 0.35–0.50 for round 2; …)` |
+| 4 | `perf` | ≥ 2000 sandboxed `decide` calls on real match views; p99 ≤ 2 ms, no memory failure | `decide() p99 = 6.2ms > 2ms` |
 
 ```ts
 import { runGates } from '@rematch/harness';
@@ -107,23 +107,14 @@ gate finishes in well under 5 s on `infinite-loop.js`.
 
 ## Gates 3 and 4
 
-Stubs that reject with `not implemented`, excluded from `DEFAULT_GATES` — otherwise every
-strategy would be "rejected: not implemented". Each file carries the full TODO. Two notes
-worth keeping in view:
-
-- **Gate 3 needs workers.** The sandbox costs ~16–43 µs per `decide` depending on how much is
-  in the `BossView` (`pnpm --filter @rematch/sandbox bench`), so 200 matches × 3600 ticks is
-  12–31 s of sandbox time alone on one thread — before any engine time. The interlude's
-  budget is 45 s (spec AC 5).
-- **Gate 4 needs no new instrumentation.** Every `DecideResult` from the sandbox carries
-  `elapsedMs` (host stringify → VM → parse, i.e. what the engine actually pays), and Gate 2
-  already accumulates the distribution — see `detail.elapsedMs` (`samples`, `p50`, `p99`,
-  `max`) in `src/gates/gate2Fuzz.ts`. Gate 4's job is to run a real match trajectory and apply
-  the threshold.
-
-`@rematch/engine` is declared as a dependency but **deliberately not imported yet** — the
-engine is being built in parallel, and importing a placeholder would couple Gate 2's tests to
-its progress.
+Both are real since Milestone 2. Gate 3 (`src/gates/gate3Balance.ts`, bands in
+`src/gates/balanceConfig.ts`) splits the match budget between the Mimic (ADAPTED) and the
+four scripted bots (FAIR) and runs them through `src/sim/simulate.ts`, a `worker_threads`
+pool with one sandbox per worker — results are byte-identical for any worker count (tested),
+and 200 matches take ~0.9 s on an 8-core machine. Progress is reported in batches via
+`onProgress`. Gate 4 (`src/gates/gate4Perf.ts`) replays a real match trajectory through the
+sandbox and applies the `CONSTANTS.limits.decideBudgetMs` p99 threshold using the
+`elapsedMs` every `DecideResult` already carries.
 
 ## Fixtures
 
