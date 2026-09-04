@@ -23,6 +23,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { RewriteEvent } from '../src/interlude/events.ts';
 import {
+  knownIssueLabel,
   delaysOf,
   loadRecordedIndex,
   provenanceLabel,
@@ -89,6 +90,49 @@ describe('provenanceLabel', () => {
     // docs citing the same run.
     expect(provenanceLabel({ model: 'm', recordedAt: '2026-09-03T00:30:00.000Z' })).toContain('2026-09-03');
     expect(provenanceLabel({ model: 'm', recordedAt: '2026-09-03T23:59:59.999Z' })).toContain('2026-09-03');
+  });
+});
+
+/**
+ * The caveat that ships with the recordings.
+ *
+ * All three committed runs were recorded before Gate 3 grew its ACTIVE assertion, so
+ * the strategies they approved use `idle` as a resting state and the boss visibly
+ * freezes. Re-recording would mean inventing model output, which is the one thing
+ * this mode exists not to do — so the runs stay and the disclosure ships with them.
+ * These assertions are what stop the disclosure from being silently dropped.
+ */
+describe('knownIssueLabel', () => {
+  it('prefixes the disclosure so it cannot be mistaken for provenance', () => {
+    expect(knownIssueLabel({ knownIssue: 'boss idles up to 183 ticks (3.1 s)' })).toBe(
+      'KNOWN ISSUE · boss idles up to 183 ticks (3.1 s)',
+    );
+  });
+
+  it('is absent for a recording with nothing to disclose', () => {
+    expect(knownIssueLabel({})).toBeUndefined();
+    expect(knownIssueLabel({ knownIssue: '   ' })).toBeUndefined();
+  });
+
+  it('every committed recording discloses its idle runs', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = new URL('../public/recorded/', import.meta.url);
+    const index = JSON.parse(await readFile(new URL('index.json', dir), 'utf8')) as {
+      note: string;
+      runs: Array<{ name: string; knownIssue?: string }>;
+    };
+    expect(index.runs.length).toBeGreaterThan(0);
+    expect(index.note).toContain('ACTIVE');
+    for (const entry of index.runs) {
+      // The index carries it so a picker can show it without fetching the run…
+      expect(entry.knownIssue, entry.name).toMatch(/boss idles up to \d+ ticks/);
+      // …and the run file carries it because that is what the footer reads.
+      const file = JSON.parse(await readFile(new URL(`${entry.name}.json`, dir), 'utf8')) as {
+        knownIssue?: string;
+      };
+      expect(file.knownIssue, entry.name).toBe(entry.knownIssue);
+      expect(knownIssueLabel(file), entry.name).toContain('ACTIVE assertion');
+    }
   });
 });
 

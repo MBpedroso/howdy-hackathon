@@ -58,6 +58,9 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   // `MOCK` / `LIVE` / `RECORDED RUN` — the three honest answers (see `KIND_LABEL`).
   await expect(page.getByTestId('il-kind')).toHaveText('MOCK');
   await expect(page.getByTestId('il-provenance')).toHaveText('MOCK');
+  // The disclosure line is for a source with something to disclose. The mock has
+  // nothing, so it must not appear — an always-on caveat is noise, not honesty.
+  await expect(page.getByTestId('il-provenance-note')).toBeHidden();
   await expect(page.getByTestId('il-rounds')).toContainText('Round 1 → 2');
 
   // Wait for the run to finish. Everything below is asserted on the finished

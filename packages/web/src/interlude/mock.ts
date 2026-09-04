@@ -284,10 +284,15 @@ function balanceDetail(
     round,
     matches: 200,
     workers: 4,
+    // Gate 3's third assertion, ACTIVE: both mock strategies keep moving, so every
+    // one of these is a real zero rather than a flattering one. `attempt1.js` and
+    // `round2-candidate.js` are both measured through the live gate by the suites
+    // that own them, and neither has an `idle` resting state.
+    activity: { longestIdleRun: 0, worstBot: 'Camper', worstSeed: 0, idleFractionP90: 0 },
     panel: {
       winRate: rates.panel,
       matches: 100,
-      perBot: BOT_NAMES.map((name, i) => ({ name, winRate: rates.perBot[i] ?? 0 })),
+      perBot: BOT_NAMES.map((name, i) => ({ name, winRate: rates.perBot[i] ?? 0, maxIdleRun: 0 })),
       violations: 0,
       killed: 0,
       ms: 1240,

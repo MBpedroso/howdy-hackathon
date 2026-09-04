@@ -300,7 +300,7 @@ is what makes the rejections in the interlude evidence rather than anecdote.
 |---|---|---|---|
 | 1 | `static` | any `staticCheck` violation → reject. Names the first 3 with line numbers, counts the rest | ~1–4 ms |
 | 2 | `fuzz` | 500 seeded states (corner cases first) + 60 consecutive ticks, in QuickJS. **Any** runner failure (throw / timeout / memory), even 1 in 500 → reject. Invalid-action rate > **2%** → reject. On-cooldown-action rate > **20%** → reject | ~30–60 ms |
-| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR**: panel win rate ∈ `BAND[round]`. **ADAPTED**: Mimic win rate ≥ **0.70** | seconds — worker-parallel |
+| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR**: panel win rate ∈ `BAND[round]`. **ADAPTED**: Mimic win rate ≥ **0.70**. **ACTIVE**: longest motionless run ≤ **90 ticks** (1.5 s) and p90 idle fraction ≤ **0.25** | seconds — worker-parallel |
 | 4 | `perf` | `decide` **p99 ≤ 2 ms** over ~2000 calls: 60% from real match trajectories vs the four bots, 40% topped up from Gate 2's corpus. Measured with an 8× relaxed deadline and judged against the real one, so the reported number is honest. A memory failure is fatal regardless of timing | ~60 ms |
 
 Gate 1 is first because it costs ~1 ms: a strategy that mentions `Date` never boots a
@@ -312,6 +312,7 @@ handing Gate 2 a sandbox that throws if it is ever used).
 ```
 ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
 FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
+ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
 ```
 
 | Round | Band vs panel | Midpoint the Coder is told to aim at |
@@ -332,6 +333,44 @@ Two engine facts make the FAIR number a total function of the outcome: a 60 s ti
 scores as a boss win (`bossWon: state.outcome !== 'playerWon'`), and `gate3Plan` rounds
 the budget (`matches / 2 / 4`), so 60 requested really runs 62. The meter is labelled
 with `gate3Plan().total`, not with what the caller asked for.
+
+#### ACTIVE — the assertion a playtest bought (`sim/activity.ts`)
+
+FAIR and ADAPTED are spec §6.2. ACTIVE is not, and it exists because §6.2 cannot see the
+bug a human found in ten seconds: **the boss standing perfectly still**. A tick counts as
+idle when the boss did not move, is not telegraphing, is not mid-charge, and its last
+action was `idle` *or* a `move` that displaced nothing; ACTIVE rejects when the worst run
+of consecutive idle ticks over every match exceeds `ACTIVITY.maxIdleRunTicks` (90 = 1.5 s)
+or the p90 per-match idle fraction exceeds `ACTIVITY.maxIdleFractionP90` (0.25).
+
+Four design points, each of them load-bearing:
+
+- **It is defined on displacement, not on the action type.** `fallback/round3/emberline`
+  had no `idle` branch at all and still froze for 169 ticks: its orbit walked the boss
+  into a corner, where `move` clamps at the boss's own radius and moves it nowhere. An
+  action-type check would have passed it.
+- **Telegraphs are excluded outright**, so the 40-tick slam tell and the 20-tick charge
+  tell cost nothing. 90 is therefore pure slack, not a budget shared with the tells.
+- **Two numbers, because one is gameable either way.** A max alone misses a boss that
+  idles 80 ticks, twitches, and idles 80 more; a mean alone hides a quarter of the matches
+  being dead. Max for the freeze the player reports, p90 for the general deadness.
+- **It is measured on both halves of the budget** — panel *and* Mimic when there is one.
+  The four scripted bots all walk scripted paths; the stall needed a *human*, who settles
+  in a cell, leaves, and settles elsewhere, which is what makes a cumulative heat map
+  stale. The Mimic is the closest thing the gate has to that player.
+
+It costs nothing: the matches are already being simulated and the measurement is two adds
+and a `hypot` per tick. `reason` names the fix, not the symptom:
+
+```
+boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a
+resting state; patrol, reposition or feint instead (limit 90 ticks)
+```
+
+FAIR and ADAPTED are reported first and ACTIVE last, all joined into the one sentence —
+the win rate is what the Coder was aiming at, the stall is a bug in how it rests, and
+neither masks the other. `detail.activity` carries the numbers and `detail.panel.perBot[]`
+breaks the worst run down per opponent, so a rejection can say *which* approach froze it.
 
 ### Reason strings — the actual formats
 
@@ -600,22 +639,30 @@ a full Round 1 played by the engine's scripted pseudo-player, generated in Node 
 
 ```json
 { "sessionSeed": 424242, "round": 1, "seed": 1977791994, "playerSeed": 90210,
-  "strategy": "round1", "ticks": 962, "outcome": "playerWon",
-  "hash": "6568b87bb4974fb8" }
+  "strategy": "round1", "ticks": 909, "outcome": "playerWon",
+  "hash": "74cd659935e33202" }
 ```
 
 Two tests guard it, and they fail in a deliberate order:
 
 - [`packages/web/test/replay-fixture.test.ts`](../packages/web/test/replay-fixture.test.ts)
   — in `pnpm verify`. Replays the log **in Node** through the real QuickJS sandbox and
-  asserts `hash === "6568b87bb4974fb8"`, `ticks === 962`, `outcome === "playerWon"`; also
+  asserts `hash === "74cd659935e33202"`, `ticks === 909`, `outcome === "playerWon"`; also
   asserts `roundSeed(424242, 1) === 1977791994`. Its failure message says the fixture is
   stale and names the regeneration command.
 - [`packages/web/e2e/determinism.spec.ts`](../packages/web/e2e/determinism.spec.ts)
   — *"browser and Node agree on the replay hash"*. Replays the same log **in the browser**
   via `__rematch.driveWith(log)` + `fastForward()` and asserts the same
-  `6568b87bb4974fb8`, through the browser's own QuickJS instance. A second case replays
+  `74cd659935e33202`, through the browser's own QuickJS instance. A second case replays
   twice in one page and asserts idempotence.
+
+The hash is a **recorded expectation, not an invariant**: it changes whenever
+`round1.js` or an engine rule does, because the scripted player reacts to the boss and a
+different boss produces a different input log. It last moved on 2026-09-04, when
+`round1.js` stopped returning `idle` as a resting state (§9 item 10) — from
+`6568b87bb4974fb8` / 962 ticks to the pair above. The failure message on
+`replay-fixture.test.ts` is what tells you which of the two happened, and
+`pnpm --filter @rematch/web gen:inputlog` is what regenerates it.
 
 Both sides inject the sandbox's monotonic clock (`monotonicClock` in
 `@rematch/sandbox`, re-exported by `packages/web/src/game/clock.ts`; the harness
@@ -740,7 +787,7 @@ Honest list, at `069be8d`.
    `artifacts/agents/`) and has never been run against a live key. §6 is labelled
    accordingly.
 2. **No human playtest (AC 4).** Whether Round 1 is beatable in under 60 s on a first try
-   is unmeasured. The e2e suite proves a *scripted* player wins it in 962 ticks (~16 s),
+   is unmeasured. The e2e suite proves a *scripted* player wins it in 909 ticks (~15 s),
    which says the fight is winnable, not that it is fun or readable. The renderer agent's
    own finding sharpens the risk: ~100% of player damage comes from un-telegraphed
    bullets, so the boss's two telegraphs are honest but are not where the difficulty lives.
@@ -773,32 +820,65 @@ Honest list, at `069be8d`.
    at all. The `eval` and `Promise` *globals* are deleted, the internal pointers are not
    reachable from JS, and Gate 1 keeps both names on its denylist. Documented rather than
    hidden, and the reason both belts exist.
-10. **Nine of the eleven player-facing strategies can freeze mid-fight.** Every
-    hand-written strategy in the repo ends its `decide` with "nothing to do, return
-    `{type:'idle'}`", and `idle` is a legal, cooldown-free, violation-free action — so
-    no gate can see it and, until the HUD counters landed, neither could a human. A
-    playtester found it in Round 2 (`round2-candidate.js` parked on a *stale* hottest
-    heat cell and idled for 263 consecutive ticks). That one is fixed and pinned by
-    `packages/harness/test/activity.test.ts` and `packages/web/e2e/boss-activity.spec.ts`.
-    The rest are measured and untouched — worst motionless run against the four
-    reference bots, in ticks:
+10. **~~Nine of the eleven player-facing strategies can freeze mid-fight.~~ FIXED
+    2026-09-04, and it became a gate.** Every hand-written strategy in the repo used to
+    end its `decide` with "nothing to do, return `{type:'idle'}`", and `idle` is a legal,
+    cooldown-free, violation-free action — so no gate could see it and, until the HUD
+    counters landed, neither could a human. A playtester found it in Round 2
+    (`round2-candidate.js` parked on a *stale* hottest heat cell and idled for 263
+    consecutive ticks).
 
-    | Strategy | Ticks | | Strategy | Ticks |
-    |---|---|---|---|---|
-    | `harness/round2-candidate` | **43** (fixed) | | `server/fallback/round3/emberline` | 169 |
-    | `web/src/strategies/round1` | 888 | | `server/fallback/round3/nettle` | 184 |
-    | `web/src/strategies/hound` | 187 | | `server/fallback/round4/bellringer` | 430 |
-    | `server/fallback/round2/hollow` | 589 | | `server/fallback/round4/curfew` | 43 |
-    | `server/fallback/round2/metronome` | 272 | | `server/fallback/round5/crossfire` | 708 |
-    | | | | `server/fallback/round5/tollkeeper` | 242 |
+    The resolution was to stop treating it as a property of one file. Gate 3 grew a third
+    assertion, **ACTIVE** (see the gates section above and `harness/src/sim/activity.ts`),
+    every strategy below got a moving resting state, and every one was re-balanced against
+    its own band afterwards. Worst motionless run against the four reference bots, in
+    ticks, before → after:
 
-    Each is a balance change as well as a bug fix: `round1.js` defines what "winnable on
-    a first try" (AC 4) means and owns the recorded AC 3 replay fixture, and every
-    fallback entry is documented as having passed all four gates at its round's band, so
-    each needs re-measuring through Gate 3 before it moves. Fixing `round2-candidate`
-    took it from 0.38 to 0.45 against the panel — *toward* the middle of the band, and a
-    reminder that the frozen version was partly in band because a stationary boss is easy
-    to shoot.
+    | Strategy | Before | After | | Strategy | Before | After |
+    |---|---|---|---|---|---|---|
+    | `harness/round2-candidate` | 263 | **17** | | `server/fallback/round3/emberline` | 169 | **0** |
+    | `web/src/strategies/round1` | 169 | **1** | | `server/fallback/round3/nettle` | 89 | **1** |
+    | `web/src/strategies/hound` | 98 | **1** | | `server/fallback/round4/bellringer` | 630 | **0** |
+    | `server/fallback/round2/hollow` | 391 | **1** | | `server/fallback/round4/curfew` | 89 | **1** |
+    | `server/fallback/round2/metronome` | 143 | **0** | | `server/fallback/round5/crossfire` | 485 | **0** |
+    | | | | | `server/fallback/round5/tollkeeper` | 343 | **0** |
+
+    (The "before" column is re-measured with the ACTIVE definition, which is why it
+    differs from the numbers this item used to carry: the old survey counted *positional*
+    stillness only, so it over-counted telegraphs and under-counted a `move` clamped
+    against a wall.)
+
+    Two causes, not one, and only the first was the reported bug:
+
+    - **`idle` as a resting state** — eight strategies. Replaced with a patrol across the
+      ground the boss was guarding, or a strafe perpendicular to the player that holds
+      whatever range the branch above chose. Straight legs of ~34 ticks, never a curve:
+      every reference bot leads its shots off the boss's last-tick velocity, and a curve
+      defeats a linear lead permanently. (The first fix for `round2-candidate` *was* a
+      circular orbit and it went from 0.38 to 0.72 against the panel — unhittable by
+      construction is not "harder", it is broken.)
+    - **A `move` the arena clamped** — `emberline`'s orbit and five `back off from the
+      player` branches, all of which could grind into a wall and stand still without ever
+      returning `idle`. Fixed with a wall lookahead: reverse the orbit, or slide along
+      the wall instead of into it.
+
+    Two more bugs fell out of the same audit, both in the two `web/` strategies:
+    `round1.js` and `hound.js` asked for a `spawn` whenever its cooldown was ready, and a
+    `spawn` refused at the two-minion cap keeps its cooldown *and* costs a violation — so
+    with two minions alive they asked every tick, froze, and (because that branch sits
+    above the burst) stopped shooting entirely. Both now rate-limit by tick like the
+    fallback pool does.
+
+    Every strategy was then re-balanced. The resting motion costs the panel bots real
+    accuracy — a boss that keeps moving is harder to lead — so seven of the eight
+    fallbacks needed their pressure dial moved to stay in band; the table is in
+    `docs/AI-DEV-LOG.md` (2026-09-04). Round 1 has no band and is held to the scripted
+    mid-range player instead: still 1.00 player wins over 60 seeds, 16.6 s average.
+
+    Pinned by `packages/harness/test/activity.test.ts` (now the whole shipped set, plus
+    the recorded human replay and a `move`-into-a-wall counter-example),
+    `packages/server/test/fallback.test.ts`, `packages/harness/test/balance.test.ts` and
+    `packages/web/e2e/boss-activity.spec.ts`.
 
 11. **`pnpm verify` is ~41 s and grows.** It is on every commit by design. Gate 3's real
     200-match budget is deliberately *not* in it (the harness suite runs reduced match

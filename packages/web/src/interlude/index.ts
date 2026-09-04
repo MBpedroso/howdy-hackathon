@@ -28,7 +28,7 @@ import type { RoundWonContext, RoundWonHandler } from '../app.ts';
 import { bundledSource } from '../game/strategy.ts';
 
 import { serverFallbackPick, type RewriteEvent } from './events.ts';
-import { provenanceLabel } from './recorded.ts';
+import { knownIssueLabel, provenanceLabel } from './recorded.ts';
 import { resolveSource, type InterludeSource, type ResolveOptions, type SourceKind } from './source.ts';
 import { createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
 
@@ -39,6 +39,7 @@ export {
   RECORDED_PATH,
   delaysOf,
   loadRecordedIndex,
+  knownIssueLabel,
   provenanceLabel,
   recordedSource,
   type RecordedFile,
@@ -129,7 +130,10 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
               recorded: {
                 ...options.resolve?.recorded,
                 onHeader: (header) => {
-                  ui?.setProvenance(provenanceLabel(header));
+                  // The badge names the run; the note discloses what is wrong with
+                  // it. The three committed recordings predate Gate 3's ACTIVE
+                  // assertion, so their bosses freeze — see `recorded.ts`.
+                  ui?.setProvenance(provenanceLabel(header), knownIssueLabel(header));
                   publish();
                 },
               },

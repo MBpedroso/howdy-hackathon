@@ -53,7 +53,13 @@ export function decide(view, mem) {
   if (cd.charge === 0 && dist > HOLD_RANGE) {
     return { type: 'charge', angle: angle };
   }
-  if (dist < 24) return { type: 'idle' };
+  // Standing on top of the player: strafe rather than stop. `idle` is never a
+  // resting state — a boss motionless for more than 90 ticks is rejected by Gate 3's
+  // ACTIVE assertion and reads as a crashed game to the player.
+  if (dist < 24) {
+    const dir = Math.floor(view.tick / 34) % 2 === 0 ? 1 : -1;
+    return { type: 'move', dx: -Math.sin(angle) * dir, dy: Math.cos(angle) * dir };
+  }
   return { type: 'move', dx: dx / Math.max(dist, 0.001), dy: dy / Math.max(dist, 0.001) };
 }
 

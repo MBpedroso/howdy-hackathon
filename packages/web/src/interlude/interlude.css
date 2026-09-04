@@ -473,6 +473,27 @@
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+/* The badge and its caveat, stacked: the chip stays readable from across a room
+   and the disclosure sits under it rather than stretching it. */
+.il-provenance-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* Only a recorded run sets this today — the three committed recordings predate
+   Gate 3's ACTIVE assertion, so their bosses visibly freeze. Shown, not hidden. */
+.il-provenance-note {
+  max-width: 34ch;
+  color: var(--slam);
+  letter-spacing: 0.04em;
+  font-size: 9px;
+  line-height: 1.35;
+  text-align: right;
+}
+
 .il-provenance[data-kind='mock'] { color: var(--slam); border-color: rgba(255, 209, 102, 0.5); }
 .il-provenance[data-kind='recorded'] { color: var(--player); border-color: rgba(77, 226, 176, 0.5); }
 

@@ -43,7 +43,7 @@ import type { InterludeSource } from './source.ts';
 /** Where the recorder writes and this file reads. Relative to the Vite base. */
 export const RECORDED_PATH = 'recorded';
 
-/** The seven-field header every recorded file carries. */
+/** The seven-field header every recorded file carries, plus an optional caveat. */
 export type RecordedHeader = {
   provider: string;
   model: string;
@@ -53,6 +53,19 @@ export type RecordedHeader = {
   recordedAt: string;
   approved: boolean;
   attempts: number;
+  /**
+   * A caveat about this recording, shown on screen next to the badge.
+   *
+   * Added by hand, not by the recorder, and it exists for one specific reason: all
+   * three runs committed here were recorded on 2026-09-03, *before* Gate 3 grew its
+   * ACTIVE assertion, so the strategies they got approved use `idle` as a resting
+   * state and the boss visibly freezes — up to 764 consecutive ticks in `dodger-a`,
+   * nearly thirteen seconds. Re-recording would mean inventing model output, which
+   * is the one thing this mode exists not to do (see `scripts/record-run.ts`), so
+   * the runs stay and the caveat ships with them. A viewer who can see the freeze
+   * can also read why it is there.
+   */
+  knownIssue?: string;
 };
 
 export type RecordedFile = RecordedHeader & {
@@ -69,6 +82,8 @@ export type RecordedIndexEntry = {
   strategy?: string;
   rejections?: number;
   label?: string;
+  /** Mirrors the run file's own caveat, so a picker can show it without a fetch. */
+  knownIssue?: string;
 };
 
 export type RecordedIndex = { runs: RecordedIndexEntry[]; source?: string };
@@ -101,6 +116,20 @@ export type RecordedOptions = {
 export function provenanceLabel(header: Pick<RecordedHeader, 'model' | 'recordedAt'>): string {
   const day = header.recordedAt.slice(0, 10);
   return `RECORDED RUN · ${header.model} · ${day}`;
+}
+
+/**
+ * `KNOWN ISSUE · boss idles up to 183 ticks …` — the caveat, ready for the footer.
+ *
+ * Separate from `provenanceLabel` because the badge is a 9px chip that says *what*
+ * the viewer is looking at, and this is a sentence that says what is *wrong* with
+ * it. Returns `undefined` when the recording has nothing to disclose, which is how
+ * a future re-recording turns the line off: delete the field.
+ */
+export function knownIssueLabel(header: Pick<RecordedHeader, 'knownIssue'>): string | undefined {
+  const note = header.knownIssue;
+  if (typeof note !== 'string' || note.trim() === '') return undefined;
+  return `KNOWN ISSUE · ${note.trim()}`;
 }
 
 function joinBase(base: string, path: string): string {

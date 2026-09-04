@@ -2,18 +2,31 @@
  * Gate 3 — balance. The gate that decides whether a strategy is *fun*, which is
  * the one property no static check can see.
  *
- * Two assertions (spec §6.2), both measured by simulating real matches in the same
- * QuickJS sandbox the live game uses:
+ * Three assertions, all measured by simulating real matches in the same QuickJS
+ * sandbox the live game uses:
  *
  * ```
  * ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
  * FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
+ * ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
  * ```
  *
  * ADAPTED needs the player's replay, so it is checked **only** when a
  * `mimicSummary` is supplied — the balance-regression suite and the CLI often have
  * no human to mimic, and a gate that failed for lack of input would be useless
- * there. FAIR is always checked.
+ * there. FAIR and ACTIVE are always checked.
+ *
+ * ## Why ACTIVE is here and not a separate gate
+ * It was a test before it was an assertion (`test/activity.test.ts`), on the
+ * argument that "holding position" versus "crashed" is a judgement about how the
+ * game reads rather than a contract. A human playtest settled it: the Round 2 boss
+ * froze in a corner for 4.4 seconds, the player reported a crash, and every one of
+ * the four gates approved the file — `idle` is legal (Gate 1), always valid and
+ * free of cooldown (Gate 2), the cheapest possible `decide` (Gate 4), and Gate 3
+ * read only the win rate, which a *stationary* boss actually helps keep in band. A
+ * property that no gate can see is a property that ships broken, so it is a gate
+ * now. It costs nothing extra: the matches are already being simulated, and the
+ * measurement is two adds per tick (`sim/activity.ts`).
  *
  * ## The match budget
  * `matches` (default 200, per spec §6.2) is split in half: `N/2` against the Mimic,
@@ -35,15 +48,23 @@
  *
  * ```
  * 0.91 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kiter 0.96,
- *   Rusher 0.92, Dodger 0.76); 0.41 vs Mimic — didn't adapt (need >= 0.70)
+ *   Rusher 0.92, Dodger 0.76); 0.41 vs Mimic — didn't adapt (need >= 0.70);
+ *   boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle
+ *   as a resting state; patrol, reposition or feint instead (limit 90 ticks)
  * ```
+ *
+ * FAIR and ADAPTED come first and ACTIVE last, always: the win rate is what the
+ * Coder is aiming at and the stall is a bug in how it rests, so the two are read
+ * in that order and both are reported rather than one masking the other.
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { SandboxFactory } from '@rematch/sandbox';
 import { BOT_KINDS } from '../bots/index.ts';
 import { simulate, type BotRate, type SimulateResult } from '../sim/simulate.ts';
 import type { BotSpec } from '../sim/protocol.ts';
+import { ticksAsSeconds } from '../sim/activity.ts';
 import {
+  ACTIVITY,
   ADAPTED_MIN,
   DEFAULT_MATCHES,
   DEFAULT_ROUND,
@@ -118,6 +139,38 @@ function renderPerBot(rates: readonly BotRate[]): string {
   return rates.map((b) => `${b.name} ${pct(b.winRate)}`).join(', ');
 }
 
+/**
+ * The worst stall across both halves of the budget.
+ *
+ * Both halves, not just the panel's: the four scripted bots all walk a scripted
+ * path, and the stall this assertion exists for needed a *human* — someone who
+ * settles into a cell, leaves it, and settles somewhere else, which is what turns a
+ * cumulative heat map stale. The Mimic is the closest thing the gate has to that
+ * player, so when there is one, it counts.
+ */
+function worstActivity(sims: readonly SimulateResult[]): {
+  maxIdleRun: number;
+  worstBot: string;
+  worstSeed: number;
+  idleFractionP90: number;
+} {
+  let worst = { maxIdleRun: -1, worstBot: '', worstSeed: 0, idleFractionP90: 0 };
+  for (const sim of sims) {
+    if (sim.activity.maxIdleRun > worst.maxIdleRun) {
+      worst = {
+        maxIdleRun: sim.activity.maxIdleRun,
+        worstBot: sim.activity.worstBot,
+        worstSeed: sim.activity.worstSeed,
+        idleFractionP90: worst.idleFractionP90,
+      };
+    }
+    if (sim.activity.idleFractionP90 > worst.idleFractionP90) {
+      worst.idleFractionP90 = sim.activity.idleFractionP90;
+    }
+  }
+  return { ...worst, maxIdleRun: Math.max(0, worst.maxIdleRun) };
+}
+
 export async function gate3Balance(source: string, opts: Gate3Options = {}): Promise<GateResult> {
   const now = opts.now ?? ((): number => performance.now());
   const started = now();
@@ -189,12 +242,28 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
     });
   }
 
+  // Both halves when there are two, the panel alone otherwise.
+  const activity = worstActivity(mimic === undefined ? [panel] : [panel, mimic]);
+
   const detail = {
     round,
     band: [lo, hi] as const,
-    thresholds: { adaptedMin: ADAPTED_MIN, fairMin: lo, fairMax: hi },
+    thresholds: {
+      adaptedMin: ADAPTED_MIN,
+      fairMin: lo,
+      fairMax: hi,
+      maxIdleRunTicks: ACTIVITY.maxIdleRunTicks,
+      maxIdleFractionP90: ACTIVITY.maxIdleFractionP90,
+    },
     matches: panel.matches + (mimic?.matches ?? 0),
     workers: panel.workers,
+    /** ACTIVE's measurement. `perBot[].maxIdleRun` breaks it down by opponent. */
+    activity: {
+      longestIdleRun: activity.maxIdleRun,
+      worstBot: activity.worstBot,
+      worstSeed: activity.worstSeed,
+      idleFractionP90: activity.idleFractionP90,
+    },
     panel: {
       winRate: panel.winRate,
       matches: panel.matches,
@@ -229,6 +298,21 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
   }
   if (mimic !== undefined && mimic.winRate < ADAPTED_MIN) {
     problems.push(`${pct(mimic.winRate)} vs Mimic — didn't adapt (need >= ${pct(ADAPTED_MIN)})`);
+  }
+
+  // ACTIVE last, and reported even when FAIR already failed: a boss that is both
+  // too easy and frozen has two bugs, and the frozen one is the one the player
+  // reports. Both sentences name the fix rather than the symptom, because this
+  // string is the whole of the Coder agent's feedback (spec §6.3).
+  if (activity.maxIdleRun > ACTIVITY.maxIdleRunTicks) {
+    const against = activity.worstBot === '' ? '' : ` vs ${activity.worstBot}`;
+    problems.push(
+      `boss motionless for ${activity.maxIdleRun} consecutive ticks (${ticksAsSeconds(activity.maxIdleRun)})${against} — never return idle as a resting state; patrol, reposition or feint instead (limit ${ACTIVITY.maxIdleRunTicks} ticks)`,
+    );
+  } else if (activity.idleFractionP90 > ACTIVITY.maxIdleFractionP90) {
+    problems.push(
+      `boss did nothing on ${Math.round(activity.idleFractionP90 * 100)}% of ticks in a typical match — never return idle as a resting state; patrol, reposition or feint instead (limit ${Math.round(ACTIVITY.maxIdleFractionP90 * 100)}%)`,
+    );
   }
 
   if (problems.length > 0) return gateFail(3, elapsed(), problems.join('; '), detail);

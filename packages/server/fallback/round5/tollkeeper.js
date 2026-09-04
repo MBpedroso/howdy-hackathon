@@ -9,8 +9,8 @@
 // player who only shoots when the screen is clear.
 //
 // It is the only boss here that is genuinely good at every range but one. Measured
-// against the panel it takes 0.92 off a camper, 0.84 off a kiter and 0.84 off a
-// perfect dodger — and 0.00 off a rusher.
+// against the panel it takes 1.00 off a kiter and 1.00 off a perfect dodger, 0.52 off a
+// camper — and 0.00 off a rusher.
 //
 // That last number is the whole design. Its hole is deliberate and it is the one every
 // siege engine has: it cannot fight at contact. It has no charge, its bursts are narrow
@@ -23,17 +23,48 @@
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round5/tollkeeper.js
 // --round 5 --matches 200`:
 //
-//     panel 0.65   (Camper 0.92, Kiter 0.84, Rusher 0.00, Dodger 0.84)   band 0.55-0.70
+//     panel 0.63   (Camper 0.52, Kiter 1.00, Rusher 0.00, Dodger 1.00)   band 0.55-0.70
+//     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
+//
+// Two things moved when the resting `idle` became a patrol and the retreat learned not
+// to grind into a wall. A defensive player used to beat this boss by walking it into a
+// corner, where it froze for 343 consecutive ticks; now it slides along the wall, and
+// nothing that keeps its distance beats it any more. That took the panel rate to 0.74,
+// so `SPAWN_EVERY` went from 400 to 725 — which is where the camper's 0.52 comes from,
+// and it is the reason this boss is still beatable by simply walking in.
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
 // machine. `packages/server/test/fallback.test.ts` re-checks the band on every run at
-// a reduced 60 matches; both counts sit at least 0.03 inside both edges.
+// a reduced 120 matches; both counts sit at least 0.03 inside both edges.
 export const meta = {
   name: 'Tollkeeper',
   rationale: 'I take a firing post outside the corner you chose and shell it until you come to me.',
   version: 1,
 };
+
+// The resting state, and why it is not `idle`.
+//
+// A boss that returns `idle` while it waits for a cooldown stands perfectly still,
+// and a human playtest reported that as a crash. Gate 3's ACTIVE assertion rejects it
+// now: more than 90 motionless ticks (1.5 s) against any reference bot, or a p90 idle
+// fraction over 0.25, and the strategy does not ship. So having arrived at the ground
+// it wants, this boss patrols *across* it instead of stopping — a triangle wave in x
+// through the anchor, +-`PATROL_RADIUS`. `PATROL_RADIUS / PATROL_LEG` is 2.59 px/tick,
+// just under the boss's own 2.6, so it tracks the patrol target exactly and is never
+// left standing. Straight legs, not a circle: every reference bot leads its shots off
+// the boss's last-tick velocity, and a curve defeats a linear lead permanently — a
+// boss that is unhittable by construction is not a harder boss, it is a broken one.
+const PATROL_LEG = 34;
+/** Half the width of the patrol. `PATROL_LEG * 1.29` is 2.59 px/tick, just under
+ *  the boss's own 2.6, so it tracks the target exactly instead of jittering around
+ *  it — derived rather than typed, so `PATROL_LEG` alone is the dial. */
+const PATROL_RADIUS = PATROL_LEG * 1.29;
+/** The anchor is held this far off a wall, so no leg can clamp against the edge. */
+const PATROL_MARGIN = PATROL_RADIUS + 34;
+const PATROL_EDGE = 34;
+/** How far ahead a retreat checks for a wall. */
+const PATROL_LOOK = 40;
 
 const REFRESH = 45;
 const GUARD_RANGE = 230;   // how far off the hot cell the guard post sits
@@ -41,7 +72,7 @@ const BACK_OFF = 190;      // never trade at contact
 const BURST_MIN = 300;
 const BURST_MAX = 470;
 const ZONE_CELLS = 1.5;    // "inside the zone", in heat-map cells
-const SPAWN_EVERY = 400;
+const SPAWN_EVERY = 725;
 // The balance dial, and the gun crew's rhythm. Once per breath the battery rolls
 // whether it is firing or reloading; `rand()` is the engine's seeded PRNG, so the
 // match replays byte-for-byte but the player cannot time the gaps by counting.
@@ -116,15 +147,70 @@ export function decide(view, mem) {
 
   // 4. Back off if the player closes: this boss does not want a knife fight.
   if (dist < BACK_OFF && dist > 0.001) {
-    return { type: 'move', dx: -dx / dist, dy: -dy / dist };
+    return retreat(view, dx / dist, dy / dist);
   }
 
   // 5. Otherwise hold the post.
   const tx = postX - boss.x;
   const ty = postY - boss.y;
   const tmag = Math.sqrt(tx * tx + ty * ty);
-  if (tmag < 8) return { type: 'idle' };
+  if (tmag < 8) return patrol(view, postX, postY);
   return { type: 'move', dx: tx / tmag, dy: ty / tmag };
+}
+
+
+/** The resting patrol: a triangle wave in x through (`ax`, `ay`). Never `idle`. */
+function patrol(view, ax, ay) {
+  const boss = view.boss;
+  const cx = clamp(ax, PATROL_MARGIN, view.arena.w - PATROL_MARGIN);
+  const cy = clamp(ay, PATROL_EDGE, view.arena.h - PATROL_EDGE);
+  const phase = view.tick % (PATROL_LEG * 2);
+  const leg = phase < PATROL_LEG ? phase : PATROL_LEG * 2 - phase;
+  const tx = cx + ((leg / PATROL_LEG) * 2 - 1) * PATROL_RADIUS - boss.x;
+  const ty = cy - boss.y;
+  const tmag = Math.sqrt(tx * tx + ty * ty);
+  // The target is under the boss this tick. It moves every tick, so this cannot
+  // repeat: nudge along the patrol axis rather than standing still for one frame.
+  if (tmag < 0.001) return { type: 'move', dx: phase < PATROL_LEG ? 1 : -1, dy: 0 };
+  return { type: 'move', dx: tx / tmag, dy: ty / tmag };
+}
+
+
+/** Is (`x`, `y`) inside the strip along the arena edge where a `move` would clamp? */
+function blocked(view, x, y) {
+  return (
+    x < PATROL_EDGE || x > view.arena.w - PATROL_EDGE || y < PATROL_EDGE || y > view.arena.h - PATROL_EDGE
+  );
+}
+
+/**
+ * Back away from the player without grinding into a wall.
+ *
+ * The straight retreat is tried first; when the arena edge is in the way the boss
+ * slides along it instead. Without this, a boss backing off from a player who is
+ * standing in a corner walks into the corner and stays there: `move` clamps at the
+ * boss's own radius, so the action is accepted, nothing moves, and the boss is as
+ * motionless as if it had returned `idle` — 416 consecutive ticks of it against a
+ * camper, before this existed. Gate 3's ACTIVE assertion counts displacement, not
+ * action types, which is exactly why.
+ */
+function retreat(view, ux, uy) {
+  const boss = view.boss;
+  // Straight back, then the two slides. Fixed order, so the choice is deterministic.
+  const dirs = [-ux, -uy, -uy, ux, uy, -ux];
+  for (let i = 0; i < dirs.length; i = i + 2) {
+    const cx = dirs[i];
+    const cy = dirs[i + 1];
+    if (!blocked(view, boss.x + cx * PATROL_LOOK, boss.y + cy * PATROL_LOOK)) {
+      return { type: 'move', dx: cx, dy: cy };
+    }
+  }
+  // Boxed in on every side the retreat could use: walk back into the room.
+  const cx = view.arena.w / 2 - boss.x;
+  const cy = view.arena.h / 2 - boss.y;
+  const cmag = Math.sqrt(cx * cx + cy * cy);
+  if (cmag > 0.001) return { type: 'move', dx: cx / cmag, dy: cy / cmag };
+  return { type: 'move', dx: 1, dy: 0 };
 }
 
 function hottestCell(heat) {

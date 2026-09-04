@@ -15,22 +15,35 @@
  * a Mimic from; `gate3Balance` skips the assertion when no summary is supplied
  * (see its docstring) and FAIR is the whole promise a pre-approved boss can make.
  *
+ * ACTIVE **is** asserted, and it is the reason this file changed on 2026-09-04: seven
+ * of the eight strategies here used `idle` as their resting state and froze for
+ * between 89 and 630 consecutive ticks. Gate 3 rejects that now, so `result.ok`
+ * already covers it — but the table prints the worst run per strategy anyway, because
+ * a run at 80 of the 90 allowed ticks is a strategy about to regress and the pass/fail
+ * bit cannot say so.
+ *
  * ## Match count
- * 60, against the spec's 200. The bands are checked at 200 by hand (`pnpm harness
+ * 120, against the spec's 200. The bands are checked at 200 by hand (`pnpm harness
  * <file> --round N --matches 200`) and every strategy is tuned to sit at least 0.03
- * inside both edges at *both* counts, so the reduced count here buys a ~15 s suite
+ * inside both edges at *both* counts, so the reduced count here buys a ~30 s suite
  * without turning a passing pool into a coin flip. The seed set is a fixed prefix of
  * the 200-match one (`seedsFor`), so this is a real subsample rather than a different
- * experiment — but it is a coarser one: 60 matches is 8 seeds per bot, so a per-bot
- * rate moves in steps of 0.125 and the panel rate in steps of ~0.031. Read the table
+ * experiment — but it is a coarser one: 120 matches is 15 seeds per bot, so a per-bot
+ * rate moves in steps of ~0.067 and the panel rate in steps of ~0.017. Read the table
  * it prints, not just the pass.
+ *
+ * It used to be 60, and 60 turned out to be too coarse for the margin this suite
+ * asserts: at 8 seeds per bot the panel rate moves in steps of 0.031, so a 0.03 margin
+ * is one grid point wide, and two strategies could not be tuned to satisfy it at both
+ * 60 and 200 without over-fitting the first eight seeds. Doubling the sample is the
+ * honest fix; it is the assertion that had to be affordable, not the number.
  */
 import { describe, expect, it } from 'vitest';
-import { bandFor, gate3Balance, runGates, type BalanceRound, type GateResult } from '@rematch/harness';
+import { ACTIVITY, bandFor, gate3Balance, runGates, type BalanceRound, type GateResult } from '@rematch/harness';
 import { FALLBACK_POOL, FALLBACK_ROUNDS, MIN_PER_ROUND, POOL_BYTES, pickFallback } from '../src/fallback.ts';
 
 /** Half go to the panel, half would go to the Mimic — which we do not use here. */
-const MATCHES = 60;
+const MATCHES = 120;
 
 /** The margin every strategy is tuned to keep from both edges of its band. */
 const MIN_MARGIN = 0.03;
@@ -55,6 +68,8 @@ type Row = {
   panel: number;
   perBot: Array<{ name: string; winRate: number }>;
   margin: number;
+  /** ACTIVE: the worst motionless run over every match, in ticks (60 = 1 s). */
+  idleRun: number;
   fair: boolean;
 };
 
@@ -63,6 +78,8 @@ type Gate3Detail = {
   panel: { winRate: number; perBot: Array<{ name: string; winRate: number }> };
   /** `gate3Balance` sets this string instead of a `mimic` block when no summary is given. */
   adapted?: string;
+  /** ACTIVE's measurement. See `@rematch/harness`'s `sim/activity.ts`. */
+  activity: { longestIdleRun: number; worstBot: string; idleFractionP90: number };
 };
 
 /** Every strategy in the pool, flattened, in round order. */
@@ -81,6 +98,7 @@ async function measure(round: BalanceRound, name: string, source: string): Promi
     panel,
     perBot: detail.panel.perBot,
     margin: Math.min(panel - lo, hi - panel),
+    idleRun: detail.activity.longestIdleRun,
     fair: result.ok,
   };
 }
@@ -147,11 +165,12 @@ describe('fallback pool', () => {
         ...(rows[0]?.perBot.map((b) => b.name.padStart(7)) ?? []),
         '        band',
         'margin',
+        'idle run',
         ' FAIR',
       ];
       console.log(
         [
-          `\nFallback pool — Gate 3 FAIR per round, ${MATCHES} matches each (ADAPTED not asserted: a fallback has no replay to mimic)`,
+          `\nFallback pool — Gate 3 FAIR + ACTIVE per round, ${MATCHES} matches each (ADAPTED not asserted: a fallback has no replay to mimic)`,
           header.join(' '),
           ...rows.map((r) => {
             const [lo, hi] = bandFor(r.round);
@@ -162,7 +181,15 @@ describe('fallback pool', () => {
               ...r.perBot.map((b) => b.winRate.toFixed(2).padStart(7)),
               `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(12),
               `${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(3)}`.padStart(6),
-              (r.fair ? ' PASS' : r.panel > hi ? ' hard' : ' easy').padStart(5),
+              `${r.idleRun}t/${ACTIVITY.maxIdleRunTicks}`.padStart(8),
+              (r.fair
+                ? ' PASS'
+                : r.idleRun > ACTIVITY.maxIdleRunTicks
+                  ? ' froz'
+                  : r.panel > hi
+                    ? ' hard'
+                    : ' easy'
+              ).padStart(5),
             ].join(' ');
           }),
         ].join('\n'),
@@ -182,6 +209,15 @@ describe('fallback pool', () => {
         expect(row.margin, `${where} — only ${row.margin.toFixed(3)} from an edge`).toBeGreaterThanOrEqual(
           MIN_MARGIN,
         );
+        // ACTIVE. `row.fair` already covers it — the gate joins every failed
+        // assertion into one reason — but asserting the number separately is what
+        // makes a *near* miss visible: a boss resting at 85 of the 90 allowed ticks
+        // has a resting `idle` waiting to be uncovered by the next engine tweak.
+        expect(
+          row.idleRun,
+          `${row.name} (round ${row.round}) was motionless for ${row.idleRun} consecutive ticks; ` +
+            `${ACTIVITY.maxIdleRunTicks} is the ACTIVE limit. Never return \`idle\` as a resting state.`,
+        ).toBeLessThanOrEqual(ACTIVITY.maxIdleRunTicks);
       }
 
       // The pool escalates. Not strategy-by-strategy — the bands overlap, so two

@@ -41,6 +41,7 @@ export {
 export { ALL_GATES, DEFAULT_GATES, gatesFor, runGates, type RunGatesOptions, type RunGatesResult } from './runGates.ts';
 
 export {
+  ACTIVITY,
   ADAPTED_MIN,
   BALANCE_ROUNDS,
   BAND,
@@ -76,6 +77,7 @@ export {
 // The balance simulator.
 export {
   getSandbox,
+  playMatch,
   playMatchState,
   playerSeed,
   runMatch,
@@ -84,7 +86,25 @@ export {
   type MatchResult,
   type RunMatchOptions,
 } from './sim/runMatch.ts';
-export { resolveWorkers, simulate, type BotRate, type SimulateOptions, type SimulateResult } from './sim/simulate.ts';
+export {
+  resolveWorkers,
+  simulate,
+  type BotRate,
+  type SimulateActivity,
+  type SimulateOptions,
+  type SimulateResult,
+} from './sim/simulate.ts';
+
+// "Does the boss actually play?" — the measurement behind Gate 3's ACTIVE assertion.
+export {
+  STILL_EPSILON,
+  createActivityTracker,
+  idleFraction,
+  isIdleTick,
+  ticksAsSeconds,
+  type Activity,
+  type ActivityTracker,
+} from './sim/activity.ts';
 export { botFromSpec, botSpecName, type BotSpec } from './sim/protocol.ts';
 
 export {

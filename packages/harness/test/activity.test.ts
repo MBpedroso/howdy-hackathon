@@ -1,5 +1,5 @@
 /**
- * A boss that stands still is a bug, and no gate can see it.
+ * A boss that stands still is a bug — and, since 2026-09-04, a gate.
  *
  * The playtest report was "the Round 2 boss just stood still in a corner of the
  * screen for the whole round". It had: `round2-candidate.js` drifted onto the centre
@@ -18,34 +18,35 @@
  *  - Gate 4 asks how long `decide` takes. `return {type:'idle'}` is the fastest
  *    strategy there is.
  *
- * So "does the boss actually play?" is a separate property, and this is where it is
- * asserted. It is deliberately not a gate: a gate rejects a candidate, and the
- * threshold that separates "holding position" from "crashed" is a judgement about
- * how the game *reads*, not a contract.
+ * ## What changed
  *
- * ## Scope, and what is knowingly left out
- *
- * The same `if (nothing to do) return {type:'idle'}` fallback is in almost every
- * hand-written strategy in the repo. Measured worst motionless run against the four
- * reference bots, in ticks (60 = 1 s):
+ * This file used to argue that "does the boss actually play?" should stay a test and
+ * not become a gate, because the threshold between "holding position" and "crashed"
+ * is a judgement about how the game *reads* rather than a contract. A human
+ * playtest settled it the other way: the property was invisible to the harness, so
+ * it shipped broken, and it was broken in *every* hand-written strategy in the repo.
+ * Measured worst motionless run against the four reference bots, in ticks (60 = 1 s),
+ * before the fix:
  *
  * ```
- *   harness/round2-candidate    43   (fixed — this file)
- *   web/src/strategies/round1   888  vs Kiter, 690 idle actions
- *   web/src/strategies/hound    187  vs Camper
- *   server/fallback/round2/hollow      589    round4/bellringer  430
- *   server/fallback/round2/metronome   272    round4/curfew       43
- *   server/fallback/round3/emberline   169    round5/crossfire   708
- *   server/fallback/round3/nettle      184    round5/tollkeeper  242
+ *   web/src/strategies/round1           169   web/src/strategies/hound     98
+ *   server/fallback/round2/hollow       391   round4/bellringer           630
+ *   server/fallback/round2/metronome    143   round4/curfew                89
+ *   server/fallback/round3/emberline    169   round5/crossfire            485
+ *   server/fallback/round3/nettle        89   round5/tollkeeper           343
  * ```
  *
- * Only the Round 2 candidate is asserted here. Every other entry is a *balance*
- * change as well as a bug fix — `round1.js` sets what "winnable on a first try"
- * (spec AC 4) means and owns the recorded AC 3 replay fixture, and each fallback
- * entry is documented as having passed all four gates at its round's band, so each
- * needs re-measuring against Gate 3 before it moves. That is a decision to take
- * deliberately, not a side effect of fixing the reported bug. See
- * `docs/SYSTEM.md` §9.
+ * So the measurement moved into `src/sim/activity.ts`, Gate 3 grew a third
+ * assertion (ACTIVE) that rejects on it, and every strategy above was fixed and
+ * re-balanced. This file is now the *property* test over the shipped set: it walks
+ * real matches tick by tick and asserts the same definition the gate uses, which is
+ * why it imports it rather than restating it. Two things it checks that the gate
+ * does not:
+ *
+ *  1. every shipped strategy, including the two in `web/` that have no fairness
+ *     band and are therefore never put through Gate 3 by any suite;
+ *  2. the recorded **human** replay, which is the input the four scripted bots
+ *     cannot produce — see the note on that test.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -59,20 +60,30 @@ import {
   type PlayerInput,
 } from '@rematch/engine';
 import { createSandbox, monotonicClock } from '@rematch/sandbox';
-import { camper, dodger, kiter, rusher, type PlayerBot } from '../src/index.ts';
+import {
+  ACTIVITY,
+  camper,
+  createActivityTracker,
+  dodger,
+  idleFraction,
+  kiter,
+  rusher,
+  type Activity,
+  type PlayerBot,
+} from '../src/index.ts';
 import { playerSeed } from '../src/sim/runMatch.ts';
 import { readCandidate, readGood } from './helpers.ts';
 
 /**
  * Longest run of ticks a shipped boss may stay in exactly the same place.
  *
- * A telegraph is the legitimate reason to be still and the longest one is the slam's
- * 40 ticks, during which `decide` is not called at all. 90 ticks (1.5 s) leaves room
- * for a slam with a burst on either side of it, and still rejects the 263-tick stall
- * this file exists for. `idle.js` is exempt: standing still is its entire definition
- * and it is the panel's zero point.
+ * Not a second copy of the number: it *is* Gate 3's threshold, imported, because a
+ * test that could disagree with the gate would be worse than no test. See
+ * `gates/balanceConfig.ts` for why it is 90 (1.5 s) and `sim/activity.ts` for what
+ * counts as motionless — telegraphs are excluded, and a `move` that walks into a
+ * wall is not.
  */
-export const MAX_STILL_TICKS = 90;
+const MAX_STILL_TICKS = ACTIVITY.maxIdleRunTicks;
 
 /** The recorded human Round 1, reused as a Round 2 player. */
 function humanLog(): InputLog {
@@ -80,46 +91,45 @@ function humanLog(): InputLog {
   return (JSON.parse(readFileSync(url, 'utf8')) as { log: InputLog }).log;
 }
 
-type Activity = {
-  ticks: number;
-  travelPx: number;
-  longestStill: number;
-  idleActions: number;
-  violations: number;
-  strategyKilled: boolean;
-};
+/** Every strategy the game can put in front of a player, by where it lives. */
+const SHIPPED: ReadonlyArray<{ name: string; path: string }> = [
+  { name: 'web/round1', path: '../../web/src/strategies/round1.js' },
+  { name: 'web/hound', path: '../../web/src/strategies/hound.js' },
+  { name: 'harness/round2-candidate', path: './fixtures/round2-candidate.js' },
+  { name: 'fallback/round2/hollow', path: '../../server/fallback/round2/hollow.js' },
+  { name: 'fallback/round2/metronome', path: '../../server/fallback/round2/metronome.js' },
+  { name: 'fallback/round3/emberline', path: '../../server/fallback/round3/emberline.js' },
+  { name: 'fallback/round3/nettle', path: '../../server/fallback/round3/nettle.js' },
+  { name: 'fallback/round4/bellringer', path: '../../server/fallback/round4/bellringer.js' },
+  { name: 'fallback/round4/curfew', path: '../../server/fallback/round4/curfew.js' },
+  { name: 'fallback/round5/crossfire', path: '../../server/fallback/round5/crossfire.js' },
+  { name: 'fallback/round5/tollkeeper', path: '../../server/fallback/round5/tollkeeper.js' },
+];
 
-function measure(state: GameState, next: (s: GameState) => PlayerInput, runner: Parameters<typeof step>[2]): Activity {
-  let travelPx = 0;
-  let still = 0;
-  let longestStill = 0;
-  let idleActions = 0;
-  let x = state.boss.x;
-  let y = state.boss.y;
+function read(path: string): string {
+  return readFileSync(new URL(path, import.meta.url), 'utf8');
+}
 
+type Measured = Activity & { violations: number; strategyKilled: boolean };
+
+/**
+ * Play a match to its end and report the activity.
+ *
+ * The per-tick bookkeeping is `createActivityTracker` — the same code Gate 3's
+ * verdict is computed from — so this test cannot drift away from the assertion it
+ * is the property version of.
+ */
+function measure(
+  state: GameState,
+  next: (s: GameState) => PlayerInput,
+  runner: Parameters<typeof step>[2],
+): Measured {
+  const tracker = createActivityTracker(state);
   while (state.outcome === 'playing') {
     step(state, next(state), runner);
-    const moved = Math.hypot(state.boss.x - x, state.boss.y - y);
-    travelPx += moved;
-    if (moved < 0.01) {
-      still += 1;
-      if (still > longestStill) longestStill = still;
-    } else {
-      still = 0;
-    }
-    x = state.boss.x;
-    y = state.boss.y;
-    if (state.boss.lastAction === 'idle') idleActions += 1;
+    tracker.observe(state);
   }
-
-  return {
-    ticks: state.tick,
-    travelPx,
-    longestStill,
-    idleActions,
-    violations: state.violations,
-    strategyKilled: state.strategyKilled,
-  };
+  return { ...tracker.read(), violations: state.violations, strategyKilled: state.strategyKilled };
 }
 
 const sandbox = await createSandbox();
@@ -130,11 +140,9 @@ function load(source: string): ReturnType<typeof sandbox.load> {
 }
 
 describe('a shipped boss keeps playing', () => {
-  const cases: Array<{ name: string; source: string }> = [{ name: 'round2-candidate', source: readCandidate() }];
-
-  for (const { name, source } of cases) {
+  for (const { name, path } of SHIPPED) {
     it(`${name} never freezes against the reference panel`, () => {
-      const runner = load(source);
+      const runner = load(read(path));
       try {
         for (const [i, bot] of ([kiter(), rusher(), camper(), dodger()] as PlayerBot[]).entries()) {
           const seed = 0x5eedface + i;
@@ -143,13 +151,16 @@ describe('a shipped boss keeps playing', () => {
           const rng = createRng(playerSeed(seed));
           const activity = measure(state, (s) => bot.act(s, rng), runner);
           const where = `${name} vs bot#${i}: ${JSON.stringify(activity)}`;
-          expect(activity.longestStill, where).toBeLessThanOrEqual(MAX_STILL_TICKS);
+          expect(activity.longestIdleRun, where).toBeLessThanOrEqual(MAX_STILL_TICKS);
+          expect(idleFraction(activity), where).toBeLessThanOrEqual(ACTIVITY.maxIdleFractionP90);
+          // The demo's floor: a boss that travelled 100 px in a whole round did not
+          // play, whatever its idle runs say.
           expect(activity.travelPx, where).toBeGreaterThan(100);
         }
       } finally {
         runner.dispose();
       }
-    }, 30_000);
+    }, 60_000);
   }
 
   /**
@@ -175,8 +186,8 @@ describe('a shipped boss keeps playing', () => {
         runner,
       );
       const where = JSON.stringify(activity);
-      expect(activity.longestStill, where).toBeLessThanOrEqual(MAX_STILL_TICKS);
-      expect(activity.idleActions, `idle actions — ${where}`).toBe(0);
+      expect(activity.longestIdleRun, where).toBeLessThanOrEqual(MAX_STILL_TICKS);
+      expect(activity.idleTicks, `idle ticks — ${where}`).toBe(0);
       expect(activity.violations, where).toBe(0);
       expect(activity.strategyKilled, where).toBe(false);
     } finally {
@@ -194,8 +205,40 @@ describe('a shipped boss keeps playing', () => {
       const state = createGame(seed, runner);
       const rng = createRng(playerSeed(seed));
       const activity = measure(state, (s) => bot.act(s, rng), runner);
-      expect(activity.longestStill).toBeGreaterThan(MAX_STILL_TICKS);
+      expect(activity.longestIdleRun).toBeGreaterThan(MAX_STILL_TICKS);
+      expect(idleFraction(activity)).toBe(1);
       expect(activity.travelPx).toBe(0);
+    } finally {
+      runner.dispose();
+    }
+  }, 30_000);
+
+  /**
+   * The clause that is easy to get wrong, asserted on its own.
+   *
+   * `emberline` did not have an `idle` branch and still froze for 169 ticks: its
+   * orbit ran the boss into the top-left corner, where `move` clamps at the boss's
+   * own radius and displaces it by nothing. That is why the definition is about
+   * *displacement* and not about the action type, and this is a boss that does
+   * nothing but walk into a wall — no `idle` anywhere in the file.
+   */
+  it('counts a `move` that walks into a wall, not just `idle`', () => {
+    const source = `export const meta = { name: 'Wallflower', rationale: 'I push.', version: 1 };
+export function init() { return {}; }
+export function decide() { return { type: 'move', dx: -1, dy: -1 }; }`;
+    const runner = load(source);
+    try {
+      const seed = 11;
+      const bot = camper();
+      bot.reset(seed);
+      const state = createGame(seed, runner);
+      const rng = createRng(playerSeed(seed));
+      const activity = measure(state, (s) => bot.act(s, rng), runner);
+      const where = JSON.stringify(activity);
+      // It walked to the corner and then stayed there for the rest of the round.
+      expect(activity.travelPx, where).toBeGreaterThan(100);
+      expect(activity.longestIdleRun, where).toBeGreaterThan(MAX_STILL_TICKS);
+      expect(activity.violations, where).toBe(0);
     } finally {
       runner.dispose();
     }

@@ -420,6 +420,153 @@ Kept because the failures are the interesting part of a parallel-agent build.
 
 ---
 
+## 2026-09-04 — a human playtest found a frozen boss; the gate that could not see it
+
+**Human (playtest).** *"After winning Round 1 the interlude ran and the Round 2 boss just
+stood still in a corner of the screen for the whole round."*
+
+**The bug.** `round2-candidate.js` drifted onto the centre of the player's hottest heat
+cell and returned `{type:'idle'}` from then on. `history.playerPosHeat` is **cumulative
+over the whole round and never decays**, so the "habit" it was guarding was a cell the
+player had left twenty seconds earlier; with the player outside the slam box and outside
+the burst window, every other branch declined too. Against the recorded playtest log: 219
+idle ticks out of 510 and one motionless run of **263 ticks — 4.4 seconds**, with *zero*
+contract violations.
+
+**What made it interesting is that all four gates approved it, and all four were right.**
+
+| Gate | Why it could not see it |
+|---|---|
+| 1 `static` | `idle` is a legal action |
+| 2 `fuzz` | `idle` is always *valid*, costs no cooldown, is not a violation |
+| 3 `balance` | reads only the win rate — and the frozen version measured 0.38, *inside* the 0.35–0.50 band. Partly **because** it froze: a stationary boss is easy to shoot |
+| 4 `perf` | `return {type:'idle'}` is the fastest `decide` there is |
+
+A property no gate can see is a property that ships broken. It had: **ten of the eleven
+shipped strategies** ended `decide` with the same "nothing to do, return `idle`" fallback.
+
+### The fix, in three parts
+
+**1. Gate 3 grew a third assertion, ACTIVE** (`harness/src/sim/activity.ts`,
+`ACTIVITY` in `balanceConfig.ts`). A tick is idle when the boss did not move, is not
+telegraphing, is not mid-charge, and its last action was `idle` **or a `move` that
+displaced nothing**. Reject when the worst run over every match exceeds 90 ticks (1.5 s)
+or the p90 per-match idle fraction exceeds 0.25. Measured across both halves of the match
+budget, panel *and* Mimic — the four scripted bots walk scripted paths, and the stall
+needed a human, who settles in a cell, leaves, and settles elsewhere.
+
+Three decisions worth recording:
+
+- **Displacement, not action type.** `fallback/round3/emberline` had no `idle` branch at
+  all and still froze for 169 ticks: its orbit walked the boss into the top-left corner,
+  where `move` clamps at the boss's own radius. An action-type check would have passed it,
+  and this clause is what caught six more of these (five `back off from the player`
+  branches, one orbit).
+- **Two numbers.** A max alone misses a boss that idles 80 ticks, twitches, idles 80 more;
+  a mean alone hides a quarter of the matches being dead.
+- **A gate, not a test.** The previous session argued the opposite — that "holding
+  position" versus "crashed" is a judgement about how the game reads, not a contract — and
+  wrote `activity.test.ts` instead. The playtest settled it: the file only asserted the
+  one strategy that had been reported, and the other ten kept shipping.
+
+It costs nothing: the matches were already being simulated, and the measurement is two
+adds and a `hypot` per tick. Reason strings name the fix, not the symptom, and are joined
+after FAIR and ADAPTED rather than replacing them:
+
+```
+boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a
+resting state; patrol, reposition or feint instead (limit 90 ticks)
+```
+
+**2. Every shipped strategy was fixed.** Resting `idle` became a patrol across the ground
+the boss guards, or a strafe perpendicular to the player that holds whatever range the
+branch above chose. **Straight legs of ~34 ticks, never a curve** — every reference bot
+leads its shots off the boss's last-tick velocity, and a curve defeats a linear lead
+permanently. (The first attempt at `round2-candidate` was a circular orbit; it went 0.38 →
+0.72 against the panel. Unhittable by construction is not "harder", it is broken.)
+
+Two more bugs fell out of the same audit, both in the two `web/` strategies: `round1.js`
+and `hound.js` asked for a `spawn` whenever the cooldown was ready, and a `spawn` refused
+at the two-minion cap **keeps its cooldown and costs a violation** — so with two minions
+alive they asked every tick, froze, *and* (because that branch sits above the burst)
+stopped shooting entirely. Both now rate-limit by tick, like the fallback pool always did.
+
+**3. Everything was re-balanced.** The resting motion costs the panel bots real accuracy —
+a shot crosses 300 px in ~27 ticks and a moving boss is harder to lead — so seven of the
+eight fallbacks needed their pressure dial moved to stay in band. Final table, 200 matches
+through Gate 3 (`pnpm harness <file> --round N --matches 200`):
+
+| Strategy | Rd | Panel | Camper | Kiter | Rusher | Dodger | Band | Margin | Idle run | Dial moved |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `web/round1` | 1 | 0.60 | 1.00 | 0.00 | 1.00 | 0.40 | *(none)* | — | 1t | `SPAWN_EVERY` added (380) |
+| `web/hound` | — | 0.75 | 1.00 | 1.00 | 1.00 | 0.00 | *(none)* | — | 1t | `SPAWN_EVERY` added (380) |
+| `harness/round2-candidate` | 2 | 0.45 | 0.64 | 0.52 | 0.00 | 0.64 | 0.35–0.50 | +0.050 | 17t | *(fixed 2026-09-03)* |
+| `fallback/hollow` | 2 | 0.44 | 1.00 | 0.16 | 0.60 | 0.00 | 0.35–0.50 | +0.060 | 1t | `TURN_HP` 58 → 68 |
+| `fallback/metronome` | 2 | 0.46 | 1.00 | 0.52 | 0.00 | 0.32 | 0.35–0.50 | +0.040 | 0t | `MARCH_LEG` 34 → 68, `SPAWN_EVERY` 440 → 900 |
+| `fallback/emberline` | 3 | 0.53 | 1.00 | 0.36 | 0.00 | 0.76 | 0.45–0.60 | +0.070 | 0t | `SPAWN_EVERY` 380 → 560 |
+| `fallback/nettle` | 3 | 0.50 | 1.00 | 0.00 | 1.00 | 0.00 | 0.45–0.60 | +0.050 | 1t | **none** |
+| `fallback/bellringer` | 4 | 0.54 | 1.00 | 0.44 | 0.00 | 0.72 | 0.50–0.65 | +0.040 | 0t | `SPAWN_EVERY` 1000 → 1380 |
+| `fallback/curfew` | 4 | 0.55 | 1.00 | 0.48 | 0.00 | 0.72 | 0.50–0.65 | +0.050 | 1t | `CONTACT` 140 → 70, `ENFORCE_CHANCE` added (0.94) |
+| `fallback/crossfire` | 5 | 0.61 | 1.00 | 0.08 | 0.52 | 0.84 | 0.55–0.70 | +0.060 | 0t | `SPAWN_EVERY` 460 → 800 |
+| `fallback/tollkeeper` | 5 | 0.63 | 0.52 | 1.00 | 0.00 | 1.00 | 0.55–0.70 | +0.070 | 0t | `SPAWN_EVERY` 400 → 725 |
+
+Round means still escalate (0.45 → 0.515 → 0.545 → 0.62), which is the property
+`fallback.test.ts` asserts and the reason the pool can claim "the boss gets harder".
+
+Two of them needed more than two iterations to land:
+
+- **`metronome`** — five. `BEAT` looked like the dial and is not: it is a *phase* against
+  the cooldowns, so 84 measured 0.32 and 96 measured 0.62. `RING_RANGE` did nothing at all
+  (the boss holds 285 px and never enters ring range). What actually moved it was the march
+  leg length — a leg shorter than a shot's ~27-tick flight means most shots are in flight
+  across a turn and miss for free — and then the minion cadence.
+- **`curfew`** — six, and it needed a *new* dial. Every threshold in the file is a cliff:
+  `SPAWN_EVERY` 300 → 0.55 and 460 → 0.32, `BACK_OFF` 200 → 0.56 and 140 → 0.38, because
+  the four bots' rates are near-binary and a threshold either changes nothing or changes a
+  whole bot. It was the only pool member with no `rand()` roll, so it got one
+  (`ENFORCE_CHANCE`), which is exactly the technique `harnessHints` tells the Coder to use.
+
+### Three smaller consequences
+
+- **`fallback.test.ts` moved from 60 matches to 120.** At 8 seeds per bot the panel rate
+  moves in steps of 0.031, so the suite's own 0.03 margin requirement is one grid point
+  wide — and `curfew` and `tollkeeper` could not satisfy it at 60 *and* 200 without
+  over-fitting the first eight seeds. Doubling the sample is the honest fix (~15 s → ~30 s);
+  the assertion is what had to be affordable, not the number.
+- **The AC 3 replay fixture was regenerated.** `round1.js` changed, so the scripted
+  player's input log changed with it: `6568b87bb4974fb8` / 962 ticks →
+  **`74cd659935e33202` / 909 ticks**, still `playerWon`. The hash is a recorded
+  expectation, not an invariant.
+- **The Coder's prompt gained the rule and stayed under 13k.** ACTIVE is now in
+  `harnessRules` with its real rejection sentence, and `harnessHints` says out loud that
+  `playerPosHeat` is cumulative and never decays — *aim pressure there, then keep moving;
+  never park on it*, which is the sentence the frozen strategy needed. Paid for by cutting
+  two duplicates from `contractDoc`: the Gate-1 rule-id list (every rejection names its own
+  rule) and the README's gate-layering table (`harnessRules` says it better, with real
+  rejection sentences). 12 991 → 12 881 characters.
+
+### What is knowingly left broken
+
+The three recorded runs in `packages/web/public/recorded/` are **real model output from
+2026-09-03**, and the strategies they got approved use `idle` as a resting state: measured
+worst runs of 155, 183 and 764 ticks. They are not re-recorded, because re-recording would
+mean either spending credit the project does not have or inventing model output — and not
+inventing model output is the entire point of that mode. So each file and each `index.json`
+entry carries a `knownIssue`, and the interlude footer shows it on screen next to the
+`RECORDED RUN` badge:
+
+```
+KNOWN ISSUE · boss idles up to 764 ticks (12.7 s); generated before the ACTIVE assertion existed
+```
+
+A viewer who can see the freeze can read why it is there. Closing it needs one authorized
+eval run and `pnpm --filter @rematch/web record:run`.
+
+**Verification.** `pnpm verify` green, `pnpm test:e2e` 16 green, `pnpm test:balance` green.
+No LLM was called: every number above is the harness's, on the fixed seed set.
+
+---
+
 ## Open — dated placeholders
 
 Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck
@@ -428,9 +575,11 @@ through, rather than deleted: what closed it and what it cost is the interesting
 ### `[ ] 2026-09-0? — human playtest (AC 4)`
 
 *Can a human beat Round 1 in under 60 s with WASD + mouse on a first try, in ≥3 of 5
-attempts?* Unmeasured. Run `pnpm dev`, open
+attempts?* Still unmeasured as a *timed five-attempt run* — but a human did play it on
+2026-09-04 and the session found the frozen-boss bug (entry above), which is the single
+most valuable thing this placeholder has produced so far. Run `pnpm dev`, open
 `http://localhost:5173/?agent=mock&autostart=1`, five fresh attempts, log the outcomes and
-times here. The scripted player wins in 962 ticks (~16 s), which says winnable, not fun.
+times here. The scripted player wins in 909 ticks (~15 s), which says winnable, not fun.
 Watch specifically for the renderer agent's finding: ~100% of damage comes from
 un-telegraphed bullets, so a first-time player may find the fight unreadable even though
 both telegraphs are honest. Spec §11's mitigation applies — *if not fun, simplify

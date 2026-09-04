@@ -13,22 +13,49 @@
 // to read the next telegraph. The counter is to break the squeeze early and cross the
 // middle, which is why this boss opens the middle to do it — and it works: a player who
 // simply holds a long orbit and never lets the wall get behind them beats this boss
-// 0.84 of the time, which is the widest hole of any Round 5 boss here.
+// 0.92 of the time, which is the widest hole of any Round 5 boss here.
 //
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round5/crossfire.js
 // --round 5 --matches 200`:
 //
-//     panel 0.63   (Camper 1.00, Kiter 0.16, Rusher 0.64, Dodger 0.72)   band 0.55-0.70
+//     panel 0.61   (Camper 1.00, Kiter 0.08, Rusher 0.52, Dodger 0.84)   band 0.55-0.70
+//     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
+//
+// Holding the pressing post used to mean standing on it — up to 485 consecutive
+// motionless ticks, eight seconds of a boss that reads as crashed. Pacing across it
+// instead cost the panel bots accuracy and took this boss to 0.72, so `SPAWN_EVERY`
+// went from 460 to 800 to pay it back.
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
 // machine. `packages/server/test/fallback.test.ts` re-checks the band on every run at
-// a reduced 60 matches; both counts sit at least 0.03 inside both edges.
+// a reduced 120 matches; both counts sit at least 0.03 inside both edges.
 export const meta = {
   name: 'Crossfire',
   rationale: 'I am not aiming at you. I am aiming at the only place you had left to stand.',
   version: 1,
 };
+
+// The resting state, and why it is not `idle`.
+//
+// A boss that returns `idle` while it waits for a cooldown stands perfectly still,
+// and a human playtest reported that as a crash. Gate 3's ACTIVE assertion rejects it
+// now: more than 90 motionless ticks (1.5 s) against any reference bot, or a p90 idle
+// fraction over 0.25, and the strategy does not ship. So having arrived at the ground
+// it wants, this boss patrols *across* it instead of stopping — a triangle wave in x
+// through the anchor, +-`PATROL_RADIUS`. `PATROL_RADIUS / PATROL_LEG` is 2.59 px/tick,
+// just under the boss's own 2.6, so it tracks the patrol target exactly and is never
+// left standing. Straight legs, not a circle: every reference bot leads its shots off
+// the boss's last-tick velocity, and a curve defeats a linear lead permanently — a
+// boss that is unhittable by construction is not a harder boss, it is a broken one.
+const PATROL_LEG = 34;
+/** Half the width of the patrol. `PATROL_LEG * 1.29` is 2.59 px/tick, just under
+ *  the boss's own 2.6, so it tracks the target exactly instead of jittering around
+ *  it — derived rather than typed, so `PATROL_LEG` alone is the dial. */
+const PATROL_RADIUS = PATROL_LEG * 1.29;
+/** The anchor is held this far off a wall, so no leg can clamp against the edge. */
+const PATROL_MARGIN = PATROL_RADIUS + 34;
+const PATROL_EDGE = 34;
 
 const PIN_OFFSET = 250;      // how far off the player the pressing post sits
 const CONE_MIN = 170;
@@ -37,7 +64,7 @@ const LANE_LEAD = 120;       // how far up the escape lane the slam is placed
 const CHARGE_MIN = 250;
 const CHARGE_MAX = 420;
 const RING_RANGE = 130;
-const SPAWN_EVERY = 460;
+const SPAWN_EVERY = 800;
 // The balance dial. Once per breath the boss rolls whether it presses or resets;
 // `rand()` is the engine's seeded PRNG, so the match still replays byte-for-byte.
 const BREATH = 150;
@@ -131,7 +158,24 @@ export function decide(view, mem) {
   const tx = postX - boss.x;
   const ty = postY - boss.y;
   const tmag = Math.sqrt(tx * tx + ty * ty);
-  if (tmag < 10) return { type: 'idle' };
+  if (tmag < 10) return patrol(view, postX, postY);
+  return { type: 'move', dx: tx / tmag, dy: ty / tmag };
+}
+
+
+/** The resting patrol: a triangle wave in x through (`ax`, `ay`). Never `idle`. */
+function patrol(view, ax, ay) {
+  const boss = view.boss;
+  const cx = clamp(ax, PATROL_MARGIN, view.arena.w - PATROL_MARGIN);
+  const cy = clamp(ay, PATROL_EDGE, view.arena.h - PATROL_EDGE);
+  const phase = view.tick % (PATROL_LEG * 2);
+  const leg = phase < PATROL_LEG ? phase : PATROL_LEG * 2 - phase;
+  const tx = cx + ((leg / PATROL_LEG) * 2 - 1) * PATROL_RADIUS - boss.x;
+  const ty = cy - boss.y;
+  const tmag = Math.sqrt(tx * tx + ty * ty);
+  // The target is under the boss this tick. It moves every tick, so this cannot
+  // repeat: nudge along the patrol axis rather than standing still for one frame.
+  if (tmag < 0.001) return { type: 'move', dx: phase < PATROL_LEG ? 1 : -1, dy: 0 };
   return { type: 'move', dx: tx / tmag, dy: ty / tmag };
 }
 

@@ -11,26 +11,47 @@
 // because that is the round whose job is to teach, and the lesson is about *pacing*.
 //
 // The hole is the same one the design is built on, and it is a wide one: the calm phase
-// is genuinely calm, so the first 42 hp are nearly free. A patient player who refuses
+// is genuinely calm, so the first 32 hp are nearly free. A patient player who refuses
 // every trade beats this boss outright — the Dodger bot, which shoots only when the
 // screen is clear, takes it 100% of the time.
 //
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round2/hollow.js
 // --round 2 --matches 200`:
 //
-//     panel 0.44   (Camper 1.00, Kiter 0.20, Rusher 0.56, Dodger 0.00)   band 0.35-0.50
+//     panel 0.44   (Camper 1.00, Kiter 0.16, Rusher 0.60, Dodger 0.00)   band 0.35-0.50
+//     longest motionless run 1 tick of the 90 Gate 3's ACTIVE assertion allows
+//
+// `TURN_HP` moved from 58 to 68 when the resting `idle` became a strafe. A boss in
+// motion is harder to lead, so it takes longer to reach its own turn — and this one's
+// entire win rate lives below that line, so it measured 0.30 (too easy) until the
+// turn came earlier. That is the trade the strafe costs, paid back in the one dial
+// this design has.
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
 // machine. `packages/server/test/fallback.test.ts` re-checks the band on every run at
-// a reduced 60 matches; both counts sit at least 0.03 inside both edges.
+// a reduced 120 matches; both counts sit at least 0.03 inside both edges.
 export const meta = {
   name: 'Hollow',
   rationale: 'While I am whole I will let you work. It is only when you have nearly finished that I stop being polite.',
   version: 1,
 };
 
-const TURN_HP = 58;         // below this it stops being polite
+// The resting state, and why it is not `idle`.
+//
+// A boss that returns `idle` while it waits for a cooldown stands perfectly still,
+// and a human playtest reported that as a crash. Gate 3's ACTIVE assertion rejects
+// it now: more than 90 motionless ticks (1.5 s) against any reference bot, or a p90
+// idle fraction over 0.25, and the strategy does not ship. The resting state here is
+// a strafe perpendicular to the player, so it holds whatever range the branches above
+// chose while staying visibly alive. Straight legs, not a curve: every reference bot
+// leads its shots off the boss's last-tick velocity, and a curve defeats a linear
+// lead permanently — a boss that is unhittable by construction is not a harder boss.
+const STRAFE_LEG = 34;      // ticks per straight leg
+const STRAFE_LOOK = 40;     // how far ahead the strafe checks for a wall
+const STRAFE_EDGE = 34;     // how close to the arena edge a leg may aim
+
+const TURN_HP = 68;         // below this it stops being polite
 const CALM_RANGE = 330;     // the distance it keeps while whole
 const REFRESH = 55;
 const ZONE_CELLS = 1.6;
@@ -96,12 +117,15 @@ export function decide(view, mem) {
       return { type: 'slam', x: hotX, y: hotY };
     }
     if (dist < CALM_RANGE - 50 && dist > 0.001) {
-      return { type: 'move', dx: -dx / dist, dy: -dy / dist };
+      return retreat(view, dx / dist, dy / dist);
     }
     if (dist > CALM_RANGE + 50 && dist > 0.001) {
       return { type: 'move', dx: dx / dist, dy: dy / dist };
     }
-    return { type: 'idle' };
+    // At the holding distance. Strafe across it rather than stand in it: the calm
+    // phase is meant to read as a boss that is letting the player work, not as one
+    // that has stopped running.
+    return strafe(view, angle);
   }
 
   // ---- the hollow half ----
@@ -145,7 +169,69 @@ export function decide(view, mem) {
   if (dist > 70 && dist > 0.001) {
     return { type: 'move', dx: dx / dist, dy: dy / dist };
   }
-  return { type: 'idle' };
+  // Already on top of the player, with everything spent: circle them.
+  return strafe(view, angle);
+}
+
+
+/** The resting strafe: perpendicular to `angle`, reversing every `STRAFE_LEG` ticks. */
+function strafe(view, angle) {
+  const boss = view.boss;
+  const dir = Math.floor(view.tick / STRAFE_LEG) % 2 === 0 ? 1 : -1;
+  let dx = -Math.sin(angle) * dir;
+  let dy = Math.cos(angle) * dir;
+  // A `move` that clamps against the arena edge displaces the boss by nothing, which
+  // is exactly as motionless as `idle` and is counted the same way. Turn round first.
+  if (blocked(view, boss.x + dx * STRAFE_LOOK, boss.y + dy * STRAFE_LOOK)) {
+    dx = -dx;
+    dy = -dy;
+  }
+  if (blocked(view, boss.x + dx * STRAFE_LOOK, boss.y + dy * STRAFE_LOOK)) {
+    // Both legs run into a wall: the boss is in a corner. Walk back into the room.
+    const cx = view.arena.w / 2 - boss.x;
+    const cy = view.arena.h / 2 - boss.y;
+    const cmag = Math.sqrt(cx * cx + cy * cy);
+    if (cmag > 0.001) return { type: 'move', dx: cx / cmag, dy: cy / cmag };
+  }
+  return { type: 'move', dx: dx, dy: dy };
+}
+
+/** Is (`x`, `y`) inside the strip along the arena edge where a `move` would clamp? */
+function blocked(view, x, y) {
+  return (
+    x < STRAFE_EDGE || x > view.arena.w - STRAFE_EDGE || y < STRAFE_EDGE || y > view.arena.h - STRAFE_EDGE
+  );
+}
+
+
+/**
+ * Back away from the player without grinding into a wall.
+ *
+ * The straight retreat is tried first; when the arena edge is in the way the boss
+ * slides along it instead. Without this, a boss backing off from a player who is
+ * standing in a corner walks into the corner and stays there: `move` clamps at the
+ * boss's own radius, so the action is accepted, nothing moves, and the boss is as
+ * motionless as if it had returned `idle` — 416 consecutive ticks of it against a
+ * camper, before this existed. Gate 3's ACTIVE assertion counts displacement, not
+ * action types, which is exactly why.
+ */
+function retreat(view, ux, uy) {
+  const boss = view.boss;
+  // Straight back, then the two slides. Fixed order, so the choice is deterministic.
+  const dirs = [-ux, -uy, -uy, ux, uy, -ux];
+  for (let i = 0; i < dirs.length; i = i + 2) {
+    const cx = dirs[i];
+    const cy = dirs[i + 1];
+    if (!blocked(view, boss.x + cx * STRAFE_LOOK, boss.y + cy * STRAFE_LOOK)) {
+      return { type: 'move', dx: cx, dy: cy };
+    }
+  }
+  // Boxed in on every side the retreat could use: walk back into the room.
+  const cx = view.arena.w / 2 - boss.x;
+  const cy = view.arena.h / 2 - boss.y;
+  const cmag = Math.sqrt(cx * cx + cy * cy);
+  if (cmag > 0.001) return { type: 'move', dx: cx / cmag, dy: cy / cmag };
+  return { type: 'move', dx: 1, dy: 0 };
 }
 
 function hottestCell(heat) {

@@ -13,7 +13,7 @@
  * attempt of every round, which is exactly the shape a cached prompt prefix wants.
  */
 import { readFileSync } from 'node:fs';
-import { CONSTANTS, FORBIDDEN_IDENTIFIERS, STATIC_RULES } from '@rematch/contract';
+import { CONSTANTS, FORBIDDEN_IDENTIFIERS } from '@rematch/contract';
 
 const README_URL = new URL('../../../contract/README.md', import.meta.url);
 const TYPES_URL = new URL('../../../contract/src/types.ts', import.meta.url);
@@ -28,12 +28,23 @@ const TYPES_URL = new URL('../../../contract/src/types.ts', import.meta.url);
  * what Gate 1 does and does not catch.
  */
 const README_SECTIONS = [
-  // `## API` is depth 2, so it carries its own `###` subsections with it —
-  // `validateAction behaviour worth knowing` and `What Gate 1 deliberately does
-  // not do`, the two paragraphs that exist nowhere but the README. Listing those
-  // separately would pay for them twice.
+  // `## API` is depth 2, so it carries its own `###` subsections with it. Listing
+  // those separately would pay for them twice.
   '## API',
 ] as const;
+
+/**
+ * The one `###` subsection of `## API` that is cut before the doc is assembled.
+ *
+ * "What Gate 1 deliberately does not do" is a 0.8 KB layering table — which gate
+ * catches infinite loops, which one catches a slow `decide` — and the Coder is
+ * *already* told all of that, in its own terms and with real rejection sentences,
+ * by `harnessRules`. The system prompt has a 13k ceiling (`test/context.test.ts`
+ * enforces it) and Gate 3's third assertion needed the room, so the duplicate is
+ * the thing that goes. What stays is `validateAction behaviour worth knowing`,
+ * which exists nowhere else and is load-bearing for writing a valid action.
+ */
+const CUT_SUBSECTION = '### What Gate 1 deliberately does not do';
 
 /** Pull one `#…` section (heading included) out of a markdown document. */
 export function markdownSection(markdown: string, heading: string): string {
@@ -64,6 +75,12 @@ export function stripBlockComments(source: string): string {
     .replace(/^[ \t]*\/\/.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** Drop `CUT_SUBSECTION` and everything under it. A no-op if it is not there. */
+export function cutSubsection(section: string): string {
+  const at = section.indexOf(CUT_SUBSECTION);
+  return at < 0 ? section : section.slice(0, at).trimEnd();
 }
 
 function build(): string {
@@ -121,8 +138,10 @@ function build(): string {
     '',
     `\`${[...FORBIDDEN_IDENTIFIERS].join('`, `')}\``,
     '',
-    ...README_SECTIONS.map((h) => `${markdownSection(readme, h)}\n`),
-    `Gate 1's rule ids, for reference: \`${STATIC_RULES.join('`, `')}\`.`,
+    // No list of Gate 1's rule ids either: every rejection sentence names its own
+    // rule (`forbidden-identifier: 'Date' may not be mentioned (line 14)`), so the
+    // list only repeats what the feedback already says.
+    ...README_SECTIONS.map((h) => `${cutSubsection(markdownSection(readme, h))}\n`),
   ].join('\n');
 }
 

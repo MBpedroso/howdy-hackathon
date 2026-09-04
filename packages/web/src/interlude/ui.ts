@@ -103,6 +103,12 @@ export type InterludeState = {
   kind: SourceKind;
   /** The footer badge's text: `MOCK`, `LIVE`, or `RECORDED RUN · <model> · <date>`. */
   provenance: string;
+  /**
+   * A caveat the source disclosed about itself, or `null`. Today only a recorded
+   * run sets one, and only because the three committed runs predate Gate 3's
+   * ACTIVE assertion — see `recorded.ts`'s `knownIssue`.
+   */
+  provenanceNote: string | null;
   gates: Array<{
     attempt: number;
     /** 0-based index of the candidate file this gate judged, when there was more than one. */
@@ -168,8 +174,15 @@ export type InterludeUi = {
   /** Reveal FIGHT and start the auto-continue. Idempotent. */
   finish(): void;
   setKind(kind: SourceKind, why?: string): void;
-  /** Replace the footer badge's text. `recorded` calls this once its header lands. */
-  setProvenance(text: string): void;
+  /**
+   * Replace the footer badge's text. `recorded` calls this once its header lands.
+   *
+   * `note` is a caveat about the source itself — a recorded run that predates a gate,
+   * for instance — and it is rendered as its own line beside the badge *and* as the
+   * badge's tooltip. The badge stays a chip you can read from the back of a room; the
+   * note is the sentence that keeps it honest on video.
+   */
+  setProvenance(text: string, note?: string): void;
   state(): InterludeState;
   dispose(): void;
 };
@@ -232,6 +245,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     maxAttempts: MAX_ATTEMPTS,
     kind: options.kind,
     provenance: options.provenance ?? KIND_LABEL[options.kind],
+    provenanceNote: null,
     gates: [],
     rejections: [],
     approved: null,
@@ -422,7 +436,13 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const provenance = el('div', 'il-provenance', state.provenance);
   provenance.dataset.testid = 'il-provenance';
   provenance.dataset.kind = options.kind;
-  foot.append(banner, status, provenance, actions);
+  // Hidden until a source discloses something. Only `recorded` ever does today.
+  const provenanceNote = el('div', 'il-provenance-note');
+  provenanceNote.dataset.testid = 'il-provenance-note';
+  provenanceNote.hidden = true;
+  const provenanceBox = el('div', 'il-provenance-box');
+  provenanceBox.append(provenance, provenanceNote);
+  foot.append(banner, status, provenanceBox, actions);
   root.append(foot);
 
   options.host.append(root);
@@ -1095,9 +1115,16 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       }
     },
 
-    setProvenance(text: string): void {
+    setProvenance(text: string, note?: string): void {
       state.provenance = text;
       provenance.textContent = text;
+      const disclosure = note?.trim() ?? '';
+      state.provenanceNote = disclosure === '' ? null : disclosure;
+      provenanceNote.textContent = disclosure;
+      provenanceNote.hidden = disclosure === '';
+      // Also the badge's tooltip: the footer line is small on a 1080p capture, and a
+      // reviewer hovering the badge is exactly the person asking "is this real?".
+      if (disclosure !== '') provenance.title = disclosure;
     },
     state(): InterludeState {
       return { ...state, gates: [...state.gates], rejections: [...state.rejections] };

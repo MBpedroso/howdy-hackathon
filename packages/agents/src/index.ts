@@ -106,6 +106,7 @@ export {
   coderPrompt,
   correctionHint,
   contractDoc,
+  cutSubsection,
   dialFor,
   harnessHints,
   harnessRules,

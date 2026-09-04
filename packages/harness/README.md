@@ -9,7 +9,7 @@ which is what makes the rejections in the interlude evidence rather than anecdot
 |---|---|---|---|
 | 1 | `static` | **implemented** | forbidden names, imports, wrong module shape — before any code runs |
 | 2 | `fuzz` | **implemented** | throws, timeouts, memory growth, invalid actions, ignored cooldowns |
-| 3 | `balance` | worker-parallel sim vs Camper/Kiter/Rusher/Dodger + Mimic; FAIR band per round, ADAPTED ≥ 0.70 | `0.78 vs panel — too hard (band 0.35–0.50 for round 2; …)` |
+| 3 | `balance` | worker-parallel sim vs Camper/Kiter/Rusher/Dodger + Mimic; FAIR band per round, ADAPTED ≥ 0.70, ACTIVE ≤ 90 motionless ticks | `0.78 vs panel — too hard (band 0.35–0.50 for round 2; …)` · `boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a resting state …` |
 | 4 | `perf` | ≥ 2000 sandboxed `decide` calls on real match views; p99 ≤ 2 ms, no memory failure | `decide() p99 = 6.2ms > 2ms` |
 
 ```ts
@@ -115,6 +115,29 @@ and 200 matches take ~0.9 s on an 8-core machine. Progress is reported in batche
 `onProgress`. Gate 4 (`src/gates/gate4Perf.ts`) replays a real match trajectory through the
 sandbox and applies the `CONSTANTS.limits.decideBudgetMs` p99 threshold using the
 `elapsedMs` every `DecideResult` already carries.
+
+### Gate 3's three assertions
+
+```
+ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
+FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
+ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
+```
+
+ADAPTED is skipped when no `mimicSummary` is supplied (the CLI and the balance suites often
+have no human to mimic). FAIR and ACTIVE are always checked. Every failed assertion is
+reported in the one `reason`, FAIR and ADAPTED first and ACTIVE last.
+
+**ACTIVE** (added 2026-09-04, `src/sim/activity.ts`) is not in spec §6.2. It is there
+because a human playtest found what §6.2 cannot see: a boss frozen in a corner for 4.4
+seconds that every one of the four gates approved — `idle` is legal (Gate 1), always valid
+and cooldown-free (Gate 2), the cheapest possible `decide` (Gate 4), and Gate 3 read only
+the win rate, which a *stationary* boss actually helps keep in band. A tick counts as idle
+when the boss did not move, is not telegraphing, is not mid-charge, and its last action was
+`idle` **or a `move` that displaced nothing** — the last clause is what catches an orbit
+grinding into the arena edge, which froze `fallback/round3/emberline` for 169 ticks without
+ever returning `idle`. Thresholds are `ACTIVITY` in `balanceConfig.ts`; `detail.activity`
+carries the measurement and `detail.panel[].maxIdleRun` breaks it down per opponent.
 
 ## Fixtures
 

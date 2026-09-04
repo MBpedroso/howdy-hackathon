@@ -271,10 +271,32 @@ Two things changed so the next one is a five-second diagnosis:
    version still travelled 400 px before it parked. The motionless-run bound is the one
    that catches it.)
 
-The same `idle` fallback is in nearly every hand-written strategy here, including
-`src/strategies/round1.js` (888 motionless ticks against a kiting player). Those are
-balance changes as well as bug fixes and are tracked in `docs/SYSTEM.md` §9;
-`packages/harness/test/activity.test.ts` carries the survey.
+### It is a gate now
+
+The same `idle` fallback was in nearly every hand-written strategy in the repo, so on
+2026-09-04 the property stopped being a test and became **Gate 3's third assertion,
+ACTIVE**: more than 90 motionless ticks (1.5 s) against any reference bot, or a p90 idle
+fraction over 0.25, and a strategy does not ship. It is defined on *displacement*, not on
+the action type, which is what catches the other half of the bug — a `move` that walks
+into the arena edge is accepted, moves the boss nowhere, and looks exactly as crashed.
+
+Both files here were fixed and re-measured:
+
+- `src/strategies/round1.js` — its resting state is now a patrol across the heat cell it
+  is guarding, and its `spawn` is rate-limited by tick. (It asked for a minion whenever
+  the cooldown was ready; a `spawn` refused at the two-minion cap keeps its cooldown and
+  costs a violation, so with two minions alive it asked *every tick*, froze, and never
+  reached its own burst branch.) 169 motionless ticks → 1. The scripted mid-range player
+  still wins 1.00 of 60 seeds in 16.6 s, which is the number Round 1 is held to; the AC 3
+  replay fixture was regenerated (`pnpm gen:inputlog`), because a different boss produces
+  a different input log.
+- `src/strategies/hound.js` — same `spawn` fix, and a strafe when it is standing on top
+  of the player. 98 → 1.
+
+Neither is byte-identical to its `@rematch/contract` reference fixture any more; the
+fixtures are the harness's *calibration* corpus (`idle` is its zero point) and were left
+alone deliberately. See `docs/SYSTEM.md` §9 item 10 for the whole survey and
+`packages/harness/src/sim/activity.ts` for the definition.
 
 ## The `decide` deadline is not the same number in live play
 

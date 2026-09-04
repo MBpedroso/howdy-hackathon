@@ -26,6 +26,7 @@ import {
 import type { StrategyRunner } from '@rematch/contract';
 import { createSandbox, monotonicClock, type SandboxFactory, type SandboxOptions } from '@rematch/sandbox';
 import type { PlayerBot } from '../bots/index.ts';
+import { createActivityTracker, idleFraction, type Activity } from './activity.ts';
 
 export type MatchResult = {
   outcome: Outcome;
@@ -42,6 +43,18 @@ export type MatchResult = {
   violations: number;
   /** The sandbox killed the strategy (timeout or memory) mid-match. */
   strategyKilled: boolean;
+  /**
+   * Longest run of consecutive ticks in which the boss did nothing visible — it
+   * did not move, was not telegraphing, was not mid-charge, and its last action
+   * was `idle` or a `move` that displaced nothing. See `sim/activity.ts` for why
+   * this is measured at all and what each clause is for; Gate 3's ACTIVE
+   * assertion is the consumer.
+   */
+  longestIdleRun: number;
+  /** `idleTicks / ticks` by the same definition. */
+  idleFraction: number;
+  /** Total distance the boss travelled, px. */
+  travelPx: number;
 };
 
 /**
@@ -55,7 +68,7 @@ export function playerSeed(seed: number): number {
 
 /** Play a full match on an already-loaded runner. Synchronous and allocation-light. */
 export function runMatchWith(runner: StrategyRunner, bot: PlayerBot, seed: number): MatchResult {
-  const state = playMatchState(runner, bot, seed);
+  const { state, activity } = playMatch(runner, bot, seed);
   return {
     outcome: state.outcome,
     ticks: state.tick,
@@ -64,6 +77,9 @@ export function runMatchWith(runner: StrategyRunner, bot: PlayerBot, seed: numbe
     bossWon: state.outcome !== 'playerWon',
     violations: state.violations,
     strategyKilled: state.strategyKilled,
+    longestIdleRun: activity.longestIdleRun,
+    idleFraction: idleFraction(activity),
+    travelPx: activity.travelPx,
   };
 }
 
@@ -73,15 +89,34 @@ export function runMatchWith(runner: StrategyRunner, bot: PlayerBot, seed: numbe
  * Mimic from).
  */
 export function playMatchState(runner: StrategyRunner, bot: PlayerBot, seed: number): GameState {
+  return playMatch(runner, bot, seed).state;
+}
+
+/**
+ * `playMatchState` plus the per-tick activity measurement.
+ *
+ * The activity numbers cannot be recovered from the final state — a longest run
+ * of motionless ticks is a property of the *trajectory* — so they are accumulated
+ * as the match runs. The tracker is two adds and a `hypot` per tick and the
+ * measurement is unconditional: a number that is only collected when someone asks
+ * for it is a number nobody checks. See `sim/activity.ts`.
+ */
+export function playMatch(
+  runner: StrategyRunner,
+  bot: PlayerBot,
+  seed: number,
+): { state: GameState; activity: Activity } {
   bot.reset(seed);
   const state = createGame(seed, runner);
   const rng = createRng(playerSeed(seed));
+  const tracker = createActivityTracker(state);
 
   for (let i = 0; i < E.round.maxTicks; i += 1) {
     step(state, bot.act(state, rng), runner);
+    tracker.observe(state);
     if (state.outcome !== 'playing') break;
   }
-  return state;
+  return { state, activity: tracker.read() };
 }
 
 /** `playMatchState`, compressed into the object the Analyst agent (and the Mimic) reads. */

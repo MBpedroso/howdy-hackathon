@@ -18,12 +18,18 @@
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round3/emberline.js
 // --round 3 --matches 200`:
 //
-//     panel 0.52   (Camper 1.00, Kiter 0.24, Rusher 0.00, Dodger 0.84)   band 0.45-0.60
+//     panel 0.53   (Camper 1.00, Kiter 0.36, Rusher 0.00, Dodger 0.76)   band 0.45-0.60
+//     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
+//
+// The orbit used to walk this boss into the top-left corner and leave it there — 169
+// consecutive motionless ticks against a camper, without ever returning `idle`, because
+// a `move` into a wall is accepted and displaces nothing. Reversing the orbit at the
+// wall instead took it to 0.72, so `SPAWN_EVERY` went from 380 to 560 to pay that back.
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
 // machine. `packages/server/test/fallback.test.ts` re-checks the band on every run at
-// a reduced 60 matches; both counts sit at least 0.03 inside both edges.
+// a reduced 120 matches; both counts sit at least 0.03 inside both edges.
 export const meta = {
   name: 'Emberline',
   rationale: 'I would rather not touch you at all. I will just make sure you are never alone.',
@@ -31,7 +37,12 @@ export const meta = {
 };
 
 const REFRESH = 55;
-const SPAWN_EVERY = 380;     // spawn cooldown is 300; retry slower than that, not faster
+const SPAWN_EVERY = 560;     // spawn cooldown is 300; retry slower than that, not faster
+// How far ahead the orbit checks for a wall, and how close to the edge it may aim.
+// The boss clamps at its own radius (28 px), so a leg aimed inside this strip would
+// displace it by nothing — see note 4.
+const ORBIT_LOOK = 40;
+const ORBIT_EDGE = 34;
 const ORBIT = 290;
 const FLIP_PERIOD = 360;
 const CONE_MIN = 210;
@@ -114,15 +125,50 @@ export function decide(view, mem) {
   }
 
   // 4. Orbit at range, which keeps the boss between the player and the open arena
-  //    without ever committing to a chase.
+  //    without ever committing to a chase — and *reverse* the orbit rather than
+  //    grind into the arena edge.
+  //
+  //    This branch never returned `idle` and still froze the boss for 169
+  //    consecutive ticks against a camper: the orbit ran the boss into the top-left
+  //    corner, where `move` clamps at the boss's own radius and displaces it by
+  //    nothing at all. A `move` that moves nothing is exactly as motionless as
+  //    `idle` and Gate 3's ACTIVE assertion counts it the same way, which is the
+  //    whole reason that assertion is defined on displacement rather than on the
+  //    action type. The reversal is committed to memory so the boss keeps going the
+  //    new way instead of turning back into the wall on the next tick.
   const ux = dist < 0.001 ? 1 : dx / dist;
   const uy = dist < 0.001 ? 0 : dy / dist;
   const radial = dist > ORBIT + 30 ? 1 : dist < ORBIT - 30 ? -1 : 0;
+  let step = orbitStep(ux, uy, spin, radial);
+  if (blocked(view, boss.x + step.x * ORBIT_LOOK, boss.y + step.y * ORBIT_LOOK)) {
+    mem.spin = -spin;
+    step = orbitStep(ux, uy, -spin, radial);
+  }
+  if (blocked(view, boss.x + step.x * ORBIT_LOOK, boss.y + step.y * ORBIT_LOOK)) {
+    // Both orbit directions run into a wall — the boss is in a corner. Walk back
+    // into the room; the orbit resumes as soon as there is room to walk it.
+    const cx = view.arena.w / 2 - boss.x;
+    const cy = view.arena.h / 2 - boss.y;
+    const cmag = Math.sqrt(cx * cx + cy * cy);
+    if (cmag > 0.001) return { type: 'move', dx: cx / cmag, dy: cy / cmag };
+  }
+  return { type: 'move', dx: step.x, dy: step.y };
+}
+
+/** One normalized orbit step: tangential by `spin`, plus a radius correction. */
+function orbitStep(ux, uy, spin, radial) {
   const mx = -uy * spin + ux * radial;
   const my = ux * spin + uy * radial;
   const mag = Math.sqrt(mx * mx + my * my);
-  if (mag < 0.001) return { type: 'idle' };
-  return { type: 'move', dx: mx / mag, dy: my / mag };
+  // |tangent| is 1 and the radial term is 0 or 1, so `mag` cannot be 0 — but the
+  // guard costs nothing and a NaN direction is a Gate 2 rejection.
+  if (mag < 0.001) return { x: 1, y: 0 };
+  return { x: mx / mag, y: my / mag };
+}
+
+/** Is (`x`, `y`) inside the strip along the arena edge where a `move` would clamp? */
+function blocked(view, x, y) {
+  return x < ORBIT_EDGE || x > view.arena.w - ORBIT_EDGE || y < ORBIT_EDGE || y > view.arena.h - ORBIT_EDGE;
 }
 
 function hottestCell(heat) {

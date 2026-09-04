@@ -11,7 +11,7 @@ export {
   type RenderSummaryOptions,
 } from './renderSummary.ts';
 
-export { contractDoc, markdownSection, stripBlockComments } from './contractDoc.ts';
+export { contractDoc, cutSubsection, markdownSection, stripBlockComments } from './contractDoc.ts';
 
 export {
   ADAPT_DIALS,

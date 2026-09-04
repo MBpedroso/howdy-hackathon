@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONSTANTS } from '@rematch/contract';
 import {
+  ACTIVITY,
   ADAPTED_MIN,
   BAND,
   DEFAULT_MATCHES,
@@ -264,7 +265,7 @@ describe('Gate 3 — balance', () => {
     expect(detail.mimic.matches).toBe(DEFAULT_MATCHES / 2);
   }, 60_000);
 
-  it('reports both failures in one reason when both assertions fail', async () => {
+  it('reports every failed assertion in one reason, FAIR and ADAPTED before ACTIVE', async () => {
     const result = await gate3Balance(readGood('idle'), {
       round: 2,
       matches: 40,
@@ -274,7 +275,59 @@ describe('Gate 3 — balance', () => {
     if (result.ok) return;
     expect(result.reason).toMatch(/too easy/);
     expect(result.reason).toMatch(/0\.00 vs Mimic — didn't adapt \(need >= 0\.70\)/);
+    expect(result.reason).toMatch(/boss motionless for \d+ consecutive ticks/);
+    // The order is fixed and it is a judgement about what the Coder should read
+    // first: the win rate is the thing it was aiming at, the stall is a bug in how
+    // it rests. Nothing masks anything — all three are in the one sentence.
+    const fair = result.reason.indexOf('too easy');
+    const adapted = result.reason.indexOf("didn't adapt");
+    const active = result.reason.indexOf('boss motionless');
+    expect(fair).toBeLessThan(adapted);
+    expect(adapted).toBeLessThan(active);
   });
+
+  /**
+   * ACTIVE, the assertion a human playtest bought.
+   *
+   * `idle.js` used to be rejected as "too easy" alone, and that was the whole
+   * problem: a boss can be frozen *and* in band — a stationary boss is easy to
+   * shoot, so freezing helped the win rate — and then nothing in the harness had
+   * anything to say about it. See `sim/activity.ts`.
+   */
+  it('rejects a boss that stands still, quantitatively and with the fix in the sentence', async () => {
+    const result = await gate3Balance(readGood('idle'), { round: 2, matches: 40 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /boss motionless for \d+ consecutive ticks \(\d+\.\d s\) vs \w+ — never return idle as a resting state; patrol, reposition or feint instead \(limit 90 ticks\)/,
+    );
+    const detail = result.detail as {
+      thresholds: { maxIdleRunTicks: number; maxIdleFractionP90: number };
+      activity: { longestIdleRun: number; worstBot: string; idleFractionP90: number };
+      panel: { perBot: Array<{ name: string; maxIdleRun: number }> };
+    };
+    expect(detail.thresholds.maxIdleRunTicks).toBe(ACTIVITY.maxIdleRunTicks);
+    expect(detail.thresholds.maxIdleFractionP90).toBe(ACTIVITY.maxIdleFractionP90);
+    // The null boss never moves at all, so its worst run is the whole match and
+    // every tick of it is idle.
+    expect(detail.activity.longestIdleRun).toBeGreaterThan(ACTIVITY.maxIdleRunTicks);
+    expect(detail.activity.idleFractionP90).toBe(1);
+    expect(detail.activity.worstBot).not.toBe('');
+    // Per bot too, so a rejection can say which approach froze the boss.
+    for (const bot of detail.panel.perBot) {
+      expect(bot.maxIdleRun, bot.name).toBeGreaterThan(ACTIVITY.maxIdleRunTicks);
+    }
+  });
+
+  it('approves the Round 2 candidate on ACTIVE, so the assertion is not just strict', async () => {
+    const result = await gate3Balance(readCandidate(), { round: 2, matches: 40 });
+    expect(result.ok).toBe(true);
+    const detail = result.detail as {
+      activity: { longestIdleRun: number; idleFractionP90: number };
+    };
+    expect(detail.activity.longestIdleRun).toBeLessThanOrEqual(ACTIVITY.maxIdleRunTicks);
+    expect(detail.activity.idleFractionP90).toBeLessThanOrEqual(ACTIVITY.maxIdleFractionP90);
+  }, 60_000);
 
   it('skips ADAPTED when no replay summary is supplied', async () => {
     const result = await gate3Balance(readCandidate(), { round: 2, matches: 40 });

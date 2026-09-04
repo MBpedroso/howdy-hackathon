@@ -204,13 +204,29 @@ describe('the rejection reason reaches the Coder verbatim', () => {
 });
 
 describe('harnessRules', () => {
-  it('states the round\'s band and both assertions', () => {
+  it("states the round's band and all three assertions", () => {
     const rules = harnessRules(4);
     expect(rules).toContain('0.50–0.65');
     expect(rules).toContain('round 4');
     expect(rules).toContain('ADAPTED');
     expect(rules).toContain('FAIR');
     expect(rules).toContain('>= 0.70');
+    expect(rules).toContain('ACTIVE');
+  });
+
+  /**
+   * ACTIVE is the assertion the Coder is most likely to fail by accident, because
+   * `idle` is the obvious thing to return when nothing is off cooldown — so the
+   * section has to say what to do *instead*, not just what is forbidden, and it has
+   * to carry the real rejection sentence the harness will send back.
+   */
+  it('tells the Coder how to rest, and what a stall rejection looks like', () => {
+    const rules = harnessRules(2);
+    expect(rules).toContain('90 ticks');
+    expect(rules).toContain('never as a resting state');
+    expect(rules).toContain('walks into a wall');
+    expect(rules).toContain('boss motionless for 263 consecutive ticks');
+    expect(rules).toContain('patrol, reposition or feint instead');
   });
 
   it('names every gate', () => {
@@ -235,11 +251,20 @@ describe('harnessHints', () => {
   it('names the five levers the harness actually measured', () => {
     expect(hints).toContain('`spawn` cadence is the strongest single lever');
     expect(hints).toContain('`count: 8`');
-    expect(hints).toContain("`slam` on the boss's own position");
-    expect(hints).toContain('cone bursts beat a kiting player');
+    expect(hints).toContain("`slam` on\n  the boss's own feet");
+    expect(hints).toContain('Long cone bursts beat a kiter');
     expect(hints).toContain('`charge` alone does not');
     expect(hints).toContain('`rand()`');
     expect(hints).toContain('`history.playerPosHeat`');
+  });
+
+  it('says the heat map is cumulative, which is what the frozen boss missed', () => {
+    // The Round 2 stall of 2026-09-04 was a boss parked on the hottest cell of a
+    // map that never decays — a cell the player had left twenty seconds earlier.
+    // "Aim there, then keep moving" is the fix, and Gate 3's ACTIVE assertion is
+    // what enforces the second half of it.
+    expect(hints).toContain('cumulative over the round');
+    expect(hints).toContain('never park on it');
   });
 
   it('gives the round its own band and the middle of it as the target', () => {
@@ -331,11 +356,18 @@ describe('contractDoc', () => {
   });
 
   it('does not pay twice for the type shapes', () => {
-    // `## API` already contains both `###` subsections; if the section list ever
+    // `## API` carries its `###` subsections with it; if the section list ever
     // double-counts them, the doc grows by ~1.8 KB and this catches it.
     const doc = contractDoc();
-    const occurrences = doc.split('### What Gate 1 deliberately does not do').length - 1;
+    const occurrences = doc.split('### `validateAction` behaviour worth knowing').length - 1;
     expect(occurrences).toBe(1);
+  });
+
+  it('cuts the gate-layering table, which `harnessRules` already covers', () => {
+    // 0.8 KB of "which gate catches what", told better and with real rejection
+    // sentences by `harnessRules` — and the system prompt has a 13k ceiling.
+    expect(contractDoc()).not.toContain('### What Gate 1 deliberately does not do');
+    expect(harnessRules(2)).toContain('Gate 4 — perf');
   });
 });
 

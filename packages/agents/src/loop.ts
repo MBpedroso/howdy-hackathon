@@ -773,10 +773,17 @@ export function balanceRates(result: GateResult | undefined): BotRates | undefin
   const perBot = (Array.isArray(raw) ? raw : [])
     .map((entry) => {
       if (typeof entry !== 'object' || entry === null) return undefined;
-      const { name, winRate } = entry as { name?: unknown; winRate?: unknown };
-      return typeof name === 'string' && typeof winRate === 'number' ? { name, winRate } : undefined;
+      const { name, winRate, maxIdleRun } = entry as {
+        name?: unknown;
+        winRate?: unknown;
+        maxIdleRun?: unknown;
+      };
+      if (typeof name !== 'string' || typeof winRate !== 'number') return undefined;
+      // ACTIVE's per-bot breakdown, when the gate reported one. Optional on purpose:
+      // the same structural read has to survive a `detail` from before it existed.
+      return typeof maxIdleRun === 'number' ? { name, winRate, maxIdleRun } : { name, winRate };
     })
-    .filter((entry): entry is { name: string; winRate: number } => entry !== undefined);
+    .filter((entry): entry is { name: string; winRate: number; maxIdleRun?: number } => entry !== undefined);
   if (perBot.length === 0) return undefined;
 
   const mimic = node('mimic')?.['winRate'];

@@ -12,7 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ReplaySummary } from '@rematch/engine';
-import { BALANCE_ROUNDS, DEFAULT_MATCHES, type BalanceRound } from './gates/balanceConfig.ts';
+import { ACTIVITY, BALANCE_ROUNDS, DEFAULT_MATCHES, type BalanceRound } from './gates/balanceConfig.ts';
 import { formatGateResult, type GateNumber, type GateResult } from './gates/types.ts';
 import { DEFAULT_GATES, runGates, type RunGatesOptions } from './runGates.ts';
 
@@ -133,6 +133,10 @@ const processIo: CliIo = {
 /**
  * The one line of Gate 3 output worth printing even when it passed: the rates are
  * the whole reason the gate exists, and a `✓` alone hides them.
+ *
+ * The idle run is on it for the same reason: re-balancing a strategy by hand is
+ * exactly when someone needs to see that the fix for the win rate did not
+ * reintroduce a stall, and the ACTIVE limit is the number they are working against.
  */
 function formatBalanceDetail(gate: GateResult): string | undefined {
   if (gate.gate !== 3 || gate.detail === null || typeof gate.detail !== 'object') return undefined;
@@ -140,12 +144,17 @@ function formatBalanceDetail(gate: GateResult): string | undefined {
     panel?: { winRate: number; matches: number; perBot?: Array<{ name: string; winRate: number }> };
     mimic?: { winRate: number; matches: number };
     band?: readonly number[];
+    activity?: { longestIdleRun: number; worstBot: string; idleFractionP90: number };
   };
   if (detail.panel === undefined) return undefined;
   const perBot = (detail.panel.perBot ?? []).map((b) => `${b.name} ${b.winRate.toFixed(2)}`).join(', ');
   const band = detail.band === undefined ? '' : ` band ${detail.band.map((v) => v.toFixed(2)).join('-')}`;
   const mimic = detail.mimic === undefined ? 'Mimic n/a' : `Mimic ${detail.mimic.winRate.toFixed(2)}`;
-  return `  panel ${detail.panel.winRate.toFixed(2)} (${perBot}) · ${mimic} ·${band}`;
+  const idle =
+    detail.activity === undefined
+      ? ''
+      : ` · idle run ${detail.activity.longestIdleRun}t/${ACTIVITY.maxIdleRunTicks} (${detail.activity.worstBot}), p90 ${(detail.activity.idleFractionP90 * 100).toFixed(0)}%`;
+  return `  panel ${detail.panel.winRate.toFixed(2)} (${perBot}) · ${mimic} ·${band}${idle}`;
 }
 
 export async function main(argv: readonly string[], io: CliIo = processIo): Promise<number> {

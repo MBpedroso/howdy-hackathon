@@ -65,6 +65,37 @@ export type BotRate = {
   avgTicks: number;
   avgBossHpLeft: number;
   avgPlayerHpLeft: number;
+  /**
+   * Worst `longestIdleRun` this bot's matches produced — the number Gate 3's
+   * ACTIVE assertion is about, per opponent, so a rejection can say *which* bot
+   * the boss froze against. See `sim/activity.ts`.
+   */
+  maxIdleRun: number;
+};
+
+/**
+ * Boss activity over a whole simulation. Two numbers, because one alone is
+ * gameable in both directions:
+ *
+ *  - `maxIdleRun` is the worst single stall, over every match. This is the one
+ *    that reads as a crash to the player, and a *max* rather than a mean because
+ *    one four-second freeze in one match is the bug report.
+ *  - `idleFractionP90` is how much of a *typical bad* match the boss spent doing
+ *    nothing. p90 rather than max because a match the player ends in two seconds
+ *    can be legitimately idle-heavy, and rather than a mean because a mean over
+ *    200 matches hides a quarter of them being dead.
+ */
+export type SimulateActivity = {
+  /** Worst `longestIdleRun` over every match, in ticks (60 = 1 s). */
+  maxIdleRun: number;
+  /** Which bot's match produced it. */
+  worstBot: string;
+  /** The match seed it happened on, so it can be replayed by hand. */
+  worstSeed: number;
+  /** p90 of the per-match idle fraction. */
+  idleFractionP90: number;
+  /** Smallest per-match `travelPx`. A boss that never moved at all is 0. */
+  minTravelPx: number;
 };
 
 export type SimulateResult = {
@@ -77,6 +108,8 @@ export type SimulateResult = {
   violations: number;
   /** Matches in which the sandbox killed the strategy (timeout / memory). */
   killed: number;
+  /** Did the boss keep playing? Gate 3's ACTIVE assertion reads this. */
+  activity: SimulateActivity;
   /** Wall-clock time, milliseconds. Not part of the verdict. */
   ms: number;
   workers: number;
@@ -131,7 +164,17 @@ export async function simulate(opts: SimulateOptions): Promise<SimulateResult> {
   const jobs = buildJobs(opts.bots.length, opts.seeds);
   const workers = resolveWorkers(opts.workers, jobs.length);
   if (jobs.length === 0) {
-    return { matches: 0, bossWins: 0, winRate: 0, perBot: [], violations: 0, killed: 0, ms: 0, workers };
+    return {
+      matches: 0,
+      bossWins: 0,
+      winRate: 0,
+      perBot: [],
+      violations: 0,
+      killed: 0,
+      activity: { maxIdleRun: 0, worstBot: '', worstSeed: 0, idleFractionP90: 0, minTravelPx: 0 },
+      ms: 0,
+      workers,
+    };
   }
 
   const progress = reporter(jobs.length, opts.onProgress);
@@ -269,10 +312,16 @@ function reduce(
     ticks: 0,
     bossHp: 0,
     playerHp: 0,
+    maxIdleRun: 0,
   }));
   let bossWins = 0;
   let violations = 0;
   let killed = 0;
+  let maxIdleRun = -1;
+  let worstBot = '';
+  let worstSeed = 0;
+  let minTravelPx = Number.POSITIVE_INFINITY;
+  const idleFractions: number[] = [];
 
   for (let i = 0; i < jobs.length; i += 1) {
     const job = jobs[i]!;
@@ -288,6 +337,17 @@ function reduce(
     }
     violations += result.violations;
     if (result.strategyKilled) killed += 1;
+    if (result.longestIdleRun > bucket.maxIdleRun) bucket.maxIdleRun = result.longestIdleRun;
+    // Strictly greater, walking the jobs in their fixed order: the first match to
+    // reach the worst value wins the attribution, on every machine and at every
+    // worker count.
+    if (result.longestIdleRun > maxIdleRun) {
+      maxIdleRun = result.longestIdleRun;
+      worstBot = bucket.name;
+      worstSeed = job.seed;
+    }
+    if (result.travelPx < minTravelPx) minTravelPx = result.travelPx;
+    idleFractions.push(result.idleFraction);
   }
 
   const perBot: BotRate[] = acc.map((b) => ({
@@ -298,6 +358,7 @@ function reduce(
     avgTicks: b.matches === 0 ? 0 : b.ticks / b.matches,
     avgBossHpLeft: b.matches === 0 ? 0 : b.bossHp / b.matches,
     avgPlayerHpLeft: b.matches === 0 ? 0 : b.playerHp / b.matches,
+    maxIdleRun: b.maxIdleRun,
   }));
 
   return {
@@ -307,7 +368,25 @@ function reduce(
     perBot,
     violations,
     killed,
+    activity: {
+      maxIdleRun: Math.max(0, maxIdleRun),
+      worstBot,
+      worstSeed,
+      idleFractionP90: quantile(idleFractions, 0.9),
+      minTravelPx: Number.isFinite(minTravelPx) ? minTravelPx : 0,
+    },
     ms,
     workers,
   };
+}
+
+/**
+ * The `q`-th value of a sample, by the same nearest-rank rule Gate 4 uses for its
+ * p99 (`gates/gate4Perf.ts`). Sorts a copy of an array that was built in the fixed
+ * job order, so the answer cannot depend on the worker count.
+ */
+function quantile(values: readonly number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
 }

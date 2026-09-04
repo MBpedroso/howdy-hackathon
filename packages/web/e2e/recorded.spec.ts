@@ -65,6 +65,13 @@ test('replays a real recorded run: rejections, approval, and Round 2 loads its s
   // badge names *this* run's model and date rather than a hardcoded string.
   await expect(provenance).toHaveText(`RECORDED RUN · ${RUN.model} · ${RUN.date}`);
   await expect(provenance).toHaveAttribute('data-kind', 'recorded');
+  // The caveat, on screen and not only in the JSON. All three recordings predate
+  // Gate 3's ACTIVE assertion, so the bosses they approved visibly freeze; a viewer
+  // who can see that has to be able to read why. See `recorded.ts`' `knownIssue`.
+  const disclosure = page.getByTestId('il-provenance-note');
+  await expect(disclosure).toBeVisible();
+  await expect(disclosure).toContainText('KNOWN ISSUE');
+  await expect(disclosure).toContainText('ACTIVE assertion');
 
   await page.waitForFunction(() => window.__rematch?.interlude?.state.done === true, undefined, { timeout: 30_000 });
 

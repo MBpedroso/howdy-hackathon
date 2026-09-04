@@ -22,7 +22,7 @@
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
-import { ADAPTED_MIN, DEFAULT_MATCHES, bandFor, formatBand, type BalanceRound } from '@rematch/harness';
+import { ACTIVITY, ADAPTED_MIN, DEFAULT_MATCHES, bandFor, formatBand, type BalanceRound } from '@rematch/harness';
 import type { GateName } from '@rematch/harness';
 import { contractDoc } from './contractDoc.ts';
 import { renderSummary } from './renderSummary.ts';
@@ -177,18 +177,28 @@ Gate 3 — balance. ${DEFAULT_MATCHES} simulated matches on a fixed seed set. Tw
     FAIR    : boss win rate vs the scripted panel  in ${formatBand(round)}   (round ${round})
               Four scripted bots that play nothing like this player: Camper,
               Kiter, Rusher, Dodger. The panel rate is the plain mean of their
-              four rates, 25 matches each, so the arithmetic is the design
-              constraint — and each rate is near-binary, because a bot either has
-              an answer to your pressure or it has none. The mean therefore moves
-              in steps of 0.25 and a ${(hi - lo).toFixed(2)}-wide band cannot be hit that way.
-              Camper stands still and is 1.00 for free; two bots at 1.00 is
-              already above the band. You need at least one bot at an
-              intermediate rate, and the only reliable way to get one is a
-              \`rand()\` roll per phase that fires the signature punish some of
-              the time and not the rest. A round ${round} boss that passes looks like
+              four rates, 25 matches each — and each rate is near-binary, because a
+              bot either has an answer to your pressure or it has none, so the mean
+              moves in steps of 0.25 and a ${(hi - lo).toFixed(2)}-wide band cannot be hit that way.
+              Camper stands still and is 1.00 for free; two bots at 1.00 is already
+              above the band. You need one bot at an intermediate rate, and the only
+              reliable way to get one is a \`rand()\` roll per phase that fires the
+              signature punish some of the time and not the rest. A round ${round} boss
+              that passes looks like
                   Camper 1.00, Kiter ${rest}, Rusher ${rest}, Dodger ${rest}  ->  ${((lo + hi) / 2).toFixed(2)}
+    ACTIVE  : the boss is never motionless for more than 90 ticks (1.5 s)
+              \`idle\` is legal, valid and free, and it is still the one action that
+              gets files rejected for how they *look*. Use it for at most a single
+              tick while a cooldown turns over, never as a resting state: 1.5 s of a
+              motionless boss reads to the player as a crashed game. It is measured
+              on displacement, so a \`move\` that walks into a wall counts as standing
+              still too. Rest by moving — patrol a line, strafe across your holding
+              range, pace the ground you are guarding — with straight legs of ~34
+              ticks, because a curve makes you unhittable and that fails FAIR.
     ✗ "0.91 vs panel — too hard (band ${formatBand(round)} for round ${round}; Camper 1.00, Kiter 0.96,
        Rusher 0.92, Dodger 0.76); 0.41 vs Mimic — didn't adapt"
+    ✗ "boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle
+       as a resting state; patrol, reposition or feint instead (limit 90 ticks)"
 
 Gate 4 — perf. \`decide\` p99 must stay inside its 2 ms budget in the sandbox.
     ✗ "decide() p99 = 6.2ms > 2ms"
@@ -197,10 +207,8 @@ What this means for how you write:
 - Aim at the middle of the band (${((lo + hi) / 2).toFixed(2)}), not the top: "too hard" costs the
   player the game, and it fails exactly like "too easy". One pressure source at a
   time, a quiet window after every committed attack. A bot at 1.00 never got a turn.
-- Measured over rejected attempts, \`Rusher 1.00\` is the commonest single cause of
-  "too hard": a boss that punishes contact unconditionally beats it every match.
-  \`Kiter 0.00, Rusher 0.00\` is the "too easy" signature — the boss never reaches
-  anyone.
+- \`Rusher 1.00\` is the commonest single cause of "too hard": punishing contact
+  unconditionally beats it every match. \`Kiter 0.00, Rusher 0.00\` is "too easy".
 - On a retry, move magnitude, not architecture. 0.90 wants about half the
   pressure it has, not none — a rewrite is how "too hard" becomes "too easy".
 - Counter the *specific* player in the analysis — that is the only way ADAPTED
@@ -208,9 +216,8 @@ What this means for how you write:
   raising pressure everywhere.
 - Guard every division and every \`Math.atan2\` input. A single NaN angle in one
   branch is a Gate 2 rejection even if the rest of the file is perfect.
-- Keep \`decide\` straight-line and cheap; allocate nothing per tick beyond the
-  returned object.
-- Keep your memory object small and JSON-serializable (numbers and short arrays).`;
+- Keep \`decide\` straight-line, allocate nothing per tick beyond the returned
+  object, and keep memory small and JSON-serializable (numbers, short arrays).`;
 }
 
 /**
@@ -226,7 +233,10 @@ What this means for how you write:
  *
  * Kept under 900 characters on purpose. It sits in the cached system prompt in
  * front of the analysis, and a page of tactics would start to compete with the
- * contract for the model's attention.
+ * contract for the model's attention. The heat-map line grew on 2026-09-04 to say
+ * that `playerPosHeat` is *cumulative and never decays* — the sentence the frozen
+ * Round 2 boss needed, since it parked on a cell the player had left twenty seconds
+ * earlier — and four other lines were tightened to pay for it.
  */
 export function harnessHints(round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
@@ -234,25 +244,36 @@ export function harnessHints(round: BalanceRound): string {
 
 Measured on strategies that passed Gate 3:
 
-- \`spawn\` cadence is the strongest single lever on the panel win rate. Minions
-  decide fights against a player who keeps distance or dodges everything.
-- A player who rushes into contact is only punished by a \`burst\` with
-  \`count: 8\` (the full ring) or a \`slam\` on the boss's own position; a cone
-  at contact is a free dodge.
-- Long-range cone bursts beat a kiting player. \`charge\` alone does not: closing
-  the distance and winning once there are different problems.
-- Roll the injected \`rand()\` per phase ("press, or reset") to tune the rate
-  continuously. Fixed duty cycles give binary outcomes: 0.00 or 1.00 per bot.
-- \`history.playerPosHeat\` says where the player *lives*. Aim the pressure
-  there, not only where they stand this tick.
+- \`spawn\` cadence is the strongest single lever on the panel rate: minions decide
+  fights against a player who keeps distance or dodges everything.
+- Contact is only punished by \`burst\` \`count: 8\` (the full ring) or a \`slam\` on
+  the boss's own feet; a cone at contact is a free dodge.
+- Long cone bursts beat a kiter; \`charge\` alone does not — closing the gap and
+  winning once you are there are two problems.
+- Roll the injected \`rand()\` per phase ("press, or reset") to tune continuously;
+  fixed duty cycles give 0.00 or 1.00 per bot.
+- \`history.playerPosHeat\` is where the player *lives*: cumulative over the round
+  and never decaying, so its hottest cell may be one they left 20 s ago. Aim there,
+  then keep moving — never park on it.
 - Round ${round}'s band is ${formatBand(round)}; aim at its middle, ${((lo + hi) / 2).toFixed(2)}.`;
 }
 
-/** `Camper 1.00` per line, with the two rates that are failures marked. */
+/**
+ * `Camper 1.00   idle 12t` per line, with every rate that is a failure marked.
+ *
+ * The idle column is here because ACTIVE's rejection sentence can only name the
+ * single worst run, and a boss that froze against one bot has usually frozen
+ * against two — which branch is at fault is far easier to see from the spread than
+ * from one number. It is omitted entirely when no rate carries one, so a Gate 3
+ * `detail` from an older run still renders.
+ */
 export function renderBotRates(rates: BotRates): string {
-  const rows = [...rates.perBot.map((b) => ({ ...b, mimic: false }))];
+  const rows: Array<{ name: string; winRate: number; maxIdleRun?: number; mimic: boolean }> = [
+    ...rates.perBot.map((b) => ({ ...b, mimic: false })),
+  ];
   if (rates.mimic !== undefined) rows.push({ name: 'Mimic', winRate: rates.mimic, mimic: true });
   const width = Math.max(...rows.map((r) => r.name.length), 6);
+  const anyIdle = rows.some((r) => r.maxIdleRun !== undefined);
   return rows
     .map((row) => {
       const rate = row.winRate.toFixed(2);
@@ -265,7 +286,15 @@ export function renderBotRates(rates: BotRates): string {
           : row.winRate <= 0
             ? '  <- that bot wins every match; this is what makes you too easy'
             : '';
-      return `    ${row.name.padEnd(width)}  ${rate}${note}`;
+      const idle =
+        !anyIdle || row.maxIdleRun === undefined
+          ? anyIdle
+            ? '        '
+            : ''
+          : `  idle ${String(row.maxIdleRun).padStart(4)}t${
+              row.maxIdleRun > ACTIVITY.maxIdleRunTicks ? ` <- over the ${ACTIVITY.maxIdleRunTicks}-tick ACTIVE limit` : ''
+            }`;
+      return `    ${row.name.padEnd(width)}  ${rate}${idle}${note}`;
     })
     .join('\n');
 }
@@ -660,8 +689,13 @@ affect is in the contract below.`;
  * one file to fix; the table names them.
  */
 export type BotRates = {
-  /** Panel bots, in the order the simulation reported them. */
-  perBot: readonly { name: string; winRate: number }[];
+  /**
+   * Panel bots, in the order the simulation reported them. `maxIdleRun` is the
+   * worst motionless run, in ticks, that this boss had against that bot — the
+   * number ACTIVE is about, broken down per opponent, because "you froze" is only
+   * actionable once the Coder knows *which* approach froze it.
+   */
+  perBot: readonly { name: string; winRate: number; maxIdleRun?: number }[];
   /** The Mimic's rate, when ADAPTED was measured. */
   mimic?: number;
 };
