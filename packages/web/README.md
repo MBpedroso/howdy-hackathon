@@ -26,8 +26,20 @@ looking at, because that is the only thing about the demo that could be dishones
 | `?agent=` | Badge | What it is | Costs |
 |---|---|---|---|
 | `sse` / *(deployed default)* | `LIVE` | the server running the Analyst → Coder → harness loop **right now** | API tokens |
+| `sse`, but the server reports no working provider | `LIVE · fallback-only` | the same server, streaming its own honest fallback-only path — no model call happened, and the badge says so | nothing |
 | `recorded` | `RECORDED RUN · <model> · <date>` | a **real** past run of the model, replayed from a committed JSON asset. Real prose, real candidate files, real harness verdicts | nothing |
-| `mock` / *(localhost default)* | `MOCK` | a hand-scripted run, timed from real measurements, shipping a strategy the harness really approved | nothing |
+| `mock` / *(localhost default, no server reachable)* | `MOCK` | a hand-scripted run, timed from real measurements, shipping a strategy the harness really approved | nothing |
+
+**Localhost's default is decided by a boot-time probe, not a hardcoded guess.** With no
+`?agent=` and no `VITE_API_BASE`, the client `GET`s `/api/health` once, at app boot
+(capped at 1.5 s — see `LOCAL_PROBE_TIMEOUT_MS`), and caches the answer for the whole
+session so it never delays a round transition:
+
+| `/api/health` says | Default source |
+|---|---|
+| `ok: true`, a working provider | `sse` — `pnpm dev` (which starts both Vite and the API server on 8787) reaches the **real** agents by default |
+| `ok: true`, but `hasApiKey: false` or `provider: 'none'` | `sse` still — the server's own fallback-only stream is more truthful than the mock's scripted one; badge reads `LIVE · fallback-only` |
+| unreachable, slow, or a bad response | `mock`, exactly as before this existed — plus one `console.info` line naming why |
 
 `pnpm dev` with no server, no API key and no network plays any of the free two:
 
@@ -114,7 +126,8 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 ```
 src/interlude/
   events.ts      the `RewriteEvent` union — a COPY of `packages/agents/src/events.ts`
-  source.ts      `InterludeSource`, `sseSource`, `mockSource` selection, the wire contract
+  source.ts      `InterludeSource`, `sseSource`, `mockSource` selection, the boot-time
+                 `/api/health` probe (`bootProbeLocalServer`), the wire contract
   sse.ts         SSE frame parser (the stream is a POST, so `EventSource` is unusable)
   mock.ts        the scripted ~25 s run, including one Gate 3 rejection
   recorded.ts    `recordedSource` — replays a real eval run from public/recorded/

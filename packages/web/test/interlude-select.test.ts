@@ -15,7 +15,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { serverFallbackPick, type RewriteEvent, type RewriteResult } from '../src/interlude/events.ts';
-import { resolveSource, SourceUnavailableError, sseSource, withFallbackSource, type RewriteRequest } from '../src/interlude/source.ts';
+import {
+  bootProbeLocalServer,
+  LIVE_FALLBACK_BADGE,
+  probeHealth,
+  resolveSource,
+  SourceUnavailableError,
+  sseSource,
+  withFallbackSource,
+  type LocalProbeOutcome,
+  type RewriteRequest,
+} from '../src/interlude/source.ts';
 
 /**
  * Enough of a `ReplaySummary` for the mock's canned analysis to be built from it —
@@ -107,16 +117,28 @@ describe('resolveSource', () => {
     expect(String((fetchMock.mock.calls[0] as [string])[0])).toBe('/recorded/index.json');
   });
 
-  it('defaults to the mock on localhost with no configured API base', () => {
+  it('defaults to the mock on localhost with no configured API base and no boot probe', () => {
+    // `localProbe` absent — the probe never ran, or hasn't settled — is exactly
+    // like a probe that came back against the server: the pre-probe behaviour,
+    // unchanged.
     for (const hostname of ['localhost', '127.0.0.1', '::1']) {
       expect(resolveSource({ search: '', hostname, apiBase: undefined }).kind).toBe('mock');
     }
   });
 
-  it('uses the server when deployed, or when VITE_API_BASE is set', () => {
+  it('uses the server when deployed, or when VITE_API_BASE is set — no probe involved', () => {
     expect(resolveSource({ search: '', hostname: 'rematch.vercel.app', apiBase: undefined }).kind).toBe('sse');
     expect(resolveSource({ search: '', hostname: 'localhost', apiBase: '' }).kind).toBe('sse');
     expect(resolveSource({ search: '', hostname: 'localhost', apiBase: 'http://localhost:8787' }).kind).toBe('sse');
+    // Even a `localProbe` that says "no server there" is irrelevant on these rows:
+    // they already have an unambiguous answer and never consult it.
+    expect(
+      resolveSource({ search: '', hostname: 'rematch.vercel.app', apiBase: undefined, localProbe: { useServer: false, reason: 'x' } })
+        .kind,
+    ).toBe('sse');
+    expect(resolveSource({ search: '', hostname: 'localhost', apiBase: '', localProbe: { useServer: false, reason: 'x' } }).kind).toBe(
+      'sse',
+    );
   });
 
   it('reads the mock speed from ?speed=', () => {
@@ -154,6 +176,199 @@ describe('resolveSource', () => {
     const { source, kind } = resolveSource({ search: '?agent=sse', hostname: 'localhost' });
     expect(kind).toBe('sse');
     await expect(source(request, () => {}, new AbortController().signal)).rejects.toBeInstanceOf(SourceUnavailableError);
+  });
+
+  describe('consulting a settled boot probe (localProbe)', () => {
+    const base = { search: '', hostname: 'localhost', apiBase: undefined } as const;
+
+    it('plays the server, badge LIVE, when the probe found a working provider', () => {
+      const { kind, note } = resolveSource({ ...base, localProbe: { useServer: true, fallbackOnly: false } });
+      expect(kind).toBe('sse');
+      expect(note).toBeUndefined();
+    });
+
+    it('still plays the server, but badges it fallback-only, when the probe found no working provider', () => {
+      // Streaming the server's own honest fallback-only path is more truthful than
+      // the mock's scripted one — so this is SSE, not a reason to default to mock.
+      const { kind, note } = resolveSource({ ...base, localProbe: { useServer: true, fallbackOnly: true } });
+      expect(kind).toBe('sse');
+      expect(note).toBe(LIVE_FALLBACK_BADGE);
+    });
+
+    it('plays the mock when the probe came back against the server', () => {
+      const { kind, note } = resolveSource({ ...base, localProbe: { useServer: false, reason: 'could not reach /api/health: timed out' } });
+      expect(kind).toBe('mock');
+      expect(note).toBeUndefined();
+    });
+
+    it('ignores a probe outcome on a forced ?agent=, whichever way it went', () => {
+      expect(resolveSource({ search: '?agent=mock', hostname: 'localhost', localProbe: { useServer: true, fallbackOnly: false } }).kind).toBe(
+        'mock',
+      );
+      expect(resolveSource({ search: '?agent=sse', hostname: 'localhost', localProbe: { useServer: false, reason: 'x' } }).kind).toBe(
+        'sse',
+      );
+    });
+
+    it('keeps the "SSE failed before first event → mock" safety net for a probed server too', async () => {
+      // The boot probe answers "was a server there a moment ago", not "is one there
+      // right now" — the same failure-before-first-event safety net still has to
+      // catch it going away in between.
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+      const switches: Array<{ kind: string; why: string }> = [];
+      const { source, kind } = resolveSource(
+        { ...base, search: '?speed=5000', localProbe: { useServer: true, fallbackOnly: false } },
+        (k, why) => void switches.push({ kind: k, why }),
+      );
+      expect(kind).toBe('sse');
+
+      const events: RewriteEvent[] = [];
+      await source(request, (e) => void events.push(e), new AbortController().signal);
+
+      expect(switches).toHaveLength(1);
+      expect(switches[0]?.kind).toBe('mock');
+      const last = events.at(-1);
+      expect(last?.type).toBe('done');
+      if (last?.type === 'done') expect(last.result.approved).toBe(true);
+    });
+  });
+});
+
+describe('probeHealth', () => {
+  it('reports a working provider', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, hasApiKey: true, provider: 'anthropic' }), { status: 200 }));
+    await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({ useServer: true, fallbackOnly: false });
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ signal: expect.anything() }));
+  });
+
+  it('reports fallback-only when there is no API key', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, hasApiKey: false, provider: 'anthropic' }), { status: 200 }));
+    await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({ useServer: true, fallbackOnly: true });
+  });
+
+  it('reports fallback-only when the provider is "none"', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, hasApiKey: true, provider: 'none' }), { status: 200 }));
+    await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({ useServer: true, fallbackOnly: true });
+  });
+
+  it('reports useServer: false on a non-2xx response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('nope', { status: 500 }));
+    await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({
+      useServer: false,
+      reason: '/api/health answered 500',
+    });
+  });
+
+  it('reports useServer: false on a body without ok: true', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ nope: true }), { status: 200 }));
+    const result = await probeHealth('', fetchMock as unknown as typeof fetch);
+    expect(result.useServer).toBe(false);
+  });
+
+  it('reports useServer: false, never throws, when fetch itself rejects', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const result = await probeHealth('', fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ useServer: false, reason: 'could not reach /api/health: Failed to fetch' });
+  });
+
+  it('aborts and reports useServer: false when the server never answers within timeoutMs', async () => {
+    // A realistic `fetch`: it settles only when its abort signal fires, exactly
+    // like the browser's. `timeoutMs` is 15 here purely so the test is fast — the
+    // production default (`LOCAL_PROBE_TIMEOUT_MS`) is asserted separately below.
+    const fetchMock = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        }),
+    );
+    const result = await probeHealth('', fetchMock as unknown as typeof fetch, 15);
+    expect(result).toEqual({ useServer: false, reason: 'could not reach /api/health: no response within 15ms' });
+  });
+
+  it('defaults its timeout to LOCAL_PROBE_TIMEOUT_MS', async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        }),
+    );
+    const result = await probeHealth('', fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ useServer: false, reason: 'could not reach /api/health: no response within 1500ms' });
+  });
+});
+
+describe('bootProbeLocalServer', () => {
+  it('skips the network entirely when a forced ?agent= already answers the question', async () => {
+    const fetchMock = vi.fn();
+    for (const search of ['?agent=mock', '?agent=recorded', '?agent=sse', '?agent=server']) {
+      await expect(bootProbeLocalServer({ search, hostname: 'localhost' }, fetchMock as unknown as typeof fetch)).resolves.toBeNull();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the network when VITE_API_BASE is configured', async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      bootProbeLocalServer({ search: '', hostname: 'localhost', apiBase: 'http://localhost:8787' }, fetchMock as unknown as typeof fetch),
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the network on a non-local host — already a decided SSE row', async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      bootProbeLocalServer({ search: '', hostname: 'rematch.vercel.app', apiBase: undefined }, fetchMock as unknown as typeof fetch),
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('probes and says nothing when the server answers ok', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, hasApiKey: true, provider: 'anthropic' }), { status: 200 }));
+    const result = await bootProbeLocalServer({ search: '', hostname: 'localhost', apiBase: undefined }, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ useServer: true, fallbackOnly: false });
+    expect(infoSpy).not.toHaveBeenCalled();
+    infoSpy.mockRestore();
+  });
+
+  it('probes, decides mock, and logs exactly one explanatory line when the server is unreachable', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const result = await bootProbeLocalServer({ search: '', hostname: 'localhost', apiBase: undefined }, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ useServer: false, reason: 'could not reach /api/health: Failed to fetch' });
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy.mock.calls[0]?.[0]).toContain('Failed to fetch');
+    infoSpy.mockRestore();
+  });
+
+  it('probes, decides mock, and logs when the server times out', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchMock = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        }),
+    );
+    const result = await bootProbeLocalServer(
+      { search: '', hostname: 'localhost', apiBase: undefined },
+      fetchMock as unknown as typeof fetch,
+      15,
+    );
+    expect(result).toEqual({ useServer: false, reason: 'could not reach /api/health: no response within 15ms' });
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy.mock.calls[0]?.[0]).toContain('no response within 15ms');
+    infoSpy.mockRestore();
+  });
+
+  it('does not log when the server is reachable but fallback-only', async () => {
+    // Fallback-only is still SSE (spec's more-truthful-than-the-mock rule) — the
+    // console line is reserved for the "we defaulted to the mock" case only.
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, hasApiKey: false, provider: 'none' }), { status: 200 }));
+    const result = await bootProbeLocalServer({ search: '', hostname: 'localhost', apiBase: undefined }, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ useServer: true, fallbackOnly: true });
+    expect(infoSpy).not.toHaveBeenCalled();
+    infoSpy.mockRestore();
   });
 });
 

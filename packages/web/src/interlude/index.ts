@@ -29,7 +29,7 @@ import { bundledSource } from '../game/strategy.ts';
 
 import { serverFallbackPick, type RewriteEvent } from './events.ts';
 import { knownIssueLabel, provenanceLabel } from './recorded.ts';
-import { resolveSource, type InterludeSource, type ResolveOptions, type SourceKind } from './source.ts';
+import { bootProbeLocalServer, resolveSource, type InterludeSource, type LocalProbeOutcome, type ResolveOptions, type SourceKind } from './source.ts';
 import { createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
 
 export { fallbackText, SKIP_AFTER_MS, createInterludeUi, meterView, type InterludeState, type InterludeUi, type MeterView } from './ui.ts';
@@ -48,7 +48,20 @@ export {
   type RecordedIndexEntry,
   type RecordedOptions,
 } from './recorded.ts';
-export { resolveSource, sseSource, withFallbackSource, SourceUnavailableError, type InterludeSource, type RewriteRequest, type SourceKind } from './source.ts';
+export {
+  resolveSource,
+  sseSource,
+  withFallbackSource,
+  bootProbeLocalServer,
+  probeHealth,
+  SourceUnavailableError,
+  LOCAL_PROBE_TIMEOUT_MS,
+  LIVE_FALLBACK_BADGE,
+  type InterludeSource,
+  type RewriteRequest,
+  type SourceKind,
+  type LocalProbeOutcome,
+} from './source.ts';
 export { unifiedDiff } from './diff.ts';
 export * from './events.ts';
 
@@ -78,6 +91,14 @@ export type InterludeDebug = {
   /** Every event received, in order. */
   events: RewriteEvent[];
   state: InterludeState;
+  /**
+   * Which source this round is actually playing — `'sse'`, `'mock'`, or
+   * `'recorded'`. On the local, no-`?agent=`, no-`VITE_API_BASE` default this is
+   * the boot probe's decision (see `bootProbeLocalServer`), not a hardcoded guess,
+   * which is what this field exists to let a test assert directly rather than by
+   * reading the badge's rendered text.
+   */
+  sourceKind: SourceKind;
 };
 
 export type InterludeHandlerOptions = {
@@ -107,15 +128,29 @@ export type InterludeHandlerOptions = {
  * else in the client may run while the interlude owns the screen.
  */
 export function createInterludeHandler(options: InterludeHandlerOptions = {}): RoundWonHandler {
+  // Started once, here, when the handler is built — at app boot, well before the
+  // player has finished (or even started) Round 1. `bootProbeLocalServer` caps
+  // itself at `LOCAL_PROBE_TIMEOUT_MS`, but paying that cap happens now, off the
+  // critical path, rather than as part of the first round transition. Every round
+  // this handler ever plays awaits the same cached promise — one probe per page
+  // load, not one per round.
+  const localProbePromise: Promise<LocalProbeOutcome | null> =
+    options.source === undefined ? bootProbeLocalServer(options.resolve ?? {}) : Promise.resolve(null);
+
   return async function onRoundWon(context: RoundWonContext): Promise<void> {
     const host = options.host ?? document.body;
     const events: RewriteEvent[] = [];
 
     let ui: InterludeUi | null = null;
+    let resolvedKind: SourceKind = 'mock';
     const publish = (): void => {
       const snapshot = ui;
-      options.onDebug?.(snapshot === null ? null : { events, state: snapshot.state() });
+      options.onDebug?.(snapshot === null ? null : { events, state: snapshot.state(), sourceKind: resolvedKind });
     };
+
+    // Already settled in every real case: the probe was kicked off at app boot and
+    // is capped at 1.5 s, and a round takes far longer than that to play out.
+    const localProbe = await localProbePromise;
 
     // The source is resolved before the UI so the badge is right from the first
     // frame; `onSwitch` fires later only for the "no server, fall back to mock" path.
@@ -124,6 +159,7 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
         ? resolveSource(
             {
               ...options.resolve,
+              localProbe,
               // A recorded run only learns its model and date when the file lands, so
               // the badge is completed out of band rather than from an event. See
               // `recorded.ts`: the claim on screen has to name the run it is playing.
@@ -140,10 +176,12 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
             },
             (kind, why) => {
               ui?.setKind(kind, why);
+              resolvedKind = kind;
               publish();
             },
           )
         : { source: options.source, kind: 'mock' as SourceKind, speed: options.resolve?.mock?.speed ?? 1 };
+    resolvedKind = resolved.kind;
 
     // `?autofight=0` holds the finished interlude open. It is a test and demo
     // affordance, not a game setting: on stage the 3 s auto-continue is what keeps
@@ -187,6 +225,9 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
       host,
       round: context.round,
       kind: resolved.kind,
+      // Set only for the boot probe's "reachable, but no working provider" outcome
+      // (spec: still SSE, badge says so) — every other path keeps `KIND_LABEL`'s default.
+      ...(resolved.note === undefined ? {} : { provenance: resolved.note }),
       ...(autoFightMs === undefined || Number.isNaN(autoFightMs) ? {} : { autoFightMs }),
       onFight: () => goToNextRound(nextSource),
       onSkip: () => {

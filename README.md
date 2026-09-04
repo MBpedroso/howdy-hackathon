@@ -10,7 +10,7 @@ included.
 ## 60-second demo
 
 ```bash
-pnpm install && pnpm dev          # web on :5173, api on :8787 — one Ctrl-C stops both
+pnpm install && pnpm dev          # web on :5173, api on :8787 — one Ctrl-C stops both, and with no `?agent=` the client probes `/api/health` at boot and plays the real agents by default whenever that server answers
 open 'http://localhost:5173/?agent=recorded&autostart=1'
 ```
 

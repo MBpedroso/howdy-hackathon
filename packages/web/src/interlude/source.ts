@@ -209,6 +209,106 @@ export function sseSource(baseUrl: string): InterludeSource {
 /** Hosts where "no server running" is the normal case, so the mock is the default. */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '']);
 
+/** Timeout for the boot-time `/api/health` probe. Chosen so a dead server never makes the player wait — the fight starts on time either way. */
+export const LOCAL_PROBE_TIMEOUT_MS = 1500;
+
+/** Badge text for a reachable server that is honestly running fallback-only (no key, or `provider: 'none'`). */
+export const LIVE_FALLBACK_BADGE = 'LIVE · fallback-only';
+
+/**
+ * What the boot-time probe decided.
+ *
+ * `useServer: true` means `/api/health` answered `ok: true` before the timeout —
+ * `fallbackOnly` is set when it also reported no working provider (`hasApiKey:
+ * false`, or `provider: 'none'`), in which case the server is still the more
+ * truthful choice: it streams its own honest fallback-only path instead of the
+ * mock's scripted one. `useServer: false` covers every other outcome — no
+ * response, a timeout, a non-2xx, or a body that isn't `{ ok: true, ... }` — and
+ * `reason` is the one line worth telling a developer about it.
+ */
+export type LocalProbeOutcome =
+  | { useServer: true; fallbackOnly: boolean }
+  | { useServer: false; reason: string };
+
+/**
+ * Whether `resolveSource`, given these same options, would land on the "local host,
+ * no explicit `?agent=`, no configured API base" row — the one row the boot probe
+ * exists to fix (every other row already has an unambiguous answer: a forced
+ * `?agent=`, a configured base, or a non-local host all mean SSE with no probing
+ * needed). Kept as one function so the probe and `resolveSource` can never disagree
+ * about which row applies.
+ */
+function localDefaultApplies(options: Pick<ResolveOptions, 'search' | 'hostname' | 'apiBase'>): boolean {
+  const search = options.search ?? (typeof location === 'undefined' ? '' : location.search);
+  const agent = new URLSearchParams(search).get('agent');
+  if (agent === 'mock' || agent === 'recorded' || agent === 'sse' || agent === 'server') return false;
+  const hostname = options.hostname ?? (typeof location === 'undefined' ? 'localhost' : location.hostname);
+  const envBase = options.apiBase ?? (import.meta.env.VITE_API_BASE as string | undefined);
+  return envBase === undefined && LOCAL_HOSTS.has(hostname);
+}
+
+/**
+ * `GET {base}/api/health`, capped at `timeoutMs`. Never throws: a network error, a
+ * non-2xx, a body that is not `{ ok: true, ... }`, and the timeout all become
+ * `{ useServer: false, reason }` rather than an exception — the caller's job is
+ * always "pick a source", never "handle a probe failure".
+ */
+export async function probeHealth(
+  base: string,
+  fetchImpl: typeof fetch,
+  timeoutMs: number = LOCAL_PROBE_TIMEOUT_MS,
+): Promise<LocalProbeOutcome> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`${base}/api/health`, { signal: controller.signal });
+    if (!res.ok) return { useServer: false, reason: `/api/health answered ${res.status}` };
+    const body = (await res.json().catch(() => null)) as
+      | { ok?: unknown; hasApiKey?: unknown; provider?: unknown }
+      | null;
+    if (body === null || body.ok !== true) {
+      return { useServer: false, reason: '/api/health did not report ok: true' };
+    }
+    const fallbackOnly = body.hasApiKey !== true || body.provider === 'none';
+    return { useServer: true, fallbackOnly };
+  } catch (err) {
+    const why = controller.signal.aborted ? `no response within ${timeoutMs}ms` : (err as Error).message;
+    return { useServer: false, reason: `could not reach /api/health: ${why}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Run the boot-time probe exactly once, at app boot, and hand back its outcome for
+ * `resolveSource` to consult later — the whole point being that a developer's `pnpm
+ * dev` (which starts the API server too) reaches the *real* agents by default,
+ * instead of the mock a bare `resolveSource` would otherwise pick.
+ *
+ * The caller (`interlude/index.ts`) starts this once when the handler is built —
+ * before any round has been played — and awaits the same cached promise on every
+ * later round, so the 1500 ms cap is paid at most once per page load and never as
+ * part of a round transition.
+ *
+ * Returns `null` without probing when `localDefaultApplies` says `resolveSource`
+ * would not consult it anyway (a forced `?agent=`, a configured base, or a
+ * non-local host). Logs exactly one line when the decision comes out against the
+ * server — that is the one moment a developer needs telling *why* they are looking
+ * at the mock instead of the real agents.
+ */
+export async function bootProbeLocalServer(
+  options: ResolveOptions = {},
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = LOCAL_PROBE_TIMEOUT_MS,
+): Promise<LocalProbeOutcome | null> {
+  if (!localDefaultApplies(options)) return null;
+  const outcome = await probeHealth('', fetchImpl, timeoutMs);
+  if (!outcome.useServer) {
+    console.info(`[interlude] ${outcome.reason} — playing the mock (pass ?agent=sse to force the server)`);
+  }
+  return outcome;
+}
+
 export type ResolveOptions = {
   /** Defaults to `location.search`. */
   search?: string;
@@ -220,6 +320,14 @@ export type ResolveOptions = {
   mock?: MockOptions;
   /** Extra recorded options; `speed` is overridden by `?speed=`, `run` by `?run=`. */
   recorded?: RecordedOptions;
+  /**
+   * The boot probe's outcome (see `bootProbeLocalServer`), already settled. Only
+   * consulted on the local, no-`?agent=`, no-`VITE_API_BASE` row; every other row
+   * decides the source without it. `undefined`/`null` — the probe never ran, or
+   * hasn't settled yet — is treated exactly like `{ useServer: false }`: the mock,
+   * same as before this existed.
+   */
+  localProbe?: LocalProbeOutcome | null;
 };
 
 export type ResolvedSource = {
@@ -228,6 +336,8 @@ export type ResolvedSource = {
   kind: SourceKind;
   /** Mock speed multiplier in effect (1 unless `?speed=` said otherwise). */
   speed: number;
+  /** Badge override — set only for the reachable-but-fallback-only probe outcome. */
+  note?: string;
 };
 
 /**
@@ -240,12 +350,27 @@ export type ResolvedSource = {
  * | `?agent=sse` / `?agent=server` | SSE, no mock safety net |
  * | `VITE_API_BASE` is set | SSE at that base |
  * | hostname is not local | SSE at the same origin (the Vercel deploy) |
- * | otherwise | mock |
+ * | local, no `?agent=`, no `VITE_API_BASE`, boot probe found `/api/health` ok | SSE at `''`, badge `LIVE` (or `LIVE · fallback-only` — see below) |
+ * | local, no `?agent=`, no `VITE_API_BASE`, probe failed/timed out/never ran | mock |
+ *
+ * The last two rows are `localDefaultApplies`'s row — the one `pnpm dev` sits on,
+ * since `pnpm dev` starts both Vite and the API server on 8787. Before this existed,
+ * that row was unconditionally the mock, which meant a developer playing `pnpm dev`
+ * watched a scripted interlude and never reached the real agents. Now
+ * `bootProbeLocalServer` (called once, at app boot, well before any round ends)
+ * decides it: reachable and `ok: true` means the real server, even when it reports
+ * no working provider — `hasApiKey: false` or `provider: 'none'` — because the
+ * server's own honest fallback-only stream is still more truthful than the mock's
+ * scripted one; only a badge suffix (`LIVE · fallback-only`, via `ResolvedSource.note`)
+ * tells the player which is happening. Anything else — unreachable, slow, a bad
+ * body — is the mock, exactly as before, plus one console line saying why.
  *
  * Except when the URL asked for SSE explicitly, the SSE source is wrapped so that a
  * failure *before the first event* silently continues on the mock. That is what
  * makes `pnpm dev` with no server a working demo, and it is the one case where the
- * badge changes from `sse` to `mock` mid-run.
+ * badge changes from `sse` to `mock` mid-run. The probed row gets the same
+ * wrapping — the boot probe answers "was there a server a moment ago", not "is
+ * there one right now", so the safety net still matters if it went away in between.
  *
  * `recorded` gets **no** such safety net, deliberately: its asset is committed to this
  * repo, so a failure to load it is a broken build rather than a missing service, and
@@ -279,7 +404,21 @@ export function resolveSource(options: ResolveOptions = {}, onSwitch?: (kind: So
   const explicit = agent === 'sse' || agent === 'server';
   const wantsServer = explicit || envBase !== undefined || !LOCAL_HOSTS.has(hostname);
 
-  if (!wantsServer) return { source: mock, kind: 'mock', speed };
+  if (!wantsServer) {
+    // `!wantsServer` is exactly `localDefaultApplies`'s row (agent unforced, no
+    // envBase, local host) — see that function for why the two must never disagree.
+    const probe = options.localProbe ?? null;
+    if (probe !== null && probe.useServer) {
+      const sse = sseSource('');
+      return {
+        source: withFallbackSource(sse, mock, onSwitch),
+        kind: 'sse',
+        speed,
+        ...(probe.fallbackOnly ? { note: LIVE_FALLBACK_BADGE } : {}),
+      };
+    }
+    return { source: mock, kind: 'mock', speed };
+  }
 
   const sse = sseSource(envBase ?? '');
   if (explicit) return { source: sse, kind: 'sse', speed };
