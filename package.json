@@ -17,6 +17,7 @@
     "test:engine": "pnpm --filter @rematch/engine run test",
     "test:harness": "pnpm --filter @rematch/harness run test",
     "test:balance": "pnpm --filter @rematch/harness run test:balance",
+    "eval:agents": "pnpm --filter @rematch/agents run eval",
     "harness": "pnpm --filter @rematch/harness cli --",
     "test:e2e": "pnpm --filter @rematch/web run test:e2e",
     "verify": "pnpm run typecheck && pnpm run test"

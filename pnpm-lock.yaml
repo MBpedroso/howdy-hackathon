@@ -17,12 +17,21 @@ importers:
 
   packages/agents:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.71.0
+        version: 0.71.2
       '@rematch/contract':
         specifier: workspace:*
         version: link:../contract
+      '@rematch/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@rematch/harness':
         specifier: workspace:*
         version: link:../harness
+      diff:
+        specifier: ^8.0.2
+        version: 8.0.4
     devDependencies:
       typescript:
         specifier: ^5.9.2
@@ -109,6 +118,9 @@ importers:
       '@rematch/agents':
         specifier: workspace:*
         version: link:../agents
+      '@rematch/harness':
+        specifier: workspace:*
+        version: link:../harness
     devDependencies:
       typescript:
         specifier: ^5.9.2
@@ -149,6 +161,19 @@ importers:
         version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3))
 
 packages:
+
+  '@anthropic-ai/sdk@0.71.2':
+    resolution: {integrity: sha512-TGNDEUuEstk/DKu0/TflXAEt+p+p/WhTlFzEnoosvbaDU2LTjm42igSdlL0VijrKpWejtOKxX0b8A7uc+XiSAQ==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@babel/runtime@7.29.7':
+    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
+    engines: {node: '>=6.9.0'}
 
   '@jitl/quickjs-ffi-types@0.32.0':
     resolution: {integrity: sha512-v9T+GQpmk43VDJ7d72sf0Nexhk+ArvtUihW27dy7lqAl0zBObFKtSBBIm5RBjwIhE8VwsPPm9PNuvPvNqLWUEg==}
@@ -342,6 +367,10 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  diff@8.0.4:
+    resolution: {integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==}
+    engines: {node: '>=0.3.1'}
+
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
 
@@ -374,6 +403,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  json-schema-to-ts@3.1.1:
+    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
+    engines: {node: '>=16'}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -528,6 +561,9 @@ packages:
     resolution: {integrity: sha512-yau8yJdTt989Mm0Bd/236QnzEiPf2xLLTqUZRUJOo/3CB078LSwzei343DgtJVmfJKJE3TMINY1u42SQsP6mXw==}
     engines: {node: '>=14.0.0'}
 
+  ts-algebra@2.0.0:
+    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -626,6 +662,12 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@anthropic-ai/sdk@0.71.2':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+
+  '@babel/runtime@7.29.7': {}
 
   '@jitl/quickjs-ffi-types@0.32.0': {}
 
@@ -770,6 +812,8 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
+  diff@8.0.4: {}
+
   es-module-lexer@2.3.2: {}
 
   estree-walker@3.0.3:
@@ -791,6 +835,11 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  json-schema-to-ts@3.1.1:
+    dependencies:
+      '@babel/runtime': 7.29.7
+      ts-algebra: 2.0.0
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -922,6 +971,8 @@ snapshots:
       picomatch: 4.0.7
 
   tinyrainbow@3.1.1: {}
+
+  ts-algebra@2.0.0: {}
 
   typescript@5.9.3: {}
 

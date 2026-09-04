@@ -1,0 +1,1044 @@
+{
+  "name": "mimic-camper",
+  "generatedBy": "pnpm --filter @rematch/agents gen-canned",
+  "spec": {
+    "bot": {
+      "kind": "mimic",
+      "of": "camper-a",
+      "accuracy": 0.85
+    },
+    "boss": "idle",
+    "seed": 2460202181
+  },
+  "bossStrategy": "// Reference strategy: the null boss. Baseline for harness calibration —\n// win rate against this must be ~0 for every reference bot.\nexport const meta = {\n  name: 'Statue',\n  rationale: 'I do nothing, so you can measure everything else against me.',\n  version: 1,\n};\n\nexport function init() {\n  return {};\n}\n\nexport function decide(view, mem) {\n  return { type: 'idle' };\n}\n",
+  "summary": {
+    "seed": 2460202181,
+    "strategy": {
+      "name": "Statue",
+      "rationale": "I do nothing, so you can measure everything else against me.",
+      "version": 1
+    },
+    "outcome": "playerWon",
+    "durations": {
+      "ticks": 1203,
+      "seconds": 20.05,
+      "firstBossHitTick": 36,
+      "firstPlayerHitTick": null
+    },
+    "player": {
+      "hpStart": 5,
+      "hpEnd": 5,
+      "dashes": 0,
+      "shots": 146,
+      "damageTaken": 0
+    },
+    "boss": {
+      "hpStart": 100,
+      "hpEnd": 0,
+      "damageTaken": 100,
+      "primitives": {
+        "move": 0,
+        "burst": 0,
+        "charge": 0,
+        "slam": 0,
+        "spawn": 0
+      },
+      "minionsSpawned": 0,
+      "damageToMinions": 0
+    },
+    "history": {
+      "playerPosHeat": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.139651,
+        0.137988,
+        0.034913,
+        0,
+        0,
+        0,
+        0,
+        0.331671,
+        0.334165,
+        0.021613,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "playerDashDirs": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "playerShotsDuring": {
+        "move": 0,
+        "burst": 0,
+        "charge": 0,
+        "slam": 0,
+        "spawn": 0
+      }
+    },
+    "contract": {
+      "violations": 0,
+      "strategyKilled": false,
+      "droppedEvents": 0
+    },
+    "timeline": [
+      {
+        "tick": 1,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 9,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 17,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 33,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 36,
+        "kind": "bossHit",
+        "detail": 99
+      },
+      {
+        "tick": 41,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 46,
+        "kind": "bossHit",
+        "detail": 98
+      },
+      {
+        "tick": 53,
+        "kind": "bossHit",
+        "detail": 97
+      },
+      {
+        "tick": 59,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 61,
+        "kind": "bossHit",
+        "detail": 96
+      },
+      {
+        "tick": 67,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 80,
+        "kind": "bossHit",
+        "detail": 95
+      },
+      {
+        "tick": 83,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 92,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 92,
+        "kind": "bossHit",
+        "detail": 94
+      },
+      {
+        "tick": 102,
+        "kind": "bossHit",
+        "detail": 93
+      },
+      {
+        "tick": 108,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 111,
+        "kind": "bossHit",
+        "detail": 92
+      },
+      {
+        "tick": 118,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 122,
+        "kind": "bossHit",
+        "detail": 91
+      },
+      {
+        "tick": 133,
+        "kind": "bossHit",
+        "detail": 90
+      },
+      {
+        "tick": 134,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 142,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 158,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 163,
+        "kind": "bossHit",
+        "detail": 89
+      },
+      {
+        "tick": 166,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 176,
+        "kind": "bossHit",
+        "detail": 88
+      },
+      {
+        "tick": 181,
+        "kind": "bossHit",
+        "detail": 87
+      },
+      {
+        "tick": 183,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 189,
+        "kind": "bossHit",
+        "detail": 86
+      },
+      {
+        "tick": 191,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 196,
+        "kind": "bossHit",
+        "detail": 85
+      },
+      {
+        "tick": 201,
+        "kind": "bossHit",
+        "detail": 84
+      },
+      {
+        "tick": 207,
+        "kind": "bossHit",
+        "detail": 83
+      },
+      {
+        "tick": 209,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 215,
+        "kind": "bossHit",
+        "detail": 82
+      },
+      {
+        "tick": 218,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 222,
+        "kind": "bossHit",
+        "detail": 81
+      },
+      {
+        "tick": 227,
+        "kind": "bossHit",
+        "detail": 80
+      },
+      {
+        "tick": 234,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 234,
+        "kind": "bossHit",
+        "detail": 79
+      },
+      {
+        "tick": 241,
+        "kind": "bossHit",
+        "detail": 78
+      },
+      {
+        "tick": 242,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 250,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 251,
+        "kind": "bossHit",
+        "detail": 77
+      },
+      {
+        "tick": 260,
+        "kind": "bossHit",
+        "detail": 76
+      },
+      {
+        "tick": 267,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 275,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 278,
+        "kind": "bossHit",
+        "detail": 75
+      },
+      {
+        "tick": 288,
+        "kind": "bossHit",
+        "detail": 74
+      },
+      {
+        "tick": 291,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 299,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 316,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 324,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 340,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 349,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 362,
+        "kind": "bossHit",
+        "detail": 73
+      },
+      {
+        "tick": 366,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 369,
+        "kind": "bossHit",
+        "detail": 72
+      },
+      {
+        "tick": 375,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 375,
+        "kind": "bossHit",
+        "detail": 71
+      },
+      {
+        "tick": 384,
+        "kind": "bossHit",
+        "detail": 70
+      },
+      {
+        "tick": 391,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 395,
+        "kind": "bossHit",
+        "detail": 69
+      },
+      {
+        "tick": 399,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 405,
+        "kind": "bossHit",
+        "detail": 68
+      },
+      {
+        "tick": 415,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 422,
+        "kind": "bossHit",
+        "detail": 67
+      },
+      {
+        "tick": 423,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 431,
+        "kind": "bossHit",
+        "detail": 66
+      },
+      {
+        "tick": 439,
+        "kind": "bossHit",
+        "detail": 65
+      },
+      {
+        "tick": 440,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 448,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 452,
+        "kind": "bossHit",
+        "detail": 64
+      },
+      {
+        "tick": 462,
+        "kind": "bossHit",
+        "detail": 63
+      },
+      {
+        "tick": 464,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 472,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 480,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 480,
+        "kind": "bossHit",
+        "detail": 62
+      },
+      {
+        "tick": 495,
+        "kind": "bossHit",
+        "detail": 61
+      },
+      {
+        "tick": 496,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 504,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 512,
+        "kind": "bossHit",
+        "detail": 60
+      },
+      {
+        "tick": 520,
+        "kind": "bossHit",
+        "detail": 59
+      },
+      {
+        "tick": 523,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 525,
+        "kind": "bossHit",
+        "detail": 58
+      },
+      {
+        "tick": 532,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 532,
+        "kind": "bossHit",
+        "detail": 57
+      },
+      {
+        "tick": 537,
+        "kind": "bossHit",
+        "detail": 56
+      },
+      {
+        "tick": 544,
+        "kind": "bossHit",
+        "detail": 55
+      },
+      {
+        "tick": 548,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 555,
+        "kind": "bossHit",
+        "detail": 54
+      },
+      {
+        "tick": 556,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 572,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 580,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 591,
+        "kind": "bossHit",
+        "detail": 53
+      },
+      {
+        "tick": 596,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 601,
+        "kind": "bossHit",
+        "detail": 52
+      },
+      {
+        "tick": 604,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 610,
+        "kind": "bossHit",
+        "detail": 51
+      },
+      {
+        "tick": 620,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 629,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 630,
+        "kind": "bossHit",
+        "detail": 50
+      },
+      {
+        "tick": 646,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 652,
+        "kind": "bossHit",
+        "detail": 49
+      },
+      {
+        "tick": 654,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 658,
+        "kind": "bossHit",
+        "detail": 48
+      },
+      {
+        "tick": 667,
+        "kind": "bossHit",
+        "detail": 47
+      },
+      {
+        "tick": 670,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 676,
+        "kind": "bossHit",
+        "detail": 46
+      },
+      {
+        "tick": 679,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 683,
+        "kind": "bossHit",
+        "detail": 45
+      },
+      {
+        "tick": 688,
+        "kind": "bossHit",
+        "detail": 44
+      },
+      {
+        "tick": 695,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 695,
+        "kind": "bossHit",
+        "detail": 43
+      },
+      {
+        "tick": 703,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 707,
+        "kind": "bossHit",
+        "detail": 42
+      },
+      {
+        "tick": 713,
+        "kind": "bossHit",
+        "detail": 41
+      },
+      {
+        "tick": 719,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 723,
+        "kind": "bossHit",
+        "detail": 40
+      },
+      {
+        "tick": 727,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 733,
+        "kind": "bossHit",
+        "detail": 39
+      },
+      {
+        "tick": 735,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 744,
+        "kind": "bossHit",
+        "detail": 38
+      },
+      {
+        "tick": 751,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 755,
+        "kind": "bossHit",
+        "detail": 37
+      },
+      {
+        "tick": 759,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 765,
+        "kind": "bossHit",
+        "detail": 36
+      },
+      {
+        "tick": 776,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 785,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 790,
+        "kind": "bossHit",
+        "detail": 35
+      },
+      {
+        "tick": 801,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 807,
+        "kind": "bossHit",
+        "detail": 34
+      },
+      {
+        "tick": 809,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 813,
+        "kind": "bossHit",
+        "detail": 33
+      },
+      {
+        "tick": 825,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 825,
+        "kind": "bossHit",
+        "detail": 32
+      },
+      {
+        "tick": 832,
+        "kind": "bossHit",
+        "detail": 31
+      },
+      {
+        "tick": 834,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 840,
+        "kind": "bossHit",
+        "detail": 30
+      },
+      {
+        "tick": 845,
+        "kind": "bossHit",
+        "detail": 29
+      },
+      {
+        "tick": 853,
+        "kind": "bossHit",
+        "detail": 28
+      },
+      {
+        "tick": 854,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 862,
+        "kind": "bossHit",
+        "detail": 27
+      },
+      {
+        "tick": 863,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 872,
+        "kind": "bossHit",
+        "detail": 26
+      },
+      {
+        "tick": 879,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 885,
+        "kind": "bossHit",
+        "detail": 25
+      },
+      {
+        "tick": 889,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 905,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 908,
+        "kind": "bossHit",
+        "detail": 24
+      },
+      {
+        "tick": 913,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 919,
+        "kind": "bossHit",
+        "detail": 23
+      },
+      {
+        "tick": 926,
+        "kind": "bossHit",
+        "detail": 22
+      },
+      {
+        "tick": 929,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 937,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 942,
+        "kind": "bossHit",
+        "detail": 21
+      },
+      {
+        "tick": 953,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 960,
+        "kind": "bossHit",
+        "detail": 20
+      },
+      {
+        "tick": 962,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 970,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 977,
+        "kind": "bossHit",
+        "detail": 19
+      },
+      {
+        "tick": 990,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 991,
+        "kind": "bossHit",
+        "detail": 18
+      },
+      {
+        "tick": 998,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1003,
+        "kind": "bossHit",
+        "detail": 17
+      },
+      {
+        "tick": 1010,
+        "kind": "bossHit",
+        "detail": 16
+      },
+      {
+        "tick": 1014,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1017,
+        "kind": "bossHit",
+        "detail": 15
+      },
+      {
+        "tick": 1022,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1024,
+        "kind": "bossHit",
+        "detail": 14
+      },
+      {
+        "tick": 1033,
+        "kind": "bossHit",
+        "detail": 13
+      },
+      {
+        "tick": 1038,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1043,
+        "kind": "bossHit",
+        "detail": 12
+      },
+      {
+        "tick": 1047,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1053,
+        "kind": "bossHit",
+        "detail": 11
+      },
+      {
+        "tick": 1063,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1063,
+        "kind": "bossHit",
+        "detail": 10
+      },
+      {
+        "tick": 1071,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1073,
+        "kind": "bossHit",
+        "detail": 9
+      },
+      {
+        "tick": 1087,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1095,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1101,
+        "kind": "bossHit",
+        "detail": 8
+      },
+      {
+        "tick": 1112,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1120,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1120,
+        "kind": "bossHit",
+        "detail": 7
+      },
+      {
+        "tick": 1129,
+        "kind": "bossHit",
+        "detail": 6
+      },
+      {
+        "tick": 1136,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1140,
+        "kind": "bossHit",
+        "detail": 5
+      },
+      {
+        "tick": 1144,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1160,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1162,
+        "kind": "bossHit",
+        "detail": 4
+      },
+      {
+        "tick": 1168,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1172,
+        "kind": "bossHit",
+        "detail": 3
+      },
+      {
+        "tick": 1184,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1185,
+        "kind": "bossHit",
+        "detail": 2
+      },
+      {
+        "tick": 1192,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1198,
+        "kind": "bossHit",
+        "detail": 1
+      },
+      {
+        "tick": 1203,
+        "kind": "bossHit",
+        "detail": 0
+      },
+      {
+        "tick": 1203,
+        "kind": "outcome",
+        "detail": "playerWon"
+      }
+    ],
+    "timelineTotal": 247
+  }
+}

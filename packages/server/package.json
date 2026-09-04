@@ -14,7 +14,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@rematch/agents": "workspace:*"
+    "@rematch/agents": "workspace:*",
+    "@rematch/harness": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

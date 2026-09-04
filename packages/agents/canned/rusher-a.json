@@ -1,0 +1,1114 @@
+{
+  "name": "rusher-a",
+  "generatedBy": "pnpm --filter @rematch/agents gen-canned",
+  "spec": {
+    "bot": {
+      "kind": "rusher",
+      "accuracy": 0.85
+    },
+    "boss": "cornerbreaker",
+    "seed": 439041101
+  },
+  "bossStrategy": "// Reference strategy: the counter-Camper. Reads history.playerPosHeat to find the\n// cell the player lives in and puts pressure there, which is exactly the kind of\n// adaptation the Coder agent is expected to produce.\nexport const meta = {\n  name: 'Cornerbreaker',\n  rationale: 'You always run to the same corner, so that is where I put the floor slam.',\n  version: 1,\n};\n\nexport function init() {\n  return { targetCell: -1, refreshedAt: -1 };\n}\n\nexport function decide(view, mem) {\n  // Refresh the read of the heat map every second; it is a rolling summary.\n  if (view.tick - mem.refreshedAt >= 60 || mem.targetCell < 0) {\n    mem.targetCell = hottestCell(view.history.playerPosHeat);\n    mem.refreshedAt = view.tick;\n  }\n\n  const cellW = view.arena.w / 8;\n  const cellH = view.arena.h / 8;\n  const col = mem.targetCell % 8;\n  const row = (mem.targetCell - col) / 8;\n  const hotX = clamp(col * cellW + cellW / 2, 0, view.arena.w);\n  const hotY = clamp(row * cellH + cellH / 2, 0, view.arena.h);\n\n  const boss = view.boss;\n  if (boss.cooldowns.slam === 0) {\n    return { type: 'slam', x: hotX, y: hotY };\n  }\n  if (boss.cooldowns.spawn === 0) {\n    return { type: 'spawn', x: hotX, y: hotY };\n  }\n\n  const dx = view.player.x - boss.x;\n  const dy = view.player.y - boss.y;\n  const dist = Math.sqrt(dx * dx + dy * dy);\n  if (boss.cooldowns.burst === 0 && dist < 300) {\n    return { type: 'burst', angle: Math.atan2(dy, dx), count: 8 };\n  }\n\n  // Otherwise walk to the hot cell and camp the camper.\n  const tx = hotX - boss.x;\n  const ty = hotY - boss.y;\n  const tmag = Math.sqrt(tx * tx + ty * ty);\n  if (tmag < 4) {\n    return { type: 'idle' };\n  }\n  return { type: 'move', dx: tx / tmag, dy: ty / tmag };\n}\n\nfunction hottestCell(heat) {\n  let best = 0;\n  let bestValue = -1;\n  for (let i = 0; i < heat.length; i = i + 1) {\n    const v = heat[i];\n    if (typeof v === 'number' && v > bestValue) {\n      bestValue = v;\n      best = i;\n    }\n  }\n  return best;\n}\n\nfunction clamp(v, lo, hi) {\n  return v < lo ? lo : v > hi ? hi : v;\n}\n",
+  "summary": {
+    "seed": 439041101,
+    "strategy": {
+      "name": "Cornerbreaker",
+      "rationale": "You always run to the same corner, so that is where I put the floor slam.",
+      "version": 1
+    },
+    "outcome": "playerWon",
+    "durations": {
+      "ticks": 794,
+      "seconds": 13.23,
+      "firstBossHitTick": 36,
+      "firstPlayerHitTick": 255
+    },
+    "player": {
+      "hpStart": 5,
+      "hpEnd": 2,
+      "dashes": 6,
+      "shots": 100,
+      "damageTaken": 3
+    },
+    "boss": {
+      "hpStart": 100,
+      "hpEnd": 0,
+      "damageTaken": 100,
+      "primitives": {
+        "move": 125,
+        "burst": 6,
+        "charge": 0,
+        "slam": 4,
+        "spawn": 2
+      },
+      "minionsSpawned": 2,
+      "damageToMinions": 0
+    },
+    "history": {
+      "playerPosHeat": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.010076,
+        0.105793,
+        0.011335,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.13602,
+        0.390428,
+        0.093199,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.021411,
+        0.129723,
+        0.025189,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.035264,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.035264,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.006297,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "playerDashDirs": [
+        0,
+        1,
+        0,
+        1,
+        2,
+        0,
+        1,
+        1
+      ],
+      "playerShotsDuring": {
+        "move": 16,
+        "burst": 73,
+        "charge": 0,
+        "slam": 20,
+        "spawn": 94
+      }
+    },
+    "contract": {
+      "violations": 123,
+      "strategyKilled": false,
+      "droppedEvents": 73
+    },
+    "timeline": [
+      {
+        "tick": 1,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 1,
+        "kind": "bossSlamStart"
+      },
+      {
+        "tick": 33,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 36,
+        "kind": "bossHit",
+        "detail": 99
+      },
+      {
+        "tick": 41,
+        "kind": "bossSlamMiss",
+        "detail": 184.5041
+      },
+      {
+        "tick": 41,
+        "kind": "bossHit",
+        "detail": 98
+      },
+      {
+        "tick": 42,
+        "kind": "bossSpawn",
+        "detail": 1
+      },
+      {
+        "tick": 43,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 46,
+        "kind": "bossHit",
+        "detail": 97
+      },
+      {
+        "tick": 50,
+        "kind": "bossHit",
+        "detail": 96
+      },
+      {
+        "tick": 55,
+        "kind": "bossHit",
+        "detail": 95
+      },
+      {
+        "tick": 60,
+        "kind": "bossHit",
+        "detail": 94
+      },
+      {
+        "tick": 64,
+        "kind": "bossHit",
+        "detail": 93
+      },
+      {
+        "tick": 65,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 66,
+        "kind": "playerDash",
+        "detail": 6
+      },
+      {
+        "tick": 68,
+        "kind": "bossHit",
+        "detail": 92
+      },
+      {
+        "tick": 72,
+        "kind": "bossHit",
+        "detail": 91
+      },
+      {
+        "tick": 73,
+        "kind": "bossHit",
+        "detail": 90
+      },
+      {
+        "tick": 81,
+        "kind": "bossHit",
+        "detail": 89
+      },
+      {
+        "tick": 89,
+        "kind": "bossHit",
+        "detail": 88
+      },
+      {
+        "tick": 97,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 99,
+        "kind": "bossHit",
+        "detail": 87
+      },
+      {
+        "tick": 107,
+        "kind": "bossHit",
+        "detail": 86
+      },
+      {
+        "tick": 116,
+        "kind": "bossHit",
+        "detail": 85
+      },
+      {
+        "tick": 124,
+        "kind": "bossHit",
+        "detail": 84
+      },
+      {
+        "tick": 129,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 131,
+        "kind": "bossHit",
+        "detail": 83
+      },
+      {
+        "tick": 133,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 134,
+        "kind": "playerDash",
+        "detail": 4
+      },
+      {
+        "tick": 137,
+        "kind": "bossHit",
+        "detail": 82
+      },
+      {
+        "tick": 145,
+        "kind": "bossHit",
+        "detail": 81
+      },
+      {
+        "tick": 155,
+        "kind": "bossHit",
+        "detail": 80
+      },
+      {
+        "tick": 161,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 165,
+        "kind": "bossHit",
+        "detail": 79
+      },
+      {
+        "tick": 172,
+        "kind": "bossHit",
+        "detail": 78
+      },
+      {
+        "tick": 180,
+        "kind": "bossHit",
+        "detail": 77
+      },
+      {
+        "tick": 188,
+        "kind": "bossHit",
+        "detail": 76
+      },
+      {
+        "tick": 196,
+        "kind": "bossHit",
+        "detail": 75
+      },
+      {
+        "tick": 201,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 204,
+        "kind": "bossHit",
+        "detail": 74
+      },
+      {
+        "tick": 211,
+        "kind": "bossSlamStart"
+      },
+      {
+        "tick": 212,
+        "kind": "bossHit",
+        "detail": 73
+      },
+      {
+        "tick": 220,
+        "kind": "bossHit",
+        "detail": 72
+      },
+      {
+        "tick": 228,
+        "kind": "bossHit",
+        "detail": 71
+      },
+      {
+        "tick": 233,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 236,
+        "kind": "bossHit",
+        "detail": 70
+      },
+      {
+        "tick": 244,
+        "kind": "bossHit",
+        "detail": 69
+      },
+      {
+        "tick": 245,
+        "kind": "playerDash",
+        "detail": 3
+      },
+      {
+        "tick": 249,
+        "kind": "bossHit",
+        "detail": 68
+      },
+      {
+        "tick": 251,
+        "kind": "bossSlamMiss",
+        "detail": 26.1856
+      },
+      {
+        "tick": 252,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 255,
+        "kind": "playerHit",
+        "detail": 4
+      },
+      {
+        "tick": 257,
+        "kind": "bossHit",
+        "detail": 67
+      },
+      {
+        "tick": 265,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 265,
+        "kind": "bossHit",
+        "detail": 66
+      },
+      {
+        "tick": 273,
+        "kind": "bossHit",
+        "detail": 65
+      },
+      {
+        "tick": 281,
+        "kind": "bossHit",
+        "detail": 64
+      },
+      {
+        "tick": 289,
+        "kind": "bossHit",
+        "detail": 63
+      },
+      {
+        "tick": 297,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 297,
+        "kind": "bossHit",
+        "detail": 62
+      },
+      {
+        "tick": 305,
+        "kind": "bossHit",
+        "detail": 61
+      },
+      {
+        "tick": 313,
+        "kind": "bossHit",
+        "detail": 60
+      },
+      {
+        "tick": 321,
+        "kind": "bossHit",
+        "detail": 59
+      },
+      {
+        "tick": 329,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 329,
+        "kind": "bossHit",
+        "detail": 58
+      },
+      {
+        "tick": 337,
+        "kind": "bossHit",
+        "detail": 57
+      },
+      {
+        "tick": 342,
+        "kind": "bossSpawn",
+        "detail": 2
+      },
+      {
+        "tick": 343,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 343,
+        "kind": "playerHit",
+        "detail": 3
+      },
+      {
+        "tick": 345,
+        "kind": "bossHit",
+        "detail": 56
+      },
+      {
+        "tick": 353,
+        "kind": "bossHit",
+        "detail": 55
+      },
+      {
+        "tick": 361,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 361,
+        "kind": "bossHit",
+        "detail": 54
+      },
+      {
+        "tick": 369,
+        "kind": "bossHit",
+        "detail": 53
+      },
+      {
+        "tick": 377,
+        "kind": "bossHit",
+        "detail": 52
+      },
+      {
+        "tick": 385,
+        "kind": "bossHit",
+        "detail": 51
+      },
+      {
+        "tick": 393,
+        "kind": "bossHit",
+        "detail": 50
+      },
+      {
+        "tick": 401,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 401,
+        "kind": "bossHit",
+        "detail": 49
+      },
+      {
+        "tick": 409,
+        "kind": "bossHit",
+        "detail": 48
+      },
+      {
+        "tick": 417,
+        "kind": "bossHit",
+        "detail": 47
+      },
+      {
+        "tick": 421,
+        "kind": "bossSlamStart"
+      },
+      {
+        "tick": 425,
+        "kind": "bossHit",
+        "detail": 46
+      },
+      {
+        "tick": 433,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 433,
+        "kind": "bossHit",
+        "detail": 45
+      },
+      {
+        "tick": 441,
+        "kind": "bossHit",
+        "detail": 44
+      },
+      {
+        "tick": 450,
+        "kind": "bossHit",
+        "detail": 43
+      },
+      {
+        "tick": 455,
+        "kind": "playerDash",
+        "detail": 1
+      },
+      {
+        "tick": 457,
+        "kind": "bossHit",
+        "detail": 42
+      },
+      {
+        "tick": 461,
+        "kind": "bossSlamMiss",
+        "detail": 21.8105
+      },
+      {
+        "tick": 462,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 465,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 465,
+        "kind": "playerHit",
+        "detail": 2
+      },
+      {
+        "tick": 465,
+        "kind": "bossHit",
+        "detail": 41
+      },
+      {
+        "tick": 473,
+        "kind": "bossHit",
+        "detail": 40
+      },
+      {
+        "tick": 481,
+        "kind": "bossHit",
+        "detail": 39
+      },
+      {
+        "tick": 489,
+        "kind": "bossHit",
+        "detail": 38
+      },
+      {
+        "tick": 497,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 497,
+        "kind": "bossHit",
+        "detail": 37
+      },
+      {
+        "tick": 505,
+        "kind": "bossHit",
+        "detail": 36
+      },
+      {
+        "tick": 513,
+        "kind": "bossHit",
+        "detail": 35
+      },
+      {
+        "tick": 521,
+        "kind": "bossHit",
+        "detail": 34
+      },
+      {
+        "tick": 529,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 529,
+        "kind": "bossHit",
+        "detail": 33
+      },
+      {
+        "tick": 537,
+        "kind": "bossHit",
+        "detail": 32
+      },
+      {
+        "tick": 545,
+        "kind": "bossHit",
+        "detail": 31
+      },
+      {
+        "tick": 552,
+        "kind": "bossBurst",
+        "detail": 8
+      },
+      {
+        "tick": 553,
+        "kind": "playerDash",
+        "detail": 4
+      },
+      {
+        "tick": 553,
+        "kind": "bossHit",
+        "detail": 30
+      },
+      {
+        "tick": 561,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 561,
+        "kind": "bossHit",
+        "detail": 29
+      },
+      {
+        "tick": 569,
+        "kind": "bossHit",
+        "detail": 28
+      },
+      {
+        "tick": 577,
+        "kind": "bossHit",
+        "detail": 27
+      },
+      {
+        "tick": 585,
+        "kind": "bossHit",
+        "detail": 26
+      },
+      {
+        "tick": 593,
+        "kind": "bossHit",
+        "detail": 25
+      },
+      {
+        "tick": 601,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 601,
+        "kind": "bossHit",
+        "detail": 24
+      },
+      {
+        "tick": 609,
+        "kind": "bossHit",
+        "detail": 23
+      },
+      {
+        "tick": 617,
+        "kind": "bossHit",
+        "detail": 22
+      },
+      {
+        "tick": 626,
+        "kind": "bossHit",
+        "detail": 21
+      },
+      {
+        "tick": 631,
+        "kind": "bossSlamStart"
+      },
+      {
+        "tick": 633,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 633,
+        "kind": "bossHit",
+        "detail": 20
+      },
+      {
+        "tick": 642,
+        "kind": "bossHit",
+        "detail": 19
+      },
+      {
+        "tick": 650,
+        "kind": "bossHit",
+        "detail": 18
+      },
+      {
+        "tick": 658,
+        "kind": "bossHit",
+        "detail": 17
+      },
+      {
+        "tick": 665,
+        "kind": "playerDash",
+        "detail": 7
+      },
+      {
+        "tick": 665,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 665,
+        "kind": "bossHit",
+        "detail": 16
+      },
+      {
+        "tick": 671,
+        "kind": "bossSlamMiss",
+        "detail": 24.5575
+      },
+      {
+        "tick": 672,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 673,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 673,
+        "kind": "bossHit",
+        "detail": 15
+      },
+      {
+        "tick": 674,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 675,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 676,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 677,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 678,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 679,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 680,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 681,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 681,
+        "kind": "bossHit",
+        "detail": 14
+      },
+      {
+        "tick": 682,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 683,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 684,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 685,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 686,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 687,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 688,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 689,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 689,
+        "kind": "bossHit",
+        "detail": 13
+      },
+      {
+        "tick": 690,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 691,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 692,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 693,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 694,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 695,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 696,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 697,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 697,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 697,
+        "kind": "bossHit",
+        "detail": 12
+      },
+      {
+        "tick": 698,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 699,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 700,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 701,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 702,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 703,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 704,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 705,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 705,
+        "kind": "bossHit",
+        "detail": 11
+      },
+      {
+        "tick": 706,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 707,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 708,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 709,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 710,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 711,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 712,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 713,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 713,
+        "kind": "bossHit",
+        "detail": 10
+      },
+      {
+        "tick": 714,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 715,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 716,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 717,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 718,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 719,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 720,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 721,
+        "kind": "violation",
+        "detail": "spawn at minion cap (2 alive)"
+      },
+      {
+        "tick": 721,
+        "kind": "bossHit",
+        "detail": 9
+      },
+      {
+        "tick": 729,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 729,
+        "kind": "bossHit",
+        "detail": 8
+      },
+      {
+        "tick": 738,
+        "kind": "bossHit",
+        "detail": 7
+      },
+      {
+        "tick": 745,
+        "kind": "bossHit",
+        "detail": 6
+      },
+      {
+        "tick": 754,
+        "kind": "bossHit",
+        "detail": 5
+      },
+      {
+        "tick": 761,
+        "kind": "playerShot"
+      },
+      {
+        "tick": 762,
+        "kind": "bossHit",
+        "detail": 4
+      },
+      {
+        "tick": 770,
+        "kind": "bossHit",
+        "detail": 3
+      },
+      {
+        "tick": 778,
+        "kind": "bossHit",
+        "detail": 2
+      },
+      {
+        "tick": 786,
+        "kind": "bossHit",
+        "detail": 1
+      },
+      {
+        "tick": 794,
+        "kind": "bossHit",
+        "detail": 0
+      },
+      {
+        "tick": 794,
+        "kind": "outcome",
+        "detail": "playerWon"
+      }
+    ],
+    "timelineTotal": 276
+  }
+}

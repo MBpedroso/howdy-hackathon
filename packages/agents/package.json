@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Analyst + Coder agents, context assembly, and the autonomous rewrite loop (spec §6.3, §8).",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -11,11 +12,16 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "eval": "node --experimental-strip-types scripts/eval.ts",
+    "gen-canned": "node --experimental-strip-types scripts/gen-canned.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.0",
     "@rematch/contract": "workspace:*",
-    "@rematch/harness": "workspace:*"
+    "@rematch/engine": "workspace:*",
+    "@rematch/harness": "workspace:*",
+    "diff": "^8.0.2"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
