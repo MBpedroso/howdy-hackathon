@@ -24,7 +24,7 @@ import {
   type ReplaySummary,
 } from '@rematch/engine';
 import type { StrategyRunner } from '@rematch/contract';
-import { createSandbox, type SandboxFactory, type SandboxOptions } from '@rematch/sandbox';
+import { createSandbox, monotonicClock, type SandboxFactory, type SandboxOptions } from '@rematch/sandbox';
 import type { PlayerBot } from '../bots/index.ts';
 
 export type MatchResult = {
@@ -118,7 +118,9 @@ export async function runMatch(
   if (typeof target !== 'string') return runMatchWith(target, bot, seed);
 
   const sandbox = opts.sandbox ?? (await getSandbox());
-  const runner = sandbox.load(target, opts.sandboxOptions ?? {});
+  // Monotonic by default, overridable: a match is a measurement, so it must not
+  // depend on what else the machine was doing. See `sim/worker.ts` for the numbers.
+  const runner = sandbox.load(target, { now: monotonicClock(), ...opts.sandboxOptions });
   try {
     return runMatchWith(runner, bot, seed);
   } finally {

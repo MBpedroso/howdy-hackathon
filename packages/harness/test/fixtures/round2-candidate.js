@@ -20,6 +20,12 @@ const BURST_MIN_RANGE = 260;
 const BURST_MAX_RANGE = 430;
 const REFRESH_TICKS = 60;
 const SPAWN_EVERY = 420;
+// The patrol the boss walks across its chosen cell when nothing is off cooldown.
+// See note 5: this exists so `decide` has no `idle` branch at all.
+// `PATROL_RADIUS / PATROL_LEG` is 2.59 px/tick, just under the boss's own 2.6, so
+// the boss tracks the patrol target exactly and is never left standing.
+const PATROL_RADIUS = 44;
+const PATROL_LEG = 34;
 
 export function init() {
   return { hot: -1, refreshedAt: -1, lastSpawn: -999 };
@@ -84,11 +90,41 @@ export function decide(view, mem) {
   if (dist < HOLD_RANGE - 60) {
     return { type: 'move', dx: -dx / Math.max(dist, 0.001), dy: -dy / Math.max(dist, 0.001) };
   }
-  // Drift towards the habit so the next slam lands before the player leaves it.
-  const tx = hotX - boss.x;
+
+  // 5. Patrol the habit — and *never* return `idle`.
+  //
+  //    The earlier version drifted to the centre of the hot cell and, once within
+  //    6 px of it, returned `idle`. That is a stall waiting to happen, and it did:
+  //    the heat map is cumulative and never decays, so the "habit" can be a cell
+  //    the player left twenty seconds ago. Parked on a stale cell, with the player
+  //    outside the slam box (±1.6 cells) and outside the burst window
+  //    (260–430 px), every branch above declines and the boss stands perfectly
+  //    still until a cooldown expires. Against the recorded playtest log that was
+  //    219 idle ticks out of 510 and one motionless run of 263 ticks — 4.4 seconds
+  //    of a boss that looks crashed. No gate caught it: `idle` is a legal action,
+  //    it costs no cooldown, it is not a contract violation, and Gate 3 only reads
+  //    the win rate, which stayed in band.
+  //
+  //    So the resting state is a patrol across the habit instead of a full stop:
+  //    a triangle wave in x through the cell's centre, +-`PATROL_RADIUS` (44 px,
+  //    well inside the 100 px cell, so the boss still reads as guarding it and the
+  //    next slam still lands from here).
+  //
+  //    **Straight legs, on purpose.** The first fix here was a circular orbit, and
+  //    it took the panel win rate from 0.38 to 0.72 — "too hard" — because every
+  //    reference bot (and every competent human) leads its shots off the boss's
+  //    *last-tick velocity*, and a curve defeats a linear lead permanently. A boss
+  //    that is unhittable by construction is not a harder boss, it is a broken
+  //    one. A 34-tick straight leg is led correctly for 33 of its 34 ticks, so the
+  //    patrol keeps the boss visibly alive without making it bullet-proof.
+  const phase = view.tick % (PATROL_LEG * 2);
+  const leg = phase < PATROL_LEG ? phase : PATROL_LEG * 2 - phase;
+  const tx = hotX + ((leg / PATROL_LEG) * 2 - 1) * PATROL_RADIUS - boss.x;
   const ty = hotY - boss.y;
   const tmag = Math.sqrt(tx * tx + ty * ty);
-  if (tmag < 6) return { type: 'idle' };
+  // The patrol target is under the boss this tick. It moves every tick, so this
+  // cannot repeat: nudge along the patrol axis rather than returning `idle`.
+  if (tmag < 0.001) return { type: 'move', dx: phase < PATROL_LEG ? 1 : -1, dy: 0 };
   return { type: 'move', dx: tx / tmag, dy: ty / tmag };
 }
 

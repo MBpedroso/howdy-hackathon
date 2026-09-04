@@ -327,6 +327,70 @@ Remaining open: AC 4 (playtest) and AC 9 (deploy) — both below, both needing a
 
 ---
 
+## 2026-09-04 — a no-API local option: the `claude-cli` provider
+
+**Human.** Asked for a way to run the Analyst/Coder loop **without an API key at all**,
+on the Claude Code subscription already installed on this machine, for local dev,
+playtests and the demo video. Explicit budget for the work: at most six real CLI
+invocations, and no `pnpm eval:agents`.
+
+**Agent.** `packages/agents/src/providerClaudeCli.ts` — `claudeCliProvider()`, a fourth
+`LLMProvider` that spawns one `claude -p --output-format stream-json --verbose
+--include-partial-messages` subprocess per model call, prompt on stdin, and parses the
+stream-json lines into the same `{text} … {done}` events the API providers emit.
+`REMATCH_PROVIDER=claude-cli` selects it; `/api/health` reports it by that name rather
+than as `anthropic`, because whose wallet paid is not something a demo should be vague
+about.
+
+Three decisions inside it are worth recording.
+
+1. **No tools, and this is a correctness argument rather than hygiene.** `--tools ''`,
+   `--strict-mcp-config` and `--safe-mode` give a pure text completion — the CLI's own
+   `init` event confirms `"tools": []`. Without them the Coder would be handed `Read`
+   and `Bash` *in the repo it is being evaluated in*, and the project's central claim is
+   that the harness decides what ships. An agent that can read `packages/harness/` is
+   not writing a strategy, it is reading the answer key.
+2. **The API-key variables are stripped from the child's environment.** The CLI prefers
+   a key over the logged-in session, so a key inherited from `.env` would silently bill
+   the account this provider exists to avoid. `"apiKeySource": "none"` in the `init`
+   event is the proof it worked.
+3. **`auto` never picks it.** A binary on `PATH` is not a credential and not a decision
+   anyone made. It is opt-in by name, on a local machine — the deployed server has no
+   session logged in and would spawn a subprocess only to fail.
+
+**What the smoke test found, which is the interesting part.** Five real CLI calls: one to
+learn the event shapes, one Analyst prompt, three Coder prompts. The Analyst parsed
+first try and read `mimic-camper` correctly as a `camper` in 19.4 s. The first Coder call
+**hit the 60 s timeout guard** — and the second, with the guard raised, explained why:
+**145.7 s, 126 s of it before the first text delta, 13 456 output tokens for a
+5 486-character reply.** Almost all of that was thinking, inherited from the developer's
+own Claude Code session effort setting.
+
+So the provider passes `--effort low` by default, the same trade `OPENAI_DEFAULT_EFFORT`
+makes and for the same reason: the Coder writes ~80 lines against a frozen contract with
+a deterministic verifier behind it, so an extra attempt is cheap and two extra minutes of
+deliberation is the one thing a 45 s interlude cannot buy. The third Coder call, at
+`low`: **17.6 s, 1 549 output tokens, one fenced `js` block, 82 lines, `staticCheck`
+PASS on the first try** — same result, 8x faster. Both replies passed; only the clock
+differed, which is exactly the shape that makes the low setting the right default rather
+than a compromise.
+
+**The honest caveat.** Even at `low` this path is slower than the API providers, because
+a CLI turn is a whole Claude Code session start (~18 s per Coder call against a 40 s
+loop deadline). It is the *playtest and demo-rehearsal* provider, not the one AC 5's 45 s
+was measured against — the docs say to raise `REMATCH_DEADLINE_MS` with it and to keep
+`?agent=recorded` for anything that has to hit 45 s. The CLI's own five-hour rate limit
+also applies and is invisible to the loop until it bites.
+
+29 new tests in `packages/agents/test/providerClaudeCli.test.ts`, all against an injected
+fake `spawn` — **`pnpm verify` still launches no CLI and spends nothing**, which on this
+path matters more than before: a token here is a slice of the developer's subscription
+rather than a line on an invoice. Two of the tests found real bugs while being written:
+a double SIGTERM on the normal abort path (the `finally` terminating after `onAbort`
+already had) and a blank `REMATCH_CLI_TIMEOUT_MS` parsing as a 0 ms timeout.
+
+---
+
 ## What went wrong
 
 Kept because the failures are the interesting part of a parallel-agent build.

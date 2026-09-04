@@ -5,7 +5,7 @@
  * ```ts
  * import { rewrite, selectProvider } from '@rematch/agents';
  *
- * const selection = selectProvider();          // REMATCH_PROVIDER: anthropic | openai | auto
+ * const selection = selectProvider();   // REMATCH_PROVIDER: anthropic | openai | claude-cli | auto
  * if (selection.vendor === null) shipFallback(selection.reason);
  *
  * const result = await rewrite(
@@ -67,6 +67,31 @@ export {
   type ProviderSelection,
   type ProviderVendor,
 } from './provider.ts';
+
+export {
+  CLAUDE_BIN_ENV,
+  CLAUDE_CLI_DEFAULT_MODEL,
+  CLI_DEFAULT_EFFORT,
+  CLI_EFFORT_VALUES,
+  CLI_KILL_GRACE_MS,
+  CLI_STRIPPED_ENV,
+  CLI_TIMEOUT_DEFAULT_MS,
+  CLI_TIMEOUT_ENV,
+  claudeCliArgs,
+  claudeCliPrompt,
+  claudeCliProvider,
+  cliExitError,
+  cliMissingError,
+  parseCliLine,
+  readEffort,
+  readTimeoutMs,
+  type ClaudeCliProviderOptions,
+  type CliChildLike,
+  type CliReadableLike,
+  type CliResultEvent,
+  type CliSpawnLike,
+  type CliWritableLike,
+} from './providerClaudeCli.ts';
 
 export {
   ADAPT_DIALS,

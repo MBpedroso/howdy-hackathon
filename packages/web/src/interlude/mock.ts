@@ -5,7 +5,7 @@
  * no server, no API key and no network still plays the full four-beat interlude,
  * including a Gate 3 rejection and the fix, and hands the game a **real strategy**
  * to fight — `packages/harness/test/fixtures/round2-candidate.js`, the same file the
- * harness's balance suite measures at 0.52 vs the panel and 0.78 vs a Mimic. So the
+ * harness's balance suite measures at 0.45 vs the panel and 0.75 vs a Mimic. So the
  * fallback path in `?agent=mock` is honest: what the mock says was approved is a
  * strategy that really was.
  *
@@ -539,7 +539,11 @@ export function buildMockScript(req: RewriteRequest): MockScript {
     balanced: undefined,
     aggressive: { panel: 0.74, perBot: [1, 0.68, 0.96, 0.32], mimic: 0.86 },
     approved: 'balanced',
-    approvedRates: { panel: 0.52, perBot: [1, 0.24, 0.6, 0.24], mimic: 0.78 },
+    // The real Gate 3 numbers for `round2-candidate.js` at the spec's 200 matches
+    // (`pnpm test:harness`, "approves the hand-written Round 2 candidate"). Canned,
+    // but not invented: if the fixture changes, these have to be re-measured, and
+    // `test/mock-source.test.ts` keeps the claim tied to the band.
+    approvedRates: { panel: 0.45, perBot: [0.64, 0.52, 0, 0.64], mimic: 0.75 },
   });
   // The middle candidate is the real fixture, byte for byte, because it is the file
   // the game is about to run — only its name carries the suffix.

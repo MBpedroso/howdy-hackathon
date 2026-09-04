@@ -44,6 +44,21 @@ import { buildBossView } from './view.ts';
 const TAU = Math.PI * 2;
 const HEAT_COLS = 8;
 
+/**
+ * Consecutive `timeout` failures before the round reports `strategyKilled`.
+ *
+ * A `memory` failure is sticky inside the sandbox — the runner keeps reporting it,
+ * the strategy really is dead — so one is enough. A `timeout` is not: the budget is
+ * wall clock, the next call may well succeed, and one blown deadline in a live tab
+ * means the browser was busy for a moment. Reporting that as "the sandbox killed
+ * your strategy" is a lie the Analyst agent then reads back in its prompt.
+ *
+ * 30 ticks is half a second of a strategy that cannot answer at all. Below that it
+ * is one idle tick and one violation, which is what a hiccup deserves; the counters
+ * (`violations`, and `runnerStats` in the client) still show every one of them.
+ */
+export const TIMEOUT_KILL_STREAK = 30;
+
 function dec(v: number): number {
   return v > 0 ? v - 1 : 0;
 }
@@ -343,10 +358,16 @@ function updateBoss(state: GameState, runner: StrategyRunner): void {
   let action: BossAction = { type: 'idle' };
   if (!result.ok) {
     pushViolation(state, `runner ${result.failure.kind}`);
-    if (result.failure.kind === 'timeout' || result.failure.kind === 'memory') {
+    if (result.failure.kind === 'memory') {
       state.strategyKilled = true;
+    } else if (result.failure.kind === 'timeout') {
+      state.timeoutStreak += 1;
+      if (state.timeoutStreak >= TIMEOUT_KILL_STREAK) state.strategyKilled = true;
+    } else {
+      state.timeoutStreak = 0;
     }
   } else {
+    state.timeoutStreak = 0;
     const validated = validateAction(result.action, view);
     if (validated.ok) {
       action = validated.action;

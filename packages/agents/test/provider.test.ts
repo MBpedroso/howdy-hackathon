@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AbortError,
+  CLAUDE_CLI_DEFAULT_MODEL,
   DEFAULT_MODEL,
   EFFORT_OFF,
   MODEL_ENV,
@@ -393,7 +394,7 @@ describe('selectProvider', () => {
   const cases: {
     what: string;
     env: Record<string, string | undefined>;
-    vendor: 'anthropic' | 'openai' | null;
+    vendor: 'anthropic' | 'openai' | 'claude-cli' | null;
     model: string | null;
   }[] = [
     { what: 'no key at all → fallback-only (spec AC 1)', env: {}, vendor: null, model: null },
@@ -438,6 +439,28 @@ describe('selectProvider', () => {
       vendor: 'openai',
       model: OPENAI_DEFAULT_MODEL,
     },
+    {
+      // The CLI carries its own credential — the developer's logged-in subscription —
+      // so asking for it *is* the opt-in and there is no key to check.
+      what: 'explicit claude-cli needs no key at all',
+      env: { REMATCH_PROVIDER: 'claude-cli' },
+      vendor: 'claude-cli',
+      model: CLAUDE_CLI_DEFAULT_MODEL,
+    },
+    {
+      what: 'explicit claude-cli ignores both API keys — it spends neither',
+      env: { ...ANTHROPIC, ...OPENAI, REMATCH_PROVIDER: 'CLAUDE-CLI' },
+      vendor: 'claude-cli',
+      model: CLAUDE_CLI_DEFAULT_MODEL,
+    },
+    {
+      // The one case this table exists to pin: `auto` must never spawn a subprocess.
+      // A binary on PATH is not a credential and not a decision anyone made.
+      what: 'auto never picks claude-cli, even with the binary installed',
+      env: { REMATCH_CLAUDE_BIN: '/usr/local/bin/claude' },
+      vendor: null,
+      model: null,
+    },
   ];
 
   for (const c of cases) {
@@ -469,9 +492,27 @@ describe('selectProvider', () => {
     expect(() => chosen.create()).toThrow(/fallback-only/);
   });
 
+  it('builds a CLI provider, on a model alias rather than an API model id', () => {
+    const chosen = selectProvider({ REMATCH_PROVIDER: 'claude-cli' });
+    expect(chosen.requested).toBe('claude-cli');
+    expect(chosen.models).toEqual({ analyst: 'sonnet', coder: 'sonnet' });
+    const pair = chosen.create();
+    expect(pair.analyst.name).toBe('claude-cli:sonnet');
+    expect(pair.coder.name).toBe('claude-cli:sonnet');
+  });
+
+  it('lets the per-agent model overrides through to the CLI, as CLI aliases', () => {
+    const chosen = selectProvider({ REMATCH_PROVIDER: 'claude-cli', REMATCH_CODER_MODEL: 'opus' });
+    expect(chosen.models).toEqual({ analyst: 'sonnet', coder: 'opus' });
+    expect(chosen.model).toBe('opus');
+    expect(chosen.create().coder.name).toBe('claude-cli:opus');
+  });
+
   it('names the unknown value so a typo in .env is findable', () => {
     expect(selectProvider({ OPENAI_API_KEY: 'o', REMATCH_PROVIDER: 'gpt' }).reason).toMatch(/ignoring REMATCH_PROVIDER/);
     expect(selectProvider({ OPENAI_API_KEY: 'o', REMATCH_PROVIDER: 'gpt' }).requested).toBe('auto');
+    // The message has to list every accepted value, including the newest one.
+    expect(selectProvider({ REMATCH_PROVIDER: 'cli' }).reason).toMatch(/anthropic, openai, claude-cli or auto/);
   });
 });
 

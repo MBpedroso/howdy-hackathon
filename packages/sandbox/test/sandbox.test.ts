@@ -5,7 +5,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CONSTANTS, validateAction, type StrategyRunner } from '@rematch/contract';
-import { createSandbox, SandboxLoadError, type SandboxFactory } from '../src/index.ts';
+import { createSandbox, monotonicClock, MONOTONIC_STEP_MS, SandboxLoadError, type SandboxFactory } from '../src/index.ts';
 import { GOOD_FIXTURES, makeView, readGoodFixture, strategy } from './helpers.ts';
 
 let sandbox: SandboxFactory;
@@ -92,6 +92,51 @@ describe('time budget', () => {
       SandboxLoadError,
     );
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  /**
+   * The monotonic clock is what every *reproducible* caller passes — the harness
+   * simulator and both sides of an AC 3 replay — so the containment guarantee has to
+   * survive it. It does, in a different currency: the budget stops bounding
+   * milliseconds and starts bounding interrupt polls, because the interrupt handler
+   * is itself what advances the clock.
+   */
+  it('an infinite loop is still caught on the monotonic clock, deterministically', () => {
+    const source = strategy('while (true) {}');
+    const failures: Array<{ kind: string; ms?: number }> = [];
+    for (let run = 0; run < 2; run += 1) {
+      const runner = sandbox.load(source, { now: monotonicClock() });
+      try {
+        runner.init(1);
+        const started = performance.now();
+        const result = runner.decide(makeView());
+        // Bounded in wall clock too: ~256 polls of the handler, ~35 ms in practice.
+        expect(performance.now() - started).toBeLessThan(500);
+        expect(result.ok).toBe(false);
+        if (!result.ok) failures.push({ kind: result.failure.kind, ms: result.elapsedMs });
+      } finally {
+        runner.dispose();
+      }
+    }
+    expect(failures.map((f) => f.kind)).toEqual(['timeout', 'timeout']);
+    // The whole point: the reported cost is identical run to run, and it is a
+    // multiple of the clock step rather than whatever the machine was doing.
+    expect(failures[0]?.ms).toBe(failures[1]?.ms);
+    expect((failures[0]?.ms ?? 0) / MONOTONIC_STEP_MS).toBe(
+      Math.round((failures[0]?.ms ?? 0) / MONOTONIC_STEP_MS),
+    );
+  });
+
+  it('a healthy strategy on the monotonic clock never times out', () => {
+    const runner = sandbox.load(readGoodFixture('cornerbreaker'), { now: monotonicClock() });
+    try {
+      runner.init(1);
+      for (let i = 0; i < 200; i += 1) {
+        expect(runner.decide(makeView({ tick: i })).ok, `tick ${i}`).toBe(true);
+      }
+    } finally {
+      runner.dispose();
+    }
   });
 
   it('a runaway init is a timeout, not a hang', () => {

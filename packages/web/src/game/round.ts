@@ -17,6 +17,7 @@ import {
   type ReplaySummary,
 } from '@rematch/engine';
 
+import { recordingRunner, type RunnerStats } from './runnerStats.ts';
 import { loadRoundStrategy } from './strategy.ts';
 
 export type Round = {
@@ -35,6 +36,8 @@ export type Round = {
   tick(input: PlayerInput): GameState['outcome'];
   hash(): string;
   summary(): ReplaySummary;
+  /** `decide` counters for this round. See `runnerStats.ts`. */
+  runnerStats(): RunnerStats;
   dispose(): void;
 };
 
@@ -52,7 +55,9 @@ export type CreateRoundOptions = {
  */
 export async function createRound(options: CreateRoundOptions): Promise<Round> {
   const deterministic = options.deterministic === true;
-  const runner = await loadRoundStrategy(options.source, { deterministic });
+  // Wrapped before `createGame`, so `init(seed)` and every `decide` of the round go
+  // through the counters — including the ones the HUD reports as "stalled".
+  const runner = recordingRunner(await loadRoundStrategy(options.source, { deterministic }));
   const state = createGame(options.seed, runner);
   const inputLog: InputLog = [];
 
@@ -74,6 +79,9 @@ export async function createRound(options: CreateRoundOptions): Promise<Round> {
     },
     summary(): ReplaySummary {
       return summarizeReplay(state);
+    },
+    runnerStats(): RunnerStats {
+      return runner.stats();
     },
     dispose(): void {
       runner.dispose();

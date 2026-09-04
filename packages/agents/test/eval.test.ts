@@ -29,6 +29,16 @@ const ANALYSIS: Analysis = {
   counterPlan: 'Slam the bottom-right corner and hold mid range.',
 };
 
+/**
+ * Gate 3 matches per run. 60, not the 16 this used to pass: 16 is 2 matches per
+ * panel bot, and a win rate sampled from 2 matches moves in steps of 0.5. The
+ * suite's subject is the aggregation, but it can only aggregate an *approval*, so
+ * the gate underneath it has to be measuring something. At 16 the approval of
+ * `round2-candidate` was luck — it read 0.25 against the band's 0.35–0.50 the
+ * moment the fixture changed at all, while the same source reads 0.45 at 120.
+ */
+const MATCHES = 60;
+
 const tmp = mkdtempSync(join(tmpdir(), 'rematch-eval-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -53,7 +63,7 @@ describe('runEval', () => {
   it('runs every replay and scores the pass rate', async () => {
     report = await runEval({
       names: ['camper-a', 'dodger-a', 'kiter-a'],
-      matches: 16,
+      matches: MATCHES,
       maxAttempts: 2,
       // One file per attempt: this suite scripts the Coder call by call, and its
       // subject is the aggregation, not the parallel-candidate search.
@@ -75,7 +85,7 @@ describe('runEval', () => {
     expect(report.approved).toBe(2);
     expect(report.passRate).toBeCloseTo(2 / 3);
     expect(report.round).toBe(2);
-    expect(report.matches).toBe(16);
+    expect(report.matches).toBe(MATCHES);
     expect(report.models).toEqual({ analyst: 'mock-analyst', coder: 'mock-coder' });
     expect(report.target).toBe(PASS_RATE_TARGET);
   });

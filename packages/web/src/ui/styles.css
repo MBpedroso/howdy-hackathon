@@ -133,6 +133,13 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* A strategy that is violating the contract, or that the sandbox killed. The
+   diagnostics line is the only place a stalled boss is distinguishable from a boss
+   that chose to stand still, so it changes colour rather than staying grey. */
+.hud-foot.warn {
+  color: var(--slam);
+}
+
 /* --------------------------------------------------------------- screens */
 
 #screen.active {

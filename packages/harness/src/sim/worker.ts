@@ -16,7 +16,7 @@
  */
 import { isMainThread, parentPort } from 'node:worker_threads';
 import type { StrategyRunner } from '@rematch/contract';
-import { createSandbox } from '@rematch/sandbox';
+import { createSandbox, monotonicClock } from '@rematch/sandbox';
 import type { PlayerBot } from '../bots/index.ts';
 import { runMatchWith } from './runMatch.ts';
 import { botFromSpec, type FromWorker, type ToWorker } from './protocol.ts';
@@ -40,7 +40,16 @@ async function handle(message: ToWorker): Promise<void> {
     case 'init': {
       const started = performance.now();
       const sandbox = await createSandbox();
-      runner = sandbox.load(message.source);
+      // The monotonic clock, not `performance.now`: a simulated match must produce
+      // the same result on every machine and in every worker (spec §6.2, "fixed
+      // seed set -> identical results"). With wall clock, one GC pause inside one
+      // `decide` is a `timeout`, which the engine records as a violation and an
+      // idle tick — and the match diverges from the same match run anywhere else.
+      // Measured before this change: 2 phantom violations per 60 matches for a
+      // strategy that commits none, and 0.43 / 0.45 vs the panel on back-to-back
+      // runs of the same source. The budget still bounds the strategy, in interrupt
+      // polls rather than in milliseconds; Gate 4 is where real time is judged.
+      runner = sandbox.load(message.source, { now: monotonicClock() });
       bots = message.specs.map(botFromSpec);
       send({ type: 'ready', loadMs: performance.now() - started });
       return;

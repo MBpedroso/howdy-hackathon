@@ -232,10 +232,66 @@ __rematch.seed           // this round's seed; sessionSeed and round are there t
 __rematch.hash()         // hashState(state) — the equality witness for AC 3
 __rematch.summary()      // summarizeReplay(state) — what the Analyst agent will read
 __rematch.stats()        // avg tick / render ms, dropped ticks
+__rematch.runnerStats()  // decide counters: calls, idle, failures by kind, p50/p99 ms
 __rematch.startRound(n)  // jump to a round
 await __rematch.driveWith(log)   // restart this round and replay a recorded input log
 __rematch.fastForward(n)         // run n ticks synchronously, no rAF
 ```
+
+## When the boss stands still
+
+A playtester reported: *"after winning Round 1 the interlude ran and the Round 2 boss
+just stood still in a corner of the screen for the whole round."* It really did, and the
+useful part of the story is that **four different causes produce that exact picture** and
+nothing on screen told them apart:
+
+| Cause | What the engine does | What you would have seen |
+|---|---|---|
+| The strategy returned `{type:'idle'}` | applies it — a legal action, no cooldown, no violation | nothing |
+| The strategy returned an invalid action | `idle` + a violation | nothing |
+| `decide` blew its deadline | `idle` + a violation, and (after a streak) `strategyKilled` | nothing |
+| The strategy ran out of memory | `idle` + a violation, sticky forever | nothing |
+
+It was the first row: `round2-candidate.js` drifted onto the centre of the player's
+hottest heat cell and idled from then on, because the heat map is cumulative and never
+decays, so the "habit" was a cell the player had left. 219 idle ticks out of 510 against
+the recorded playtest log, one motionless run of 263 ticks, and **zero** violations.
+
+Two things changed so the next one is a five-second diagnosis:
+
+1. **The HUD's diagnostics line carries the counters** (`src/ui/hud.ts`,
+   `formatRunnerLine`). `d 0.03/0.11ms` is the `decide` p50/p99; then, only when they are
+   worth reading, `idle 43%`, `viol 12`, `2 timeout`, `x14` (the longest run of
+   *consecutive* failures) and `KILLED`. The line turns amber when any of them fires, so
+   "the boss is stalling" is legible from the back of a room instead of being guessed at.
+2. **`__rematch.runnerStats()`** exposes the same numbers to a test.
+   `e2e/boss-activity.spec.ts` is the regression test: it replays the recorded human log
+   into Round 2 and asserts the boss travels, is never motionless for more than 90 ticks,
+   and is not failing quietly. (The travel assertion alone is not enough — the frozen
+   version still travelled 400 px before it parked. The motionless-run bound is the one
+   that catches it.)
+
+The same `idle` fallback is in nearly every hand-written strategy here, including
+`src/strategies/round1.js` (888 motionless ticks against a kiting player). Those are
+balance changes as well as bug fixes and are tracked in `docs/SYSTEM.md` §9;
+`packages/harness/test/activity.test.ts` carries the survey.
+
+## The `decide` deadline is not the same number in live play
+
+`CONSTANTS.limits.decideBudgetMs` is 2 ms. That is a **harness** number: it is the frame
+budget a strategy promises to keep, and Gate 4 is where the promise is judged — against
+the p99, over ~2000 calls. Enforcing the same 2 ms *per call* against `performance.now`
+in a live tab measures something else: whether the browser scheduled a GC or a compositor
+pass inside this one call. Measured p99 in headless Chromium is 0.3 ms for every shipped
+strategy (0.06 ms in Node), so there is 6x of headroom — and a single scheduling hiccup
+still blows it, and the engine answers a blown deadline with an idle tick.
+
+So `src/game/strategy.ts` multiplies the budget by `LIVE_BUDGET_FACTOR` (10x → 20 ms) for
+live play. The sandbox is unchanged and a runaway `while (true)` is still stopped inside a
+frame; that containment is the only thing the live deadline is for. The *deterministic*
+guarantee belongs to replays and to the harness simulation, both of which run the sandbox
+on the monotonic clock (`@rematch/sandbox`'s `monotonicClock`), where the budget bounds
+work rather than wall time.
 
 ## Determinism (spec AC 3)
 
@@ -252,11 +308,12 @@ hash Node computed. Two tests guard it:
 `e2e/interlude.spec.ts` uses the same log for a different reason: it is the cheapest
 way to reach a *won* round, which is the only state the interlude exists in.
 
-Both sides inject the sandbox's deterministic clock (`src/game/clock.ts`). A real clock
-would make replays *slightly* non-reproducible: the sandbox enforces the 2 ms `decide`
-deadline against `now()`, and a GC pause can push one call over budget, which the engine
-turns into `idle` + a violation. Live play keeps `performance.now`, where that deadline is
-a containment control and must be real.
+Both sides inject the sandbox's monotonic clock (`src/game/clock.ts`, which now re-exports
+`monotonicClock` from `@rematch/sandbox` so the harness simulator can use the identical
+one). A real clock would make replays *slightly* non-reproducible: the sandbox enforces the
+`decide` deadline against `now()`, and a GC pause can push one call over budget, which the
+engine turns into `idle` + a violation. Live play keeps `performance.now` and the relaxed
+budget above, where that deadline is a containment control and must be real.
 
 Regenerate after any engine or strategy change:
 

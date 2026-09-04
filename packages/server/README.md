@@ -27,6 +27,16 @@ different models. `auto` prefers Anthropic when both keys are set; an *explicit*
 `REMATCH_PROVIDER` whose key is missing selects fallback-only rather than quietly billing
 the other vendor, and `/api/health` says which happened.
 
+**And there is a third live mode that costs no API credit: `REMATCH_PROVIDER=claude-cli`**,
+which runs the loop on the developer's **Claude Code subscription** by spawning the
+installed `claude` binary (`claude -p --output-format stream-json`, no tools, no MCP, no
+hooks). It needs no key at all — the CLI holds its own login — which is exactly why
+`auto` never selects it: it has to be asked for by name. **Local machine only.** On the
+deployed server there is no CLI session logged in, so every rewrite would spawn a
+subprocess only to fail and fall back four beats late. It is also slower than the API
+path (~18 s per Coder call, measured), so raise `REMATCH_DEADLINE_MS` when using it and
+keep `?agent=recorded` for anything that has to hit AC 5's 45 s.
+
 **For local development, set `REMATCH_PROVIDER=none`** — it is what `.env.example` ships
 with. `none` forces fallback-only *even when a valid key is present*, so the off switch
 does not require deleting your credential (`src/providers.ts` explains why it is handled
@@ -38,10 +48,13 @@ game stays fully playable, and the demo has a free source that is real model out
 |---|---|
 | `OPENAI_API_KEY` | present → the real loop runs on OpenAI |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | present → the real loop runs on Anthropic |
-| `REMATCH_PROVIDER` | **`none`** (recommended locally) \| `anthropic` \| `openai` \| `auto` (default). `none`, or no usable credential → fallback-only |
+| `REMATCH_PROVIDER` | **`none`** (recommended locally) \| `anthropic` \| `openai` \| `claude-cli` \| `auto` (default). `none`, or no usable credential → fallback-only |
+| `REMATCH_PROVIDER=claude-cli` | the real loop on your Claude Code subscription, no API key. **Local machine only** — not the deployed server. `/api/health` reports `provider: "claude-cli"` |
+| `REMATCH_CLAUDE_BIN` | path to the `claude` binary, default `claude` on `PATH` |
+| `REMATCH_CLI_TIMEOUT_MS` | per-call guard on the CLI subprocess, default 60 000 |
 | `REMATCH_MAX_REWRITES_PER_DAY` | global cap on rewrites this server pays for, per UTC day. Default 50; `0` = never spend |
 | `REMATCH_MODEL`, `REMATCH_ANALYST_MODEL`, `REMATCH_CODER_MODEL` | model per agent (`@rematch/agents`) |
-| `REMATCH_REASONING_EFFORT` | OpenAI only: `low` (default), `minimal`, `medium`, `high`, or `none` to omit the block |
+| `REMATCH_REASONING_EFFORT` | OpenAI: `low` (default), `minimal`, `medium`, `high`, `none`. `claude-cli`: `low` (default), `medium`, `high`, `xhigh`, `max`. `off` sends nothing on either |
 | `REMATCH_DEADLINE_MS` | loop deadline, default 40 000 |
 | `REMATCH_MATCHES` | Gate 3 matches per attempt, default 200 (spec §6.2) |
 | `REMATCH_WORKERS` | Gate 3 simulation threads, default `availableParallelism() - 1` |
@@ -156,6 +169,7 @@ up to 2 400 simulated matches. So:
 | Rate limit | 6 rewrites / 10 min **per IP**, token bucket | Four rewrites is a whole game (rounds 2-5), so it never bites on honest play. Charged before the body is read, refunded on a `400` |
 | **Daily spend cap** | **50 rewrites / UTC day, global** (`REMATCH_MAX_REWRITES_PER_DAY`) | The rate limit caps *one caller over ten minutes* and is no control on the total bill — 6 per 10 min is 864 rewrites a day. Past the cap the server serves **fallback-only** for the rest of the day (not a `429`: degrading to the honest no-key path keeps the demo playable) and logs once. Added after eleven eval runs in one evening exhausted the project's credit — see `docs/AI-DEV-LOG.md`, 2026-09-04 |
 | Provider off switch | `REMATCH_PROVIDER=none` | Fallback-only with the key left in place. The documented local-dev setting |
+| Subprocess guard | `REMATCH_CLI_TIMEOUT_MS` (60 s), SIGTERM → SIGKILL after 2 s | `claude-cli` only. A CLI turn that never answers must not hold the interlude open, and an aborted interlude must not leave a subprocess talking to the network. The two API-key variables are also stripped from the child's environment, so this mode cannot quietly bill a key instead of the subscription |
 | Body cap | 512 KB | A `ReplaySummary` is ~8 KB and `prevSource` is capped at 64 K chars |
 | CORS | allow-list: the Vite dev/preview ports, `VERCEL_URL`, `REMATCH_ORIGIN` | `POST /api/rewrite` spends money; any page on the internet must not be able to fire it from a visitor's browser |
 | Abort | client disconnect → `AbortSignal` → the provider stream | A closed tab must stop burning tokens |
@@ -183,7 +197,7 @@ pnpm --filter @rematch/server test      # ~7 s, no network, no API key
 | File | Covers |
 |---|---|
 | `rewrite.test.ts` | the endpoint over a socket: the four beats in order, `done` last, all four gates as separate events, a Gate 1 rejection reaching the client verbatim then approving, the max-attempts fallback, fallback-only mode, seeded pick stability, and a client disconnect aborting the provider's signal |
-| `providers.test.ts` | which vendor and model the server resolves from the environment, including fallback-only on a fresh clone |
+| `providers.test.ts` | which vendor and model the server resolves from the environment, including fallback-only on a fresh clone, `claude-cli` running with no key at all, and `auto` never choosing it |
 | `spendGuard.test.ts` | the daily cap against an injected clock (the UTC roll-over, the log-once rule), `REMATCH_PROVIDER=none` beating a present key, and the capped request producing a complete fallback-only stream rather than an error |
 | `http.test.ts` | health (`provider` and `model` for both vendors, plus `rewritesToday` / `dailyCap` / `spendGuard`), the fallback route, eight `400` shapes, `413`, `429` with `Retry-After`, CORS preflight and refusal, keep-alive comments, `404` |
 | `units.test.ts` | the token bucket against an injected clock (including the drip-back a socket test cannot show), the validator, the frame format, the log line |

@@ -75,6 +75,21 @@ describe('GET /api/health', () => {
     }
   });
 
+  it('reports the Claude Code CLI as its own provider, so the badge cannot say API', async () => {
+    // The local-machine mode. Whose wallet paid is exactly the kind of thing a demo
+    // must not be vague about, so `claude-cli` is a provider name of its own rather
+    // than `anthropic` with a footnote.
+    const server = await startServer({ env: { REMATCH_PROVIDER: 'claude-cli' } });
+    try {
+      const body = (await (await fetch(`${server.url}/api/health`)).json()) as Record<string, unknown>;
+      expect(body['hasApiKey']).toBe(true);
+      expect(body['provider']).toBe('claude-cli');
+      expect(body['model']).toBe('sonnet');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('names the vendor, not just the model, so the demo cannot lie about who it calls', async () => {
     const server = await startServer({ env: { OPENAI_API_KEY: 'sk-test', REMATCH_PROVIDER: 'openai' } });
     try {

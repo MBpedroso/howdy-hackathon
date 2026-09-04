@@ -3,9 +3,10 @@ import { CONSTANTS } from '@rematch/contract';
 import { ENGINE_CONSTANTS as E } from '../src/constants.ts';
 import { createGame } from '../src/game.ts';
 import { makeInput } from '../src/input.ts';
-import { dirBin, step } from '../src/step.ts';
+import { TIMEOUT_KILL_STREAK, dirBin, step } from '../src/step.ts';
 import { constantRunner, failingRunner, idleRunner, scriptedRunner } from './helpers.ts';
 import type { GameState } from '../src/state.ts';
+import type { StrategyRunner } from '@rematch/contract';
 
 function run(state: GameState, runner: Parameters<typeof step>[2], ticks: number, input = makeInput()): void {
   for (let i = 0; i < ticks; i += 1) step(state, input, runner);
@@ -416,14 +417,47 @@ describe('outcomes', () => {
 });
 
 describe('runner failures', () => {
-  it('sets strategyKilled on a timeout failure and keeps the round alive', () => {
+  it('answers a few timeouts with idle + a violation, and does NOT kill the strategy', () => {
+    // The deadline is wall clock. A handful of blown calls means the host was busy,
+    // not that the strategy is dead — the round must recover from it.
     const runner = failingRunner({ kind: 'timeout', ms: 6.2 });
     const state = createGame(1, runner);
-    run(state, runner, 3);
-    expect(state.strategyKilled).toBe(true);
-    expect(state.violations).toBe(3);
+    run(state, runner, TIMEOUT_KILL_STREAK - 1);
+    expect(state.strategyKilled).toBe(false);
+    expect(state.violations).toBe(TIMEOUT_KILL_STREAK - 1);
+    expect(state.timeoutStreak).toBe(TIMEOUT_KILL_STREAK - 1);
     expect(state.outcome).toBe('playing');
     expect(state.boss.lastAction).toBe('idle');
+  });
+
+  it('kills the strategy after TIMEOUT_KILL_STREAK consecutive timeouts', () => {
+    const runner = failingRunner({ kind: 'timeout', ms: 6.2 });
+    const state = createGame(1, runner);
+    run(state, runner, TIMEOUT_KILL_STREAK);
+    expect(state.strategyKilled).toBe(true);
+    expect(state.outcome).toBe('playing');
+  });
+
+  it('a successful decide resets the timeout streak', () => {
+    // Alternating timeout / success must never accumulate to a kill, however long
+    // the round runs: `strategyKilled` means "cannot answer any more".
+    let tick = 0;
+    const flaky: StrategyRunner = {
+      meta: { name: 'Flaky', rationale: 'x', version: 1 },
+      init: () => {},
+      decide: () => {
+        tick += 1;
+        return tick % 2 === 0
+          ? { ok: false, failure: { kind: 'timeout', ms: 3 }, elapsedMs: 3 }
+          : { ok: true, action: { type: 'idle' }, elapsedMs: 0.1 };
+      },
+      memoryBytes: () => 0,
+      dispose: () => {},
+    };
+    const state = createGame(1, flaky);
+    run(state, flaky, TIMEOUT_KILL_STREAK * 4);
+    expect(state.strategyKilled).toBe(false);
+    expect(state.timeoutStreak).toBeLessThanOrEqual(1);
   });
 
   it('sets strategyKilled on a memory failure', () => {

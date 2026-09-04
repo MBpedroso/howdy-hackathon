@@ -137,7 +137,7 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(rejections).toContainText('0.41 vs Mimic');
 
   await expect(page.getByTestId('il-verdict')).toContainText('APPROVED');
-  await expect(page.getByTestId('il-verdict')).toContainText('52%');
+  await expect(page.getByTestId('il-verdict')).toContainText('45%');
   await expect(page.getByTestId('il-verdict')).toHaveAttribute('data-kind', 'approved');
   // The Gate 3 meter finished on the harness's own count, rather than on a timer.
   await expect(page.getByTestId('il-meter')).toHaveClass(/done/);

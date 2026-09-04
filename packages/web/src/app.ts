@@ -27,6 +27,7 @@ import { ENGINE_CONSTANTS, type GameState, type InputLog, type ReplaySummary } f
 import { createInputSource, type AimContext, type InputSource } from './game/input.ts';
 import { createLoop, logInputProvider, type Loop } from './game/loop.ts';
 import { createRound, type Round } from './game/round.ts';
+import type { RunnerStats } from './game/runnerStats.ts';
 import { formatSeed, resolveSessionSeed, roundSeed } from './game/seeds.ts';
 import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy.ts';
 import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
@@ -98,6 +99,12 @@ export type DebugApi = {
   hash(): string | null;
   summary(): ReplaySummary | null;
   stats(): ReturnType<Loop['stats']> | null;
+  /**
+   * This round's `decide` counters — calls, failures by kind, the worst consecutive
+   * failure streak, and the elapsed-time quantiles. The same numbers the HUD's
+   * diagnostics line shows; the regression test for "the boss stood still" reads them.
+   */
+  runnerStats(): RunnerStats | null;
   /** Start a round directly, bypassing the screens. */
   startRound(index: number, source?: string): Promise<void>;
   /**
@@ -163,6 +170,7 @@ export function createApp(options: AppOptions): App {
       roundSeed: current.seed,
       tickMs: stats?.avgTickMs ?? 0,
       renderMs: stats?.avgRenderMs ?? 0,
+      runner: current.runnerStats(),
     });
   }
 
@@ -315,6 +323,9 @@ export function createApp(options: AppOptions): App {
     },
     stats(): ReturnType<Loop['stats']> | null {
       return loop?.stats() ?? null;
+    },
+    runnerStats(): RunnerStats | null {
+      return round?.runnerStats() ?? null;
     },
     startRound(index: number, source?: string): Promise<void> {
       return startRound(index, source);

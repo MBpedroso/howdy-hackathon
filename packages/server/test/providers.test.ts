@@ -48,6 +48,27 @@ describe('provider resolution', () => {
     expect(selection(env).models).toEqual({ analyst: 'gpt-5.4-nano', coder: 'gpt-5.4' });
   });
 
+  it('runs live on the Claude Code CLI with no key present at all', () => {
+    // The local-machine mode: the credential is the CLI's own logged-in subscription,
+    // so `hasApiKey` is true in the only sense the field means — the loop can run.
+    const env = { REMATCH_PROVIDER: 'claude-cli' };
+    expect(hasApiKey(env)).toBe(true);
+    expect(activeVendor(env)).toBe('claude-cli');
+    expect(activeModel(env)).toBe('sonnet');
+    expect(resolveProviders(env)?.coder.name).toBe('claude-cli:sonnet');
+  });
+
+  it('keeps REMATCH_PROVIDER=none winning over the CLI mode too', () => {
+    // `none` is the off switch, and an off switch with an exception is not one.
+    expect(hasApiKey({ REMATCH_PROVIDER: 'none', REMATCH_CLAUDE_BIN: '/usr/bin/claude' })).toBe(false);
+    expect(activeVendor({ REMATCH_PROVIDER: 'none' })).toBeNull();
+  });
+
+  it('never selects the CLI from auto, since a binary on PATH is not a decision', () => {
+    expect(activeVendor({ REMATCH_CLAUDE_BIN: '/usr/local/bin/claude' })).toBeNull();
+    expect(activeVendor({ ANTHROPIC_API_KEY: 'a', REMATCH_CLAUDE_BIN: '/usr/local/bin/claude' })).toBe('anthropic');
+  });
+
   it('lists every credential variable it looks at, for the README and the banner', () => {
     expect([...KEY_ENV]).toEqual(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY']);
   });

@@ -33,7 +33,7 @@
  */
 import { availableParallelism } from 'node:os';
 import { Worker } from 'node:worker_threads';
-import type { SandboxFactory } from '@rematch/sandbox';
+import { monotonicClock, type SandboxFactory } from '@rematch/sandbox';
 import { getSandbox, runMatchWith, type MatchResult } from './runMatch.ts';
 import { botFromSpec, type BotSpec, type FromWorker, type ToWorker } from './protocol.ts';
 
@@ -154,7 +154,9 @@ async function runInline(
 ): Promise<MatchResult[]> {
   const sandbox = opts.sandbox ?? (await getSandbox());
   const bots = opts.bots.map(botFromSpec);
-  const runner = sandbox.load(opts.source);
+  // The monotonic clock, for the same reason the worker uses it: a simulated match
+  // is a measurement and has to be reproducible. See `sim/worker.ts`.
+  const runner = sandbox.load(opts.source, { now: monotonicClock() });
   try {
     const out: MatchResult[] = new Array<MatchResult>(jobs.length);
     let done = 0;

@@ -46,5 +46,7 @@ export {
 
 export { NON_FINITE_TAG, PRELUDE_GLOBALS } from './prelude.ts';
 
+export { monotonicClock, MONOTONIC_STEP_MS } from './clock.ts';
+
 // Re-exported for consumers that only depend on this package's surface.
 export type { DecideResult, RunnerFailure, StrategyRunner } from '@rematch/contract';

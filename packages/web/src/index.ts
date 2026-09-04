@@ -11,7 +11,15 @@ export { createRound, type Round } from './game/round.ts';
 export { createLoop, logInputProvider, MAX_CATCHUP_STEPS, TICK_MS, type Loop } from './game/loop.ts';
 export { buildInput, createInputSource, keyBinding, type InputSource } from './game/input.ts';
 export { formatSeed, resolveSessionSeed, roundSeed, seedFromQuery, toSeed } from './game/seeds.ts';
-export { BUNDLED_STRATEGIES, bundledSource, loadRoundStrategy, sandboxFactory } from './game/strategy.ts';
+export {
+  BUNDLED_STRATEGIES,
+  bundledSource,
+  loadRoundStrategy,
+  sandboxFactory,
+  LIVE_BUDGET_FACTOR,
+  LIVE_DECIDE_BUDGET_MS,
+} from './game/strategy.ts';
+export { recordingRunner, type RunnerStats } from './game/runnerStats.ts';
 export { createRenderer, type Renderer } from './render/renderer.ts';
 export { clientToArena, computeViewport, fitSquare, type Viewport } from './render/viewport.ts';
 export { createHud, formatClock, type Hud } from './ui/hud.ts';

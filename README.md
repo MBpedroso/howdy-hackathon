@@ -5,7 +5,7 @@ boss's strategy to counter you. A second, deterministic verifier refuses to ship
 rewrite until it proves the fight is still fair — and you watch it happen, rejections
 included.
 
-**Status: `pnpm verify` green — 852 tests + 14 e2e. Deployed URL: pending.**
+**Status: `pnpm verify` green — 897 tests + 14 e2e. Deployed URL: pending.**
 
 ## 60-second demo
 
@@ -102,13 +102,17 @@ cp .env.example .env
 
 | Variable | Effect |
 |---|---|
-| **`REMATCH_PROVIDER`** | `none` \| `openai` \| `anthropic` \| `auto`. **`none` is the documented value for local dev** and forces fallback-only *even with a key present* — an off switch that does not require deleting your credential. `.env.example` sets it |
+| **`REMATCH_PROVIDER`** | `none` \| `openai` \| `anthropic` \| `claude-cli` \| `auto`. **`none` is the documented value for local dev** and forces fallback-only *even with a key present* — an off switch that does not require deleting your credential. `.env.example` sets it |
+| **`REMATCH_PROVIDER=claude-cli`** | runs the real loop on **your Claude Code subscription**, by spawning the installed `claude` binary — no API key, no API bill. **Local machine only:** the deployed server has no CLI session logged in. Needs no credential variable, which is why `auto` never picks it. Slower than the API path (~18 s per Coder call), so raise `REMATCH_DEADLINE_MS` |
+| `REMATCH_CLAUDE_BIN` | path to the `claude` binary, default `claude` on `PATH` |
+| `REMATCH_CLI_TIMEOUT_MS` | per-call guard on the CLI subprocess, default `60000`. SIGTERM then SIGKILL 2 s later |
 | `OPENAI_API_KEY` | present → the real loop runs on OpenAI (unless `REMATCH_PROVIDER=none`) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | same, on Anthropic. `auto` prefers Anthropic when both are set |
 | **`REMATCH_MAX_REWRITES_PER_DAY`** | global cap on rewrites the server pays for, per UTC day. Default `50`; `0` = never spend. Past it: fallback-only for the rest of the day, one log line, and `/api/health` reports `spendGuard: "capped"` |
 | **`REMATCH_ALLOW_SPEND`** | `pnpm eval:agents` refuses to run without `=1`, printing the worst-case model-call count first. Do **not** put this in `.env` — it is meant to be typed at the call site |
 | `REMATCH_MODEL` | model for both agents. Default is the vendor's own (`gpt-5.4-mini` / `claude-sonnet-5`) |
-| `REMATCH_ANALYST_MODEL` / `REMATCH_CODER_MODEL` | per agent; wins over `REMATCH_MODEL` |
+| `REMATCH_ANALYST_MODEL` / `REMATCH_CODER_MODEL` | per agent; wins over `REMATCH_MODEL`. On `claude-cli` these are CLI model aliases (`sonnet`, `opus`) or full ids |
+| `REMATCH_REASONING_EFFORT` | thinking effort. OpenAI `minimal\|low\|medium\|high\|none`, `claude-cli` `low\|medium\|high\|xhigh\|max`; `off` omits it. `low` by default on both — the same Coder prompt measured 145 s at a high effort and 17.6 s at `low`, both passing the static check first try |
 | `REMATCH_CANDIDATES` | files the Coder writes per attempt, default `3` (spec §13 delta 12) |
 | `REMATCH_DEADLINE_MS` | loop deadline, default `40000` |
 | `REMATCH_MATCHES` | Gate 3 matches per attempt, default `200` |
@@ -149,7 +153,7 @@ instructions is not what makes them hold.
 
 | # | Control | Where | What it stops |
 |---|---|---|---|
-| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all 852 tests |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all 897 tests |
 | 2 | Determinism lint rule | [`eslint.config.mjs`](eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` — including `Math['random']`, `const { now } = Date`, and `node:perf_hooks` |
 | 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry. The contract is the API the boss agent writes against, so its changes are human-gated |
 

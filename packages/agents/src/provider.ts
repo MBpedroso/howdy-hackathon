@@ -19,6 +19,12 @@
  * that Gate 1 does not already buy.
  */
 import Anthropic from '@anthropic-ai/sdk';
+// A deliberate import cycle, and a safe one: `providerClaudeCli.ts` needs `AbortError`
+// and the types from this file, and this file needs its factory. Both references are
+// inside function bodies, so neither module reads a half-initialised binding at
+// evaluation time. The alternative — a third module holding the shared primitives —
+// would move the `LLMProvider` interface away from the file named after it.
+import { CLAUDE_CLI_DEFAULT_MODEL, claudeCliProvider } from './providerClaudeCli.ts';
 
 export type LLMRole = 'user' | 'assistant';
 
@@ -42,6 +48,14 @@ export type LLMUsage = {
   outputTokens: number;
   /** Cached-prefix reads, when the provider reports them. */
   cacheReadTokens?: number;
+  /**
+   * What the call cost, when the provider says. Only `claude-cli` does — the CLI
+   * reports `total_cost_usd` per call, and on that path the wallet is a prepaid
+   * subscription rather than a metered key, so it is the one number that lets a run
+   * log compare the two. The API providers leave it unset rather than guessing from a
+   * price table that would go stale.
+   */
+  costUsd?: number;
 };
 
 export type LLMEvent =
@@ -591,20 +605,34 @@ export async function collect(
  */
 export const PROVIDER_ENV = 'REMATCH_PROVIDER';
 
-export type ProviderVendor = 'anthropic' | 'openai';
+export type ProviderVendor = 'anthropic' | 'openai' | 'claude-cli';
 
 /** The env vars each vendor's provider reads, in the order it reads them. */
 export const VENDOR_KEY_ENV = {
   anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
   openai: ['OPENAI_API_KEY'],
+  // Empty on purpose. The Claude Code CLI carries its own credential — the developer's
+  // logged-in subscription session, or a `claude setup-token` token — so there is no
+  // variable to read and nothing for the server to check. Asking for it *is* the
+  // credential, which is exactly why `auto` may not pick it (`VENDOR_PREFERENCE`).
+  'claude-cli': [],
 } as const satisfies Record<ProviderVendor, readonly string[]>;
 
 export const VENDOR_DEFAULT_MODEL = {
   anthropic: DEFAULT_MODEL,
   openai: OPENAI_DEFAULT_MODEL,
+  'claude-cli': CLAUDE_CLI_DEFAULT_MODEL,
 } as const satisfies Record<ProviderVendor, string>;
 
-/** `auto` prefers Anthropic when both keys are present — it is the older path. */
+/**
+ * `auto` prefers Anthropic when both keys are present — it is the older path.
+ *
+ * **`claude-cli` is absent from this list and must stay absent.** `auto` would then
+ * spawn a subprocess on the strength of a binary being on `PATH`, which is not a
+ * default: on a deployed server no subscription is logged in, and a process launch is
+ * latency AC 5's budget did not agree to. It is opt-in, `REMATCH_PROVIDER=claude-cli`,
+ * on a local machine.
+ */
 export const VENDOR_PREFERENCE: readonly ProviderVendor[] = ['anthropic', 'openai'];
 
 export type ProviderPair = { analyst: LLMProvider; coder: LLMProvider };
@@ -613,7 +641,7 @@ export type ProviderSelection = {
   /** `null` is fallback-only mode: a supported mode, not an error (spec AC 1). */
   vendor: ProviderVendor | null;
   /** What `REMATCH_PROVIDER` asked for, normalised. */
-  requested: 'anthropic' | 'openai' | 'auto';
+  requested: ProviderVendor | 'auto';
   /** One sentence for the server banner, the eval header and the run log. */
   reason: string;
   /** Per-agent models, or `null` in fallback-only mode. */
@@ -625,26 +653,37 @@ export type ProviderSelection = {
 };
 
 function keyPresent(vendor: ProviderVendor, env: Record<string, string | undefined>): boolean {
+  // `claude-cli` has no credential variable (`VENDOR_KEY_ENV['claude-cli']` is empty):
+  // the CLI holds its own session, so asking for it is the whole opt-in. Falling
+  // through to `.some()` on an empty list would report fallback-only forever.
+  if (vendor === 'claude-cli') return true;
   return VENDOR_KEY_ENV[vendor].some((name) => (env[name] ?? '').trim() !== '');
 }
 
 function providerFor(vendor: ProviderVendor, model: string): LLMProvider {
+  if (vendor === 'claude-cli') return claudeCliProvider({ model });
   return vendor === 'anthropic' ? anthropicProvider({ model }) : openaiProvider({ model });
 }
 
 /**
- * `REMATCH_PROVIDER=anthropic | openai | auto` (default `auto`).
+ * `REMATCH_PROVIDER=anthropic | openai | claude-cli | auto` (default `auto`).
  *
  * An *explicit* vendor with no key selects fallback-only rather than silently
  * using the other one: "I told it OpenAI and it billed Anthropic" is a worse
  * failure than a visible fallback, and the reason string says which happened.
+ *
+ * `claude-cli` is the local-machine option: it spends the developer's Claude Code
+ * subscription through the `claude` binary and needs no key at all, so it is always
+ * *selectable* — and, for the same reason, never selected by `auto`.
  */
 export function selectProvider(env: Record<string, string | undefined> = process.env): ProviderSelection {
   const raw = (env[PROVIDER_ENV] ?? '').trim().toLowerCase();
-  const known = raw === 'anthropic' || raw === 'openai';
-  const requested: 'anthropic' | 'openai' | 'auto' = known ? raw : 'auto';
+  const known = raw === 'anthropic' || raw === 'openai' || raw === 'claude-cli';
+  const requested: ProviderVendor | 'auto' = known ? raw : 'auto';
   const unknownNote =
-    raw === '' || known ? '' : ` (ignoring ${PROVIDER_ENV}="${raw}": expected anthropic, openai or auto)`;
+    raw === '' || known
+      ? ''
+      : ` (ignoring ${PROVIDER_ENV}="${raw}": expected anthropic, openai, claude-cli or auto)`;
 
   const pick = (): { vendor: ProviderVendor | null; reason: string } => {
     if (known) {

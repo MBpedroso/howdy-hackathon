@@ -48,7 +48,7 @@ export {
 export { VIEW_PRIMITIVES, buildBossView, normalizeHeat } from './view.ts';
 
 // Simulation
-export { dirBin, step } from './step.ts';
+export { TIMEOUT_KILL_STREAK, dirBin, step } from './step.ts';
 
 // Round lifecycle
 export {

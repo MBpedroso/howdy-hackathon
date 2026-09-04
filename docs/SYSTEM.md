@@ -188,12 +188,51 @@ No host function is exposed to the VM.
 | `cooldowns` | `move 0`, `burst 90`, `charge 150`, `slam 210`, `spawn 300` ticks | engine; `validateAction` reports |
 | `telegraphs` | `charge 20`, `slam 40` ticks | engine |
 | `limits.memoryBytes` | 4096 — `JSON.stringify(mem)` in UTF-8 bytes, re-measured every 60 calls, **sticky** once blown | sandbox |
-| `limits.decideBudgetMs` | 2 ms per `decide` | sandbox interrupt handler → `{kind:'timeout'}` |
+| `limits.decideBudgetMs` | 2 ms per `decide` — a **harness** number (see below) | sandbox interrupt handler → `{kind:'timeout'}` |
 | `limits.sandboxMemoryBytes` | 67 108 864 (64 MB) heap | `runtime.setMemoryLimit` |
 | `limits.sourceBytes` | 32 768 | Gate 1 |
 | `limits.metaNameMaxChars` | 40 | Gate 1 |
 | `limits.maxMinionsAlive` | 2 | engine |
 | stack | 128 KB (`maxStackBytes`) | `runtime.setMaxStackSize` → clean in-VM `stack overflow` |
+
+#### `decideBudgetMs` is one constant with three jobs, and only one of them is a promise
+
+The deadline is enforced against `SandboxOptions.now`, which decides what the budget
+actually *bounds*:
+
+| Caller | Clock | Budget | What the limit is for |
+|---|---|---|---|
+| Gate 2 (fuzz) | `performance.now` | 2 ms | **Containment.** A `while (true)` must come back as a value, fast |
+| Gate 4 (perf) | `performance.now` | 16 ms (8× slack), judged against 2 ms | **Measurement.** The p99 is the promise; measuring at the shipping deadline would report every slow strategy as exactly 2.0 ms |
+| Gate 3 / the simulator | `monotonicClock()` | 2 ms of *interrupt polls* | **Reproducibility.** Spec §6.2 promises "fixed seed set → identical results on every machine", and wall clock breaks that promise |
+| Replays (browser + Node) | `monotonicClock()` | 2 ms of polls | Reproducibility — the AC 3 hash |
+| Live play (browser) | `performance.now` | 20 ms (`LIVE_BUDGET_FACTOR = 10`) | Containment only. Best-effort, never a determinism claim |
+
+The simulator's clock is not a nicety. With wall clock, one GC pause inside one `decide`
+returns `{kind:'timeout'}`, which the engine answers with an idle tick and a violation —
+and from there that match differs from the same match anywhere else. Measured before the
+change: **2 phantom violations per 60 matches** for a strategy that commits none, and the
+same source reading **0.43 and 0.45** against the panel on back-to-back runs. On the
+monotonic clock the budget bounds work instead of time (~256 interrupt polls), a runaway
+loop is still caught deterministically in ~35 ms of wall clock, and Gate 2 in front of
+Gate 3 is what keeps that worst case off the simulator.
+
+Live play goes the other way. Every shipped strategy's `decide` p99 is 0.3 ms in headless
+Chromium and 0.06 ms in Node — 6× under the 2 ms budget — and a single scheduling hiccup
+still blows it, for which the boss pays an idle frame. So the browser relaxes the budget
+by 10× and keeps only the containment guarantee. Determinism is claimed for the harness
+simulation and for replays, both on the monotonic clock; live play is explicitly
+best-effort. (`packages/web/src/game/strategy.ts`, `packages/web/README.md`.)
+
+#### `strategyKilled` needs a streak, not one bad tick
+
+`timeout` is not sticky in the sandbox: the next call may well succeed. So one blown
+deadline is one idle tick plus one violation, and `state.strategyKilled` is only set after
+`TIMEOUT_KILL_STREAK` (30, half a second) **consecutive** timeouts — or immediately on a
+`memory` failure, which the sandbox *does* make sticky. It matters because
+`strategyKilled` is read back to the Analyst in its prompt ("was killed by the sandbox"),
+and one hiccup on a loaded machine should not become a fact the next round is written
+around.
 
 `validateAction` is total — it never throws, for `null`, arrays, functions, symbols,
 revoked Proxies or objects with throwing getters — and canonicalizing: the action it
@@ -562,27 +601,29 @@ a full Round 1 played by the engine's scripted pseudo-player, generated in Node 
 ```json
 { "sessionSeed": 424242, "round": 1, "seed": 1977791994, "playerSeed": 90210,
   "strategy": "round1", "ticks": 962, "outcome": "playerWon",
-  "hash": "362eab563d1066c7" }
+  "hash": "6568b87bb4974fb8" }
 ```
 
 Two tests guard it, and they fail in a deliberate order:
 
 - [`packages/web/test/replay-fixture.test.ts`](../packages/web/test/replay-fixture.test.ts)
   — in `pnpm verify`. Replays the log **in Node** through the real QuickJS sandbox and
-  asserts `hash === "362eab563d1066c7"`, `ticks === 962`, `outcome === "playerWon"`; also
+  asserts `hash === "6568b87bb4974fb8"`, `ticks === 962`, `outcome === "playerWon"`; also
   asserts `roundSeed(424242, 1) === 1977791994`. Its failure message says the fixture is
   stale and names the regeneration command.
 - [`packages/web/e2e/determinism.spec.ts`](../packages/web/e2e/determinism.spec.ts)
   — *"browser and Node agree on the replay hash"*. Replays the same log **in the browser**
   via `__rematch.driveWith(log)` + `fastForward()` and asserts the same
-  `362eab563d1066c7`, through the browser's own QuickJS instance. A second case replays
+  `6568b87bb4974fb8`, through the browser's own QuickJS instance. A second case replays
   twice in one page and asserts idempotence.
 
-Both sides inject the sandbox's deterministic clock (`src/game/clock.ts`). A real clock
-would make replays *slightly* non-reproducible: the sandbox enforces the 2 ms `decide`
-deadline against `now()`, and a GC pause can push one call over budget, which the engine
-turns into `idle` + a violation. Live play keeps `performance.now`, where that deadline is
-a containment control and must be real.
+Both sides inject the sandbox's monotonic clock (`monotonicClock` in
+`@rematch/sandbox`, re-exported by `packages/web/src/game/clock.ts`; the harness
+simulator uses the identical one). A real clock would make replays *slightly*
+non-reproducible: the sandbox enforces the `decide` deadline against `now()`, and a GC
+pause can push one call over budget, which the engine turns into `idle` + a violation.
+Live play keeps `performance.now` and a 10× budget, where that deadline is a containment
+control and must be real. See the limits section above for the full table.
 
 Same sandbox on both sides is what makes this possible:
 `@jitl/quickjs-singlefile-cjs-release-sync` — **sync** (callable straight from a 60 Hz
@@ -594,7 +635,7 @@ any bundler), **release**.
 
 | # | Control | File | Stops |
 |---|---|---|---|
-| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 852 tests |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 897 tests |
 | 2 | Determinism lint rule | [`eslint.config.mjs`](../eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` |
 | 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry |
 
@@ -624,11 +665,14 @@ Three design details are what make these controls rather than suggestions:
   *is* the work: a change to `BossView`, `BossAction`, `validateAction` or the static check
   changes what every generated strategy and every pre-approved fallback is allowed to do.
 
-`pnpm verify` as of 2026-09-04: `✓ verify passed (50s — typecheck lint test)`, **852
-tests** across 7 packages — contract 206, agents 172, web 120, harness 102, sandbox 98,
-engine 89, server 65 — plus **14 Playwright e2e** in `pnpm test:e2e`.
+`pnpm verify` as of 2026-09-04: `✓ verify passed (58s — typecheck lint test)`, **897
+tests** across 7 packages — contract 206, agents 206, web 125, harness 102, sandbox 98,
+engine 91, server 69 — plus **14 Playwright e2e** in `pnpm test:e2e`.
 
-**No test in the repo makes a network call.** The only thing that spends money is
+**No test in the repo makes a network call**, and none launches the `claude` CLI —
+`claudeCliProvider`'s 29 tests inject a fake `spawn`, which matters more than the API
+providers' injected clients do: a token spent there is a slice of the developer's own
+subscription rather than a line on an invoice. The only thing that spends money is
 `pnpm eval:agents`, and since 2026-09-04 it refuses to run without
 `REMATCH_ALLOW_SPEND=1`, printing the worst-case model-call count first — being merely
 "opt-in on the presence of a key" was how the project's credit got exhausted (see
@@ -729,6 +773,33 @@ Honest list, at `069be8d`.
    at all. The `eval` and `Promise` *globals* are deleted, the internal pointers are not
    reachable from JS, and Gate 1 keeps both names on its denylist. Documented rather than
    hidden, and the reason both belts exist.
-10. **`pnpm verify` is ~41 s and grows.** It is on every commit by design. Gate 3's real
+10. **Nine of the eleven player-facing strategies can freeze mid-fight.** Every
+    hand-written strategy in the repo ends its `decide` with "nothing to do, return
+    `{type:'idle'}`", and `idle` is a legal, cooldown-free, violation-free action — so
+    no gate can see it and, until the HUD counters landed, neither could a human. A
+    playtester found it in Round 2 (`round2-candidate.js` parked on a *stale* hottest
+    heat cell and idled for 263 consecutive ticks). That one is fixed and pinned by
+    `packages/harness/test/activity.test.ts` and `packages/web/e2e/boss-activity.spec.ts`.
+    The rest are measured and untouched — worst motionless run against the four
+    reference bots, in ticks:
+
+    | Strategy | Ticks | | Strategy | Ticks |
+    |---|---|---|---|---|
+    | `harness/round2-candidate` | **43** (fixed) | | `server/fallback/round3/emberline` | 169 |
+    | `web/src/strategies/round1` | 888 | | `server/fallback/round3/nettle` | 184 |
+    | `web/src/strategies/hound` | 187 | | `server/fallback/round4/bellringer` | 430 |
+    | `server/fallback/round2/hollow` | 589 | | `server/fallback/round4/curfew` | 43 |
+    | `server/fallback/round2/metronome` | 272 | | `server/fallback/round5/crossfire` | 708 |
+    | | | | `server/fallback/round5/tollkeeper` | 242 |
+
+    Each is a balance change as well as a bug fix: `round1.js` defines what "winnable on
+    a first try" (AC 4) means and owns the recorded AC 3 replay fixture, and every
+    fallback entry is documented as having passed all four gates at its round's band, so
+    each needs re-measuring through Gate 3 before it moves. Fixing `round2-candidate`
+    took it from 0.38 to 0.45 against the panel — *toward* the middle of the band, and a
+    reminder that the frozen version was partly in band because a stationary boss is easy
+    to shoot.
+
+11. **`pnpm verify` is ~41 s and grows.** It is on every commit by design. Gate 3's real
     200-match budget is deliberately *not* in it (the harness suite runs reduced match
     counts); the full-budget balance regression is `pnpm test:balance`.

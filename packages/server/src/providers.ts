@@ -32,6 +32,21 @@
  * It is implemented in the server rather than in `@rematch/agents` because the agents
  * package's `selectProvider` is a shared contract with the eval CLI and is out of this
  * change's scope; the eval has its own, louder guard (`REMATCH_ALLOW_SPEND`).
+ *
+ * ## `REMATCH_PROVIDER=claude-cli` — local machines only
+ *
+ * A third live mode, added 2026-09-04: the loop runs on the developer's Claude Code
+ * subscription by spawning the installed `claude` binary, so a playtest or a demo take
+ * costs no API credit. Nothing in this file special-cases it — `selectProvider` returns
+ * it like any other vendor, `hasApiKey` reports `true` (the field means "the loop can
+ * run", and it can), and `/api/health` reports `provider: "claude-cli"` with the CLI
+ * model alias.
+ *
+ * The one thing worth saying out loud is where it must **not** be set: a deployed
+ * server. There is no logged-in CLI session there, so every rewrite would spawn a
+ * subprocess only to fail, and the interlude would fall back four beats late instead of
+ * immediately. `selectProvider`'s `auto` therefore never chooses it — it has to be asked
+ * for by name, on a machine where a human has run `claude` at least once.
  */
 import {
   VENDOR_KEY_ENV,
@@ -42,7 +57,13 @@ import {
   type RewriteProviders,
 } from '@rematch/agents';
 
-/** Every credential variable the selection looks at, in the order it looks. */
+/**
+ * Every credential variable the selection looks at, in the order it looks.
+ *
+ * `claude-cli` contributes nothing here on purpose: its credential is the CLI's own
+ * logged-in session, so there is no variable for the banner to mention or for an
+ * operator to check.
+ */
 export const KEY_ENV = [...VENDOR_KEY_ENV.anthropic, ...VENDOR_KEY_ENV.openai] as const;
 
 /** `REMATCH_PROVIDER=none` — fallback-only, whatever keys are set. */

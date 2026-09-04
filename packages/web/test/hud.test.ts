@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock } from '../src/ui/hud.ts';
+import { createGame, type GameState } from '@rematch/engine';
+import { formatClock, formatRunnerLine } from '../src/ui/hud.ts';
+import type { RunnerStats } from '../src/game/runnerStats.ts';
 
 describe('formatClock', () => {
   it('counts down from the 60-second round cap', () => {
@@ -10,5 +12,66 @@ describe('formatClock', () => {
 
   it('never goes negative', () => {
     expect(formatClock(99999)).toBe('0:00');
+  });
+});
+
+describe('formatRunnerLine', () => {
+  const stats = (over: Partial<RunnerStats> = {}): RunnerStats => ({
+    calls: 300,
+    ok: 300,
+    idle: 0,
+    failures: {},
+    worstStreak: 0,
+    streak: 0,
+    lastFailure: null,
+    p50Ms: 0.03,
+    p99Ms: 0.11,
+    maxMs: 0.2,
+    ...over,
+  });
+
+  const state = (over: Partial<GameState> = {}): GameState => {
+    const s = createGame(1, {
+      meta: { name: 'Test', rationale: 'x', version: 1 },
+      init: () => {},
+      decide: () => ({ ok: true, action: { type: 'idle' }, elapsedMs: 0 }),
+      memoryBytes: () => 0,
+      dispose: () => {},
+    });
+    return Object.assign(s, over);
+  };
+
+  it('shows only the decide quantiles while everything is healthy', () => {
+    expect(formatRunnerLine(state(), stats())).toBe('d 0.03/0.11ms');
+  });
+
+  it('says nothing at all before the first decide call', () => {
+    expect(formatRunnerLine(state(), stats({ calls: 0 }))).toBe('');
+    expect(formatRunnerLine(state(), null)).toBe('');
+  });
+
+  // The whole point of the line: a stalled strategy has to be readable as one.
+  it('names the failure kind, the count and the consecutive streak', () => {
+    const line = formatRunnerLine(
+      state({ violations: 42 }),
+      stats({ failures: { timeout: 40, throw: 2 }, worstStreak: 37, p50Ms: 2.4, p99Ms: 20 }),
+    );
+    expect(line).toContain('d 2.40/20.00ms');
+    expect(line).toContain('viol 42');
+    expect(line).toContain('40 timeout');
+    expect(line).toContain('2 throw');
+    expect(line).toContain('x37');
+  });
+
+  // The counter the reported bug needed: 219 idle calls out of 510 and not one
+  // violation, so nothing else on this line would have moved.
+  it('calls out a strategy that keeps asking for nothing', () => {
+    expect(formatRunnerLine(state(), stats({ idle: 219, calls: 510 }))).toContain('idle 43%');
+    // A boss holding position for a beat is normal and must not cry wolf.
+    expect(formatRunnerLine(state(), stats({ idle: 20, calls: 300 }))).not.toContain('idle');
+  });
+
+  it('shouts when the sandbox killed the strategy', () => {
+    expect(formatRunnerLine(state({ strategyKilled: true }), stats())).toContain('KILLED');
   });
 });

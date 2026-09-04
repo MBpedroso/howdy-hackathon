@@ -11,6 +11,8 @@
 import { CONSTANTS } from '@rematch/contract';
 import { ENGINE_CONSTANTS, type GameState } from '@rematch/engine';
 
+import type { RunnerStats } from '../game/runnerStats.ts';
+
 const MAX_TICKS = ENGINE_CONSTANTS.round.maxTicks;
 
 export type HudInfo = {
@@ -21,6 +23,8 @@ export type HudInfo = {
   /** Averaged tick + render cost, for the small diagnostics line. */
   tickMs: number;
   renderMs: number;
+  /** `decide` counters, or `null` when the round does not track them. */
+  runner?: RunnerStats | null;
 };
 
 export type Hud = {
@@ -42,6 +46,45 @@ export function formatClock(tick: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * The `decide` half of the diagnostics line.
+ *
+ * A boss that stands still has exactly two explanations — the strategy chose `idle`,
+ * or the sandbox is refusing to run it — and from the outside they look identical.
+ * Both are now on screen:
+ *
+ *   `d 0.03/0.11ms`  the `decide` p50 / p99. Everything after it is a problem.
+ *   `idle 43%`       the strategy asked for nothing on 43% of its calls. Shown only
+ *                    past `IDLE_WARN_SHARE`, because a boss holding position for a
+ *                    beat is normal and one that has frozen is not.
+ *   `viol 12`        contract violations the engine recorded (an invalid action or a
+ *                    runner failure — both cost the tick).
+ *   `2 timeout`      failures by kind, from the sandbox.
+ *   `x14`            longest run of *consecutive* failures: what separates one
+ *                    unlucky frame from a strategy that has stopped answering.
+ *   `KILLED`         the sandbox gave up on it (see `TIMEOUT_KILL_STREAK`).
+ */
+/** Idle share past which the diagnostics line calls it out. */
+export const IDLE_WARN_SHARE = 0.25;
+export function formatRunnerLine(state: GameState, runner: RunnerStats | null | undefined): string {
+  const parts: string[] = [];
+  if (runner != null && runner.calls > 0) {
+    parts.push(`d ${runner.p50Ms.toFixed(2)}/${runner.p99Ms.toFixed(2)}ms`);
+  }
+  if (runner != null && runner.calls > 0 && runner.idle / runner.calls >= IDLE_WARN_SHARE) {
+    parts.push(`idle ${Math.round((runner.idle / runner.calls) * 100)}%`);
+  }
+  if (state.violations > 0) parts.push(`viol ${state.violations}`);
+  if (runner != null) {
+    for (const [kind, count] of Object.entries(runner.failures)) {
+      if ((count ?? 0) > 0) parts.push(`${count} ${kind}`);
+    }
+    if (runner.worstStreak > 1) parts.push(`x${runner.worstStreak}`);
+  }
+  if (state.strategyKilled) parts.push('KILLED');
+  return parts.join(' · ');
 }
 
 export function createHud(root: HTMLElement): Hud {
@@ -106,13 +149,20 @@ export function createHud(root: HTMLElement): Hud {
       }
 
       // Small, deliberately technical: the judges asked for determinism, so show it.
+      const runnerLine = formatRunnerLine(state, info.runner);
       const nextFoot =
         `boss ${Math.round(state.boss.hp)}/${ENGINE_CONSTANTS.boss.hp} · tick ${state.tick}` +
         ` · seed ${info.sessionSeed}/${info.roundSeed}` +
-        ` · ${info.tickMs.toFixed(2)}+${info.renderMs.toFixed(2)}ms`;
+        ` · ${info.tickMs.toFixed(2)}+${info.renderMs.toFixed(2)}ms` +
+        (runnerLine === '' ? '' : ` · ${runnerLine}`);
       if (nextFoot !== lastFoot) {
         lastFoot = nextFoot;
         foot.textContent = nextFoot;
+        // A stalled strategy is a failure state, not a statistic: mark the line so it
+        // is visible from across a room, which is where the demo is watched from.
+        const runner = info.runner;
+        const stalling = runner != null && runner.calls > 0 && runner.idle / runner.calls >= IDLE_WARN_SHARE;
+        foot.classList.toggle('warn', state.strategyKilled || state.violations > 0 || stalling);
       }
     },
 

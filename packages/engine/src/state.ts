@@ -138,8 +138,21 @@ export type GameState = {
   history: History;
   /** Contract violations by the strategy (invalid action, on-cooldown action, runner failure). */
   violations: number;
-  /** Set when the runner reported a `timeout` or `memory` failure. The harness reads this. */
+  /**
+   * Set when the strategy is *done*: a `memory` failure (which the sandbox makes
+   * sticky, so the strategy really cannot answer again) or `TIMEOUT_KILL_STREAK`
+   * consecutive `timeout`s. The harness reads this, and so does the Analyst's prompt.
+   *
+   * Deliberately NOT set by a single timeout. The `decide` deadline is wall clock;
+   * one blown deadline means the host was busy for a moment, and the round recovers
+   * on the next tick. See `step.ts`.
+   */
   strategyKilled: boolean;
+  /**
+   * Consecutive `timeout` failures, reset by any other outcome. Bookkeeping for
+   * `strategyKilled`; see `TIMEOUT_KILL_STREAK` in `step.ts`.
+   */
+  timeoutStreak: number;
   /** Player damage dealt to the boss. */
   damageDealt: number;
   /** Player damage dealt to minions (kept separate: it is not progress on the boss). */
@@ -204,6 +217,7 @@ export function createInitialState(seed: number, strategy: StrategyMeta): GameSt
     },
     violations: 0,
     strategyKilled: false,
+    timeoutStreak: 0,
     damageDealt: 0,
     damageToMinions: 0,
     damageTaken: 0,
