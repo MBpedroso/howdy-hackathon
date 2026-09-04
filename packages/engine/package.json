@@ -1,0 +1,26 @@
+{
+  "name": "@rematch/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure deterministic game simulation: fixed 60 Hz timestep, seeded PRNG, no DOM, no Node APIs, no QuickJS.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "bench": "node bench/bench.ts"
+  },
+  "dependencies": {
+    "@rematch/contract": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "^4.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.0"
+  }
+}

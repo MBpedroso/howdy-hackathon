@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createRng > produces a known sequence for a known seed 1`] = `
+[
+  0.00006295018829405308,
+  0.015747428173199296,
+  0.6164041024167091,
+  0.07161863497458398,
+  0.5584883580449969,
+  0.17357419803738594,
+  0.14725036034360528,
+  0.10145739885047078,
+]
+`;

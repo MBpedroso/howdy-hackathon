@@ -1,0 +1,19 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`determinism > SNAPSHOT: chaser on seed 1 — any engine change that alters the simulation breaks this 1`] = `
+{
+  "bossHp": 0,
+  "hash": "3bb7bc9d5d9d5ea6",
+  "outcome": "playerWon",
+  "playerHp": 1,
+  "primitives": {
+    "burst": 10,
+    "charge": 2,
+    "move": 835,
+    "slam": 0,
+    "spawn": 3,
+  },
+  "ticks": 950,
+  "violations": 0,
+}
+`;

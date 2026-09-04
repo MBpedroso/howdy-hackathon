@@ -1,0 +1,25 @@
+{
+  "name": "@rematch/contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Boss Contract: types, action validator, and the Gate 1 static check. Zero workspace dependencies.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "acorn": "^8.15.0"
+  },
+  "devDependencies": {
+    "fast-check": "^4.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.0"
+  }
+}

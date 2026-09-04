@@ -1,100 +1,342 @@
-# Howdy Hackathon — Spec
+# SPEC — The Boss That Learns
 
-> Preencher antes de escrever código. Deixe em branco o que ainda não sabe.
+> Working title: **REMATCH**. A 2D arena boss fight where, between rounds, an agent studies how you won and rewrites the boss's strategy to counter you — and a second agent refuses to ship that rewrite until it proves the fight is still fair.
 
-## 1. O que é
+Status: v0.1 — approved for implementation
+Owner (human orchestrator): Matheus
+Competition: Howdy Dev Day 2026 — Agentic Software Engineering Hackathon
+Window: 2026-08-31 → 2026-09-14
 
-**Nome do projeto:**
+---
 
-**Uma frase (o que faz, pra quem):**
+## 1. Objective
 
-**Demo em 30s — o que a pessoa vê acontecer:**
+Ship a small, working browser game where **the agentic system is part of the player's experience, not just the build process**. A mixed technical / non-technical jury must be able to see an agent observe, reason, write code, get rejected by a verifier, fix itself, and pass — all inside the product, in the first 90 seconds of the demo.
 
-## 2. Problema
+The product is a vehicle for one thesis: *agents are safe to give real autonomy when a deterministic harness gates their output.* The boss agent has real power (it writes executable code that changes the game). The balance harness has final say.
 
-**Quem sente a dor:**
+### Why this wins on the rubric
 
-**Como resolvem hoje (e por que é ruim):**
-
-**Por que agora:**
-
-## 3. Escopo do hackathon
-
-### Tem que funcionar (sem isso não tem demo)
-- [ ]
-- [ ]
-- [ ]
-
-### Se der tempo
-- [ ]
-- [ ]
-
-### Fora de escopo (dito explicitamente)
--
--
-
-## 4. Como funciona
-
-**Fluxo do usuário (passo a passo):**
-1.
-2.
-3.
-
-**Arquitetura / componentes:**
-
-**Onde entra IA (se entra) — modelo, prompt, o que ele decide:**
-
-## 5. Stack
-
-| Camada | Escolha | Por quê |
+| Criterion | Pts | How this project earns it |
 |---|---|---|
-| Frontend | | |
-| Backend | | |
-| Dados | | |
-| Modelo / API | | |
-| Deploy | | |
+| Agentic Engineering | 25 | Separate contexts for analysis, code generation, verification; parallel workstreams (engine / agents / UI / harness); a real reason for each boundary |
+| Harness + Autonomous Loops | 25 | Generated strategies pass 4 deterministic gates. Rejection → fix → re-verify happens with no human in the loop, live, on screen |
+| Product Quality | 20 | A playable, polished 4–5 round fight. Deterministic engine, replayable, fast |
+| Context Engineering | 10 | The boss coder never sees the game engine — only a typed contract and a replay summary |
+| Innovation | 10 | The verifier is visible gameplay. The antagonist is an agent under back pressure |
+| Reproducibility | 5 | Seeded determinism: any run, any generated boss, any rejection can be replayed byte-for-byte |
+| Demo | 5 | The interlude *is* the story: replay → observations → diff → simulation meter → verdict |
 
-## 6. Dados
+---
 
-**De onde vêm:**
+## 2. Player experience
 
-**Precisa de dado real? De quem? Já tenho acesso?**
+### 2.1 Core loop
 
-**Tem PII / algo sensível:**
+1. **Fight** — Top-down 2D arena, ~60 seconds max. Player: WASD move, Space dash, mouse aim + click to shoot. Boss: moves and attacks using a fixed set of primitives.
+2. **Player wins** → **Interlude** (the centerpiece, §2.2).
+3. **Next round** starts against the rewritten boss. Repeat up to Round 5.
+4. **Player loses** → Game over screen: "The boss beat you on Round N." Show the boss's final strategy in plain language. Offer replay / share.
+5. Player survives Round 5 → win screen.
 
-## 7. Riscos
+### 2.2 The interlude (this is the demo)
 
-| Risco | Chance de travar a demo | Plano B |
+Full-screen, four beats, each visibly driven by an agent. Target duration 20–45 s. Everything shown is real output, not decoration.
+
+| Beat | What the player sees | What actually runs |
 |---|---|---|
-| | | |
-| | | |
+| **Replay** | A ghost heatmap of the player's positions and a timeline of their attacks/dashes | Deterministic replay of the round from seed + input log |
+| **Analysis** | Streaming text: *"Player camped the bottom-left corner. Attacked only during my slam cooldown. Dashed 11 times, always left."* | **Analyst agent** reads the compressed replay and emits structured observations + a counter-plan |
+| **Rewrite** | A code diff appears: old strategy → new strategy, key lines highlighted | **Coder agent** writes a new `strategy.js` against the Boss Contract (§4) |
+| **Trial** | A meter fills as simulated matches run. Verdicts appear: `✗ REJECTED — 91% boss win rate (too hard)` then `↻ rewriting…` then `✓ APPROVED — 52%` | **Harness** runs static checks, contract fuzz, and N headless matches. On failure, the rejection reason is fed back to the Coder agent automatically |
 
-## 8. Plano
+The player must be able to read every rejection. Rejections are the proof.
 
-| Bloco de tempo | Objetivo | Feito? |
+### 2.3 Feel
+
+- Instant restart, no menus between rounds beyond the interlude.
+- Visual style: flat, high-contrast, CSS/SVG/Canvas only. No raster art, no image generation dependency.
+- Boss gets a visible "tell" for each attack primitive so the fight is fair to read.
+- Sound optional; if added, generated with Tone.js, never sampled assets.
+
+---
+
+## 3. Scope
+
+### In scope (Definition of Done depends on all of these)
+
+- One arena, one boss, five rounds.
+- Deterministic engine with seeded RNG and recorded inputs → perfect replays.
+- Boss strategy loaded from a sandboxed JS module conforming to the Boss Contract.
+- Analyst agent + Coder agent + Harness, running server-side, with the autonomous rewrite loop.
+- The four-beat interlude UI with real streamed output.
+- Pre-generated fallback strategies (≥ 2 per round) used if the loop times out.
+- Full test harness (§7) runnable with one command.
+- Deployed URL + `README.md`, `docs/SPEC.md`, `docs/SYSTEM.md`, `docs/AI-DEV-LOG.md`.
+
+### Explicitly out of scope
+
+- Multiple bosses, multiple arenas, multiplayer, accounts, leaderboards.
+- Mobile controls (must not crash on mobile, need not be playable).
+- Any persistence beyond the current session, except an optional local "best round" number.
+- Agents modifying anything other than `strategy.js`. Ever.
+
+---
+
+## 4. The Boss Contract (the most important section)
+
+The boss agent does **not** write game code. It writes a *strategy*: a pure module that, each tick, is handed a read-only view of the world and must return one action from a fixed menu. Everything dangerous is structurally impossible; everything creative is in *when* and *where*.
+
+### 4.1 Module shape
+
+```ts
+// strategy.js — the ONLY file agents may produce
+export const meta = {
+  name: string,          // shown to the player, ≤ 40 chars
+  rationale: string,     // one sentence, shown to the player
+  version: number
+};
+
+export function init(): Memory;          // called once per round; opaque object, ≤ 4 KB serialized
+
+export function decide(view: BossView, mem: Memory): BossAction;
+```
+
+### 4.2 Inputs — `BossView` (read-only, plain data)
+
+```ts
+type BossView = {
+  tick: number;                 // 60 ticks / second
+  arena: { w: number; h: number };
+  boss:   { x: number; y: number; hp: number; facing: number;
+            cooldowns: Record<PrimitiveName, number> };   // ticks remaining, 0 = ready
+  player: { x: number; y: number; hp: number; vx: number; vy: number;
+            isDashing: boolean; lastShotTick: number };
+  projectiles: Array<{ x: number; y: number; vx: number; vy: number; owner: 'boss' | 'player' }>;
+  history: {                    // rolling summaries, not raw logs
+    playerPosHeat: number[];    // 8×8 grid, normalized
+    playerDashDirs: number[];   // 8 bins
+    playerShotsDuring: Record<PrimitiveName, number>;  // shots fired while each primitive was active
+  };
+};
+```
+
+### 4.3 Outputs — `BossAction` (validated every tick)
+
+```ts
+type PrimitiveName = 'move' | 'burst' | 'charge' | 'slam' | 'spawn';
+
+type BossAction =
+  | { type: 'move';   dx: number; dy: number }                // unit vector, clamped
+  | { type: 'burst';  angle: number; count: 3 | 5 | 8 }      // radial projectiles
+  | { type: 'charge'; angle: number }                          // straight dash, telegraphed 20 ticks
+  | { type: 'slam';   x: number; y: number }                  // area hit at target, telegraphed 40 ticks
+  | { type: 'spawn';  x: number; y: number }                  // one minion, max 2 alive
+  | { type: 'idle' };
+```
+
+Engine-enforced, not strategy-enforced:
+
+- Cooldowns per primitive (e.g. burst 90, charge 150, slam 210, spawn 300 ticks). An action on cooldown is coerced to `idle` and counted as a contract violation.
+- Boss speed cap, arena bounds, projectile speed and damage — all constants owned by the engine.
+- Boss HP and damage numbers are **not** in the contract. The strategy cannot make the boss tougher, only smarter.
+
+### 4.4 Sandbox
+
+- Strategies execute in **QuickJS via `quickjs-emscripten`** — same runtime in browser and Node, so the simulator and the live game agree bit-for-bit.
+- No `import`, no globals beyond `Math`, no `Date`, no `Math.random` (replaced with a seeded PRNG injected by the engine).
+- Hard limits: 64 MB memory, 2 ms per `decide` call. Exceeding either → strategy is killed and rejected.
+- Deterministic control, not an instruction: forbidden identifiers are rejected by a static check *before* any code runs (§7, Gate 1).
+
+---
+
+## 5. Architecture
+
+```
+┌──────────────────────────── Browser ────────────────────────────┐
+│  Game (Canvas 2D)  ──▶  Engine (deterministic, 60Hz, seeded)     │
+│       ▲                        │ loads strategy.js via QuickJS   │
+│       │                        ▼                                 │
+│  Interlude UI  ◀── SSE ── replay log (seed + inputs + summary)   │
+└───────────────┬──────────────────────────────────────────────────┘
+                │ POST /api/rewrite   (round, replay, prevStrategy)
+                ▼
+┌─────────────────────────── Server (Node) ───────────────────────┐
+│  Orchestrator                                                    │
+│    ├─ Analyst agent   (context: replay summary + contract docs)  │
+│    ├─ Coder agent     (context: contract + observations + prev)  │
+│    └─ Harness         (deterministic; no LLM)                    │
+│         Gate 1 static ─ Gate 2 fuzz ─ Gate 3 balance ─ Gate 4 perf│
+│              └── on failure: rejection reason → Coder (max 4×)   │
+│    └─ Fallback pool   (pre-approved strategies per round)        │
+│  Streams every beat back over SSE                                │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 5.1 Packages (monorepo, pnpm workspaces)
+
+| Package | Responsibility | Depends on |
 |---|---|---|
-| | | |
-| | | |
-| | | |
+| `engine` | Pure TS game simulation, no DOM, no rendering. Exports `step`, `createGame`, `replay` | — |
+| `contract` | Types, action validator, static-check rules, reference bots | `engine` |
+| `harness` | The four gates + simulator runner. CLI: `pnpm harness <strategy.js>` | `engine`, `contract` |
+| `agents` | Analyst + Coder prompts, context assembly, rewrite loop | `contract`, `harness` |
+| `server` | HTTP + SSE, fallback pool, rate limits | `agents` |
+| `web` | Vite + Canvas renderer + interlude UI | `engine`, `contract` |
 
-**Hora do freeze (nada de código novo depois):**
+The engine is the shared truth. Everything else is a consumer.
 
-## 9. Demo
+### 5.2 Key technical decisions
 
-**Roteiro (o que eu falo, o que eu clico):**
+| Decision | Choice | Why |
+|---|---|---|
+| Rendering | Canvas 2D, hand-rolled | Zero framework risk, full control of visual style, trivially deterministic |
+| Simulation | Fixed timestep 60 Hz, integer-friendly math, seeded xorshift PRNG | Replays and headless sim must match the live game exactly |
+| Strategy runtime | QuickJS (`quickjs-emscripten`) | Same sandbox in browser and Node; memory + time limits; no host access |
+| Agent model | Claude via API, server-side only | Key never reaches the browser |
+| Streaming | Server-Sent Events | One-directional, simple, survives Vercel |
+| Deploy | Vercel (web + serverless server) | Live URL required by submission |
+| Tests | Vitest (unit/property), Playwright (browser) | Fast; screenshots double as demo evidence |
+| Balance oracle | Panel of scripted reference bots + a "mimic" bot | See §6 — the sim needs opponents that aren't the human |
 
-**Dados de exemplo pré-carregados:**
+---
 
-**O que fazer se a internet/API cair:**
+## 6. Balance harness design
 
-## 10. Critério de sucesso
+The harness decides whether a strategy ships. It never calls an LLM.
 
-**Como eu sei que deu certo:**
+### 6.1 Reference bot panel
 
-**Como os juízes avaliam (critérios do hackathon):**
+Scripted players the boss is simulated against. Each is ~50 lines and deterministic.
 
-## 11. Time
+| Bot | Behavior | Tests that the boss… |
+|---|---|---|
+| `Camper` | Holds a corner, shoots on cooldown windows | …can flush a passive player |
+| `Kiter` | Keeps max range, circles | …isn't helpless against distance |
+| `Rusher` | Closes distance, dashes through attacks | …isn't trivially beaten by aggression |
+| `Dodger` | Reacts perfectly to telegraphs, never attacks first | …can still deal damage to a defensive player |
+| **`Mimic`** | Replays the *human's* observed pattern: heat-map-weighted positioning, dash direction bias, shot timing | …**actually learned something** |
 
-| Pessoa | Responsável por |
+### 6.2 Two assertions per round
+
+```
+ADAPTED :  win_rate(boss vs Mimic)  ≥ 0.70          "it countered how you played"
+FAIR    :  win_rate(boss vs panel)  ∈ band[round]   "…but a different approach still beats it"
+```
+
+Fairness band escalates so the boss gets harder over rounds without ever becoming unwinnable:
+
+| Round | Boss win-rate band vs panel |
 |---|---|
-| | |
+| 2 | 0.35 – 0.50 |
+| 3 | 0.45 – 0.60 |
+| 4 | 0.50 – 0.65 |
+| 5 | 0.55 – 0.70 |
+
+`N = 200` matches per assertion (parallelized across workers), fixed seed set → identical results on every machine.
+
+### 6.3 The autonomous loop, precisely
+
+```
+Coder emits strategy.js
+  → Gate 1 static      fail → reason → Coder      (e.g. "uses Date; forbidden")
+  → Gate 2 fuzz        fail → reason → Coder      (e.g. "returned angle=NaN on 3% of states")
+  → Gate 3 balance     fail → reason → Coder      (e.g. "0.91 vs panel — too hard; 0.41 vs Mimic — didn't adapt")
+  → Gate 4 perf        fail → reason → Coder      (e.g. "decide() p99 = 6.2ms > 2ms")
+  → APPROVED → ship
+Max 4 attempts. Then fallback pool. Every attempt and reason is logged and streamed to the player.
+```
+
+No human message occurs anywhere in this loop. This block, with real logs, is the Autonomous Loop Evidence for `SYSTEM.md`.
+
+---
+
+## 7. Test & verification plan (the harness agents build against)
+
+| Layer | Tool | What it proves | Command |
+|---|---|---|---|
+| Engine unit | Vitest | Movement, collisions, cooldowns, damage; **determinism**: same seed + inputs → identical state hash | `pnpm test:engine` |
+| Engine property | Vitest + fast-check | Boss/player never leave arena; HP never negative; cooldowns never negative | `pnpm test:engine` |
+| Contract | Vitest | Validator rejects every malformed action; static check catches every forbidden identifier in a fixture set of bad strategies | `pnpm test:contract` |
+| Harness self-test | Vitest | Known-broken fixture strategies are rejected at the expected gate; known-good fixtures pass | `pnpm test:harness` |
+| Balance regression | Vitest | Each shipped fallback strategy still lands in its round's band | `pnpm test:balance` |
+| Agent eval | Vitest (calls API, opt-in) | Given 10 canned replays, the loop reaches APPROVED within 4 attempts ≥ 80% of the time | `pnpm eval:agents` |
+| Browser | Playwright | Game boots, a scripted player wins Round 1, interlude renders all four beats, Round 2 starts. Screenshots saved to `artifacts/` | `pnpm test:e2e` |
+| Gate-all | shell | Everything above, exit non-zero on any failure. **Pre-commit hook + CI** | `pnpm verify` |
+
+Deterministic controls (never delegated to an agent's memory):
+
+- `pnpm verify` runs on every commit via hook. Agents cannot skip it.
+- A lint rule forbids `Math.random` and `Date.now` in `engine/`.
+- CI rejects any PR touching `contract/` without an updated `CHANGELOG` entry in that package — the contract is the API the boss agent depends on, so its changes are human-gated.
+
+---
+
+## 8. Agent design (summary — full detail in SYSTEM.md)
+
+| Agent | Context it receives | Context it is denied | Output |
+|---|---|---|---|
+| **Analyst** | Compressed replay (heat map, timings, dash bins), round number, previous strategy `meta` | Engine source, any code | JSON: `observations[]`, `counterPlan`, `playerArchetype` |
+| **Coder** | Boss Contract docs, `BossView`/`BossAction` types, Analyst JSON, previous `strategy.js`, harness rejection reason (if retrying) | Engine source, renderer, server | `strategy.js` |
+| **Harness** | The strategy file | — (deterministic, no LLM) | verdict + reason |
+
+Build-time agents (Claude Code, separate worktrees) follow the same principle: an agent working on `web/` gets the engine's public types, not its internals. Boundaries in `SYSTEM.md`.
+
+---
+
+## 9. Acceptance criteria (Definition of Done)
+
+Numbered so an agent can check each one.
+
+1. `pnpm install && pnpm dev` runs the game locally with a mock agent (fallback pool only, no API key) in under 2 minutes on a fresh clone.
+2. `pnpm verify` passes on `main`.
+3. Same seed + same input log produces an identical final state hash in browser and Node.
+4. A human can beat Round 1 in under 60 s with WASD + mouse on first try in ≥ 3 of 5 attempts (informal playtest, logged in AI-DEV-LOG).
+5. After a Round 1 win, the interlude shows all four beats with real streamed content in ≤ 45 s wall-clock, or falls back visibly ("Using a pre-approved strategy — the coder timed out") in ≤ 50 s.
+6. At least one *recorded* real run in `docs/` shows a strategy rejected by Gate 3 and then approved on a subsequent attempt with no human input.
+7. The Round 2 boss beats the `Mimic` bot ≥ 70% in the sim for that run.
+8. A strategy containing `Date.now()`, `fetch(`, or an infinite loop is rejected before it executes in the game.
+9. Deployed URL loads and completes AC 5 from a cold start.
+10. `README.md`, `docs/SPEC.md`, `docs/SYSTEM.md`, `docs/AI-DEV-LOG.md` exist and match what was shipped.
+
+---
+
+## 10. Milestones (solo, 12 days)
+
+| Days | Milestone | Parallel workstreams |
+|---|---|---|
+| **Sep 2–3** | Contract frozen. Engine core + determinism tests. Harness skeleton with Gate 1 & 2 | engine ‖ contract+harness |
+| **Sep 4–5** | Playable fight in browser with a hand-written strategy. Reference bots. Gate 3 balance sim | web renderer ‖ bots+sim |
+| **Sep 6–7** | Analyst + Coder agents against canned replays. Full loop closes headless. First real rejection logged | agents ‖ harness fixtures |
+| **Sep 8–9** | Interlude UI with SSE streaming. Fallback pool generated and balance-tested | interlude ‖ fallback generation |
+| **Sep 10–11** | Playwright e2e. Deploy. Polish the fight feel and boss tells. Record the autonomous-loop evidence | e2e ‖ visual polish |
+| **Sep 12–13** | SYSTEM.md, AI-DEV-LOG.md, README. Demo video. Buffer | — |
+| **Sep 14** | Submit | — |
+
+Cut order if behind: Round 5 → sound → Round 4 → `Dodger` bot. Never cut: the interlude, Gate 3, determinism.
+
+---
+
+## 11. Risks
+
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| LLM latency blows the interlude past 45 s | Medium | Stream every beat as it happens so waiting *is* content; 45 s hard timeout → fallback pool; sim parallelized across workers |
+| Coder never lands in the balance band | Medium | Band is a range, not a point; rejection reasons are quantitative ("0.91, too hard, reduce aggression"); 4 attempts; fallback pool |
+| Browser/Node sim diverge | Low if disciplined | Single engine package; QuickJS in both; determinism test in CI from day 1 |
+| Game isn't fun | Medium | Playtest AC 4 early (Sep 5). Boss tells must be readable. If not fun by Sep 8, simplify primitives, don't add |
+| Generated code escapes sandbox | Low | QuickJS + static gate + no host bindings. Treat as a security boundary in review |
+| Scope creep | High (it's a game) | §3 out-of-scope list is binding. Human approval required to add anything to it |
+
+---
+
+## 12. Open decisions (human)
+
+- [ ] Arena size and shape — square 800×800 or 16:9? Affects `Kiter` viability.
+- [ ] Whether the player sees the *previous* round's strategy name during the fight (probably yes — makes the boss feel like a character).
+- [ ] Whether to expose a "watch the sim" toggle in the interlude for technical judges (200 matches at 8× speed). Nice-to-have; decide by Sep 9.
+- [ ] Final name. REMATCH is a placeholder.
+
+---
+
+*Everything the agents build is measured against this document. If the document is wrong, fix the document first.*

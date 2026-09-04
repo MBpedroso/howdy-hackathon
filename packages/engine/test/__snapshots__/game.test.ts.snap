@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fnv1a64 > produces stable 16-hex-character digests 1`] = `
+[
+  "cbf29ce484222325",
+  "089be207b544f1e4",
+  "f7f81a3f5bd66ddd",
+  "3b3b84e184b6a9e4",
+]
+`;
