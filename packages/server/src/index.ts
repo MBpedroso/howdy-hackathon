@@ -76,7 +76,15 @@ export {
 
 export { LOCAL_ORIGINS, ORIGIN_ENV, allowedOrigins, corsFor, type CorsDecision } from './cors.ts';
 
-export { KEY_ENV, activeModel, bothFrom, hasApiKey, resolveProviders } from './providers.ts';
+export {
+  KEY_ENV,
+  activeModel,
+  activeVendor,
+  bothFrom,
+  hasApiKey,
+  resolveProviders,
+  selection,
+} from './providers.ts';
 
 export {
   ARTIFACT_DIR,

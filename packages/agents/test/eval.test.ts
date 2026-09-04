@@ -16,6 +16,7 @@ import {
   mockProvider,
   runEval,
   selectCanned,
+  workersPerRun,
   writeEvalArtifact,
   type Analysis,
   type EvalReport,
@@ -54,6 +55,9 @@ describe('runEval', () => {
       names: ['camper-a', 'dodger-a', 'kiter-a'],
       matches: 16,
       maxAttempts: 2,
+      // One file per attempt: this suite scripts the Coder call by call, and its
+      // subject is the aggregation, not the parallel-candidate search.
+      candidates: 1,
       makeProviders: (replay) => ({
         analyst: mockProvider([JSON.stringify(ANALYSIS)], { model: 'mock-analyst' }),
         coder: mockProvider(
@@ -140,4 +144,43 @@ describe('runEval', () => {
       .map((e) => (e.type === 'verdict' ? e.reason : undefined));
     expect(reasons.some((r) => r?.includes('vs panel'))).toBe(true);
   });
+});
+
+describe('running replays concurrently', () => {
+  it('splits the cores across the concurrent runs, leaving one for the main thread', () => {
+    // Gate 3 saturates every core it is given, so N runs at once must each take
+    // 1/N of the pool or they simply queue behind each other.
+    expect(workersPerRun(1, 12)).toBe(11);
+    expect(workersPerRun(3, 12)).toBe(3);
+    expect(workersPerRun(4, 12)).toBe(2);
+    // Never zero, however small the machine or however large the fan-out.
+    expect(workersPerRun(8, 2)).toBe(1);
+    expect(workersPerRun(3, 1)).toBe(1);
+  });
+
+  it('reports runs in `names` order however the pool finished them', async () => {
+    // The slowest replay is listed first, so an appended-on-arrival report would
+    // come back in the wrong order and no two runs would be diffable.
+    const delays: Record<string, number> = { 'camper-a': 120, 'dodger-a': 10, 'kiter-a': 40 };
+    const report = await runEval({
+      names: ['camper-a', 'dodger-a', 'kiter-a'],
+      matches: 16,
+      maxAttempts: 1,
+      candidates: 1,
+      concurrency: 3,
+      gate3Workers: 1,
+      makeProviders: (replay) => ({
+        analyst: mockProvider([{ text: JSON.stringify(ANALYSIS), delayMs: delays[replay] ?? 0 }], {
+          model: 'mock-analyst',
+        }),
+        coder: mockProvider([asCoderReply(readHarnessFixture('round2-candidate'))], { model: 'mock-coder' }),
+      }),
+    });
+
+    expect(report.runs.map((r) => r.replay)).toEqual(['camper-a', 'dodger-a', 'kiter-a']);
+    expect(report.concurrency).toBe(3);
+    expect(report.gate3Workers).toBe(1);
+    // Every replay produced a run, whatever the harness made of it.
+    expect(report.runs.every((r) => r.attempts >= 1)).toBe(true);
+  }, 60_000);
 });

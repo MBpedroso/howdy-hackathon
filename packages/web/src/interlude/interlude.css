@@ -281,6 +281,38 @@
 
 /* ---------------------------------------------------------- beat 3: rewrite */
 
+/* The candidate strip: one tab per file the attempt is writing at once. */
+.il-cands {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-bottom: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.il-cand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.il-cand:hover { border-color: var(--text-dim); }
+.il-cand[data-selected='true'] { color: var(--text); border-color: var(--boss); }
+.il-cand[data-status='ok'] .mark { color: var(--player); }
+.il-cand[data-status='fail'] .mark { color: var(--boss); }
+.il-cand[data-status='fail'] .name { text-decoration: line-through; }
+.il-cand .mark { font-variant-numeric: tabular-nums; }
+
 .il-code, .il-diff {
   margin: 0;
   flex: 1;
@@ -303,6 +335,17 @@
 /* ------------------------------------------------------------ beat 4: trial */
 
 .il-gates { display: flex; flex-direction: column; gap: 4px; }
+/* Gate rows are grouped by the candidate they judged; with one file there is one
+   unlabelled group and the panel looks exactly as it did. */
+.il-gate-group { display: flex; flex-direction: column; }
+.il-gate-group + .il-gate-group { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+.il-gate-group-head {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-bottom: 2px;
+}
 .il-gate {
   display: flex;
   align-items: baseline;

@@ -84,8 +84,31 @@ export type LLMUsage = {
 /** Why the loop gave up. `error` also covers an aborted provider stream. */
 export type FailureReason = 'max-attempts' | 'deadline' | 'error';
 
+/** One of the K files an attempt wrote, with what the gates said about it. */
+export type CandidateLog = {
+  candidate: number;
+  dial?: string;
+  source: string;
+  diff: string;
+  name?: string;
+  coder: {
+    calls: number;
+    promptChars: number;
+    usage: LLMUsage;
+    ms: number;
+    selfRetry?: string;
+    staticInvalid?: true;
+  };
+  gates: GateResult[];
+  approved: boolean;
+  reason?: string;
+  panel?: number;
+  skipped?: true;
+};
+
 export type AttemptLog = {
   attempt: number;
+  /** The chosen candidate's file; `coder` is the whole attempt's cost. */
   source: string;
   diff: string;
   coder: {
@@ -100,6 +123,9 @@ export type AttemptLog = {
   approved: boolean;
   reason?: string;
   ms: number;
+  /** Present when the attempt wrote more than one file. */
+  candidates?: CandidateLog[];
+  chosen?: number;
 };
 
 export type RewriteResult =
@@ -136,19 +162,61 @@ export type RewriteEvent =
       usage: LLMUsage;
       ms: number;
     }
-  /** Beat 3, streaming. `attempt` is 1-based. */
-  | { type: 'rewrite.delta'; attempt: number; delta: string }
+  /**
+   * Beat 3, streaming. `attempt` is 1-based.
+   *
+   * ## Candidates
+   *
+   * An attempt writes K files at once (`REMATCH_CANDIDATES`, default 3), aimed at
+   * the low edge, the middle and the high edge of the round's band. Every event
+   * belonging to one of those files carries `candidate` (0-based) and `candidates`
+   * (K) — `rewrite.delta`, `rewrite.done`, `trial.gate`, `trial.progress` and the
+   * per-candidate `verdict`.
+   *
+   * Both fields are **absent when K is 1**, and absent on the one attempt-level
+   * `verdict` that follows the per-candidate ones, so a renderer that ignores
+   * `candidate` still sees exactly one verdict per attempt.
+   */
+  | { type: 'rewrite.delta'; attempt: number; delta: string; candidate?: number; candidates?: number }
   /** `meta` is the file's own, parsed from its source by the loop. */
-  | { type: 'rewrite.done'; attempt: number; source: string; diff: string; meta?: StrategyMeta }
+  | {
+      type: 'rewrite.done';
+      attempt: number;
+      source: string;
+      diff: string;
+      meta?: StrategyMeta;
+      candidate?: number;
+      candidates?: number;
+      /** `conservative` / `balanced` / `aggressive` — the aim point this file took. */
+      dial?: string;
+    }
   /** Beat 4. One event per gate, as it finishes; stops at the first failure. */
-  | { type: 'trial.gate'; attempt: number; gate: GateResult }
+  | { type: 'trial.gate'; attempt: number; gate: GateResult; candidate?: number; candidates?: number }
   /**
    * Gate 3's simulation, as it happens: `matchesDone: 0` first, then one event per
    * batch of finished matches, then `matchesDone === matchesTotal`. Real measured
    * progress — the meter needs no duration estimate.
    */
-  | { type: 'trial.progress'; attempt: number; matchesDone: number; matchesTotal: number; gate: GateName }
-  | { type: 'verdict'; attempt: number; approved: boolean; reason?: string }
+  | {
+      type: 'trial.progress';
+      attempt: number;
+      matchesDone: number;
+      matchesTotal: number;
+      gate: GateName;
+      candidate?: number;
+      candidates?: number;
+    }
+  /** One per candidate, then one for the attempt with `candidate` absent. */
+  | {
+      type: 'verdict';
+      attempt: number;
+      approved: boolean;
+      reason?: string;
+      candidate?: number;
+      candidates?: number;
+      /** Gate 3's panel mean for this candidate, when it measured one. */
+      panel?: number;
+    }
   /** Attempts or the deadline are exhausted; a pre-approved strategy ships. */
   | { type: 'fallback'; reason: FailureReason; message?: string }
   | { type: 'done'; result: RewriteResult };

@@ -14,10 +14,11 @@
  * that answered it. Nothing in it is written by hand.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { DEFAULT_MATCHES, type BalanceRound } from '@rematch/harness';
 import { CANNED_NAMES, loadCanned, type CannedName } from './canned.ts';
 import type { RewriteEvent, RewriteResult } from './events.ts';
-import { DEADLINE_MS, rewrite, type RewriteProviders } from './loop.ts';
+import { DEADLINE_MS, resolveCandidates, rewrite, type RewriteProviders } from './loop.ts';
 
 /** Spec §7's threshold. Below this, `pnpm eval:agents` exits non-zero. */
 export const PASS_RATE_TARGET = 0.8;
@@ -38,6 +39,8 @@ export type EvalRun = {
   tokens: { input: number; output: number; cacheRead: number };
   /** Model calls, including Analyst retries and Coder static self-retries. */
   modelCalls: number;
+  /** Files written across every attempt — `attempts x K` when nothing was skipped. */
+  candidatesEvaluated: number;
   events: RewriteEvent[];
   result: RewriteResult;
 };
@@ -47,6 +50,11 @@ export type EvalReport = {
   generatedAt: string;
   round: BalanceRound;
   matches: number;
+  /** Files per attempt this eval ran (`REMATCH_CANDIDATES`). */
+  candidates: number;
+  /** Replays run at once, and the Gate 3 workers each of them got. */
+  concurrency: number;
+  gate3Workers: number;
   models: { analyst: string; coder: string };
   target: number;
   passRate: number;
@@ -67,6 +75,26 @@ export type EvalOptions = {
   round?: BalanceRound;
   deadlineMs?: number;
   maxAttempts?: number;
+  /** Files per attempt. Defaults to the loop's (`REMATCH_CANDIDATES`, else 3). */
+  candidates?: number;
+  /**
+   * Replays run at once. Default 3 (`REMATCH_EVAL_CONCURRENCY`).
+   *
+   * The runs used to be strictly sequential because Gate 3 saturates every core
+   * with simulation workers, and two runs at once would make both slower and the
+   * wall-clock column meaningless. That is still true if nothing else changes — so
+   * the worker pool is *split* instead: each concurrent run gets its share of the
+   * cores (`gate3Workers`). Measured on 12 cores, 200 matches: 889 ms with 11
+   * workers, 1617 ms with 3, and three runs at once with 3 workers each finish in
+   * 1869 ms — 1.4x the throughput of running them one at a time.
+   *
+   * The cost is that each run's Gate 3 really is ~2x slower than it would be alone,
+   * which eats into the loop's 40 s deadline. `1` is the honest-latency setting and
+   * is what a wall-clock measurement for spec AC 5 should use.
+   */
+  concurrency?: number;
+  /** Gate 3 workers per run. Default: the cores, split across `concurrency`. */
+  gate3Workers?: number;
   /** Called as each run finishes, for the CLI's progress lines. */
   onRun?: (run: EvalRun) => void;
 };
@@ -80,7 +108,18 @@ export function selectCanned(only: string | undefined): CannedName[] {
   return picked;
 }
 
-async function runOne(name: CannedName, opts: EvalOptions, matches: number, round: BalanceRound): Promise<EvalRun> {
+/** Cores split across the concurrent runs, leaving one for the main thread. */
+export function workersPerRun(concurrency: number, cores = availableParallelism()): number {
+  return Math.max(1, Math.floor(Math.max(1, cores - 1) / Math.max(1, concurrency)));
+}
+
+async function runOne(
+  name: CannedName,
+  opts: EvalOptions,
+  matches: number,
+  round: BalanceRound,
+  workers: number,
+): Promise<EvalRun> {
   const canned = loadCanned(name);
   const events: RewriteEvent[] = [];
   const started = Date.now();
@@ -91,9 +130,10 @@ async function runOne(name: CannedName, opts: EvalOptions, matches: number, roun
       round,
       prevSource: canned.bossStrategy,
       providers: opts.makeProviders(name),
-      harnessOpts: { gate3: { matches } },
+      harnessOpts: { gate3: { matches, workers } },
       deadlineMs: opts.deadlineMs ?? DEADLINE_MS,
       ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),
+      ...(opts.candidates === undefined ? {} : { candidates: opts.candidates }),
     },
     (event) => void events.push(event),
   );
@@ -124,11 +164,14 @@ async function runOne(name: CannedName, opts: EvalOptions, matches: number, roun
     .flatMap((a) => a.gates.filter((g) => !g.ok))
     .map((g) => `${g.gate} ${g.name}`);
 
+  const candidatesEvaluated = result.attempts.reduce((n, a) => n + (a.candidates?.length ?? 1), 0);
+
   return {
     replay: name,
     ...(result.analysis === undefined ? {} : { archetype: result.analysis.playerArchetype }),
     approved: result.approved,
     attempts: result.attempts.length,
+    candidatesEvaluated,
     gatesFailed,
     ...(result.approved ? { strategyName: result.meta.name } : { failureReason: result.reason }),
     ms,
@@ -144,15 +187,27 @@ export async function runEval(opts: EvalOptions): Promise<EvalReport> {
   const matches = Math.max(8, Math.trunc(opts.matches ?? DEFAULT_MATCHES));
   const round = opts.round ?? EVAL_ROUND;
 
-  const runs: EvalRun[] = [];
-  for (const name of names) {
-    // Sequentially, not in parallel: Gate 3 already saturates every core with
-    // simulation workers, so two runs at once would make both slower and make the
-    // wall-clock column meaningless.
-    const run = await runOne(name, opts, matches, round);
-    runs.push(run);
-    opts.onRun?.(run);
-  }
+  const concurrency = Math.max(1, Math.trunc(opts.concurrency ?? 1));
+  const workers = opts.gate3Workers ?? workersPerRun(concurrency);
+
+  // Results are stored at their replay's index, never appended on arrival, so the
+  // report is in `names` order however the pool finished them — the same rule the
+  // simulator uses, and for the same reason: a report you cannot diff run to run is
+  // not evidence.
+  const runs: EvalRun[] = new Array<EvalRun>(names.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      const name = names[index];
+      if (name === undefined) return;
+      const run = await runOne(name, opts, matches, round, workers);
+      runs[index] = run;
+      opts.onRun?.(run);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, names.length) }, worker));
 
   const approved = runs.filter((r) => r.approved).length;
   const rejectedThenApproved = runs.filter((r) => r.approved && r.gatesFailed.length > 0);
@@ -163,6 +218,9 @@ export async function runEval(opts: EvalOptions): Promise<EvalReport> {
     generatedAt: new Date().toISOString(),
     round,
     matches,
+    candidates: opts.candidates ?? resolveCandidates(),
+    concurrency,
+    gate3Workers: workers,
     models: { analyst: probe.analyst.model, coder: probe.coder.model },
     target: PASS_RATE_TARGET,
     passRate: runs.length === 0 ? 0 : approved / runs.length,
@@ -183,6 +241,7 @@ export function formatEvalTable(report: EvalReport): string {
     'arch'.padEnd(7),
     'appr',
     'att',
+    'cand',
     'gates rejected'.padEnd(22),
     'strategy / why'.padEnd(22),
     '   wall',
@@ -197,6 +256,7 @@ export function formatEvalTable(report: EvalReport): string {
       (r.archetype ?? '—').padEnd(7),
       (r.approved ? ' ✓  ' : ' ✗  ').padEnd(4),
       String(r.attempts).padStart(3),
+      String(r.candidatesEvaluated).padStart(4),
       (r.gatesFailed.join(', ') || '—').padEnd(22).slice(0, 22),
       (r.strategyName ?? r.failureReason ?? '—').padEnd(22).slice(0, 22),
       `${(r.ms / 1000).toFixed(1)}s`.padStart(7),

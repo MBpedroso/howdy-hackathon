@@ -95,6 +95,17 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   expect(streamed).not.toContain('"playerArchetype"');
 
   // ---------------------------------------------------------------- beat 3
+  // Three candidate files per attempt, aimed at the low edge, the middle and the
+  // high edge of the band — the tab strip is the search, and the pane below it is
+  // whichever file the harness last touched.
+  const cands = page.getByTestId('il-cands');
+  await expect(cands).toBeVisible();
+  await expect(cands.locator('.il-cand')).toHaveCount(3);
+  await expect(cands.locator('[data-status="ok"]')).toHaveCount(1);
+  await expect(cands.locator('[data-status="fail"]')).toHaveCount(2);
+  // The approved file is what the screen is left on, not the last one measured.
+  await expect(cands.locator('[data-selected="true"]')).toHaveAttribute('data-status', 'ok');
+
   const diff = page.getByTestId('il-diff');
   await expect(diff).toBeVisible();
   await expect(diff).toContainText('+++ strategy.js (attempt 2)');
@@ -105,19 +116,22 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
 
   // ---------------------------------------------------------------- beat 4
   const gates = page.getByTestId('il-gates');
-  // Attempt 1 stopped at Gate 3; attempt 2 ran all four. Seven rows, and the
-  // rejected one is still on screen after the approval.
-  await expect(gates.locator('.il-gate')).toHaveCount(7);
+  // Attempt 2's three candidates: two stopped at Gate 3, one ran all four. The
+  // rows are grouped by candidate and nothing from an earlier candidate clears.
+  await expect(gates.locator('.il-gate-group')).toHaveCount(3);
+  await expect(gates.locator('.il-gate')).toHaveCount(10);
   await expect(gates).toContainText('REJECTED');
-  await expect(gates.locator('[data-ok="false"]')).toHaveCount(1);
-  await expect(gates.locator('[data-ok="false"]')).toContainText('Gate 3 balance');
+  await expect(gates.locator('[data-ok="false"]')).toHaveCount(2);
+  await expect(gates.locator('[data-ok="false"]').first()).toContainText('Gate 3 balance');
 
-  // Spec §2.2: "the player must be able to read every rejection."
+  // Spec §2.2: "the player must be able to read every rejection." Five files were
+  // rejected across the two attempts and all five reasons are still readable.
   const rejections = page.getByTestId('il-rejections');
-  await expect(rejections.locator('li')).toHaveCount(1);
+  await expect(rejections.locator('li')).toHaveCount(5);
   await expect(rejections).toContainText('rejected by Gate 3 balance');
   await expect(rejections).toContainText('0.91 vs panel');
   await expect(rejections).toContainText('too hard');
+  await expect(rejections).toContainText('too easy');
   await expect(rejections).toContainText('0.41 vs Mimic');
 
   await expect(page.getByTestId('il-verdict')).toContainText('APPROVED');
@@ -130,7 +144,8 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
 
   // The whole run, inside AC 5's budget even before the 20× speed-up is undone.
   const state = await page.evaluate(() => window.__rematch?.interlude?.state);
-  expect(state?.rejections).toHaveLength(1);
+  expect(state?.rejections).toHaveLength(5);
+  expect(state?.candidates).toBe(3);
   expect(state?.approved).toBe(true);
   expect(state?.strategyName).toBe('Warden');
   expect(state?.phase).toBe('done');

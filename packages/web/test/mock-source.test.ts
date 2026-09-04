@@ -136,32 +136,53 @@ describe('buildMockScript', () => {
     expect(order.indexOf('verdict')).toBeGreaterThan(order.indexOf('trial.gate'));
   });
 
-  it('rejects attempt 1 at Gate 3 and approves attempt 2 — the whole point', async () => {
+  it('writes three candidates per attempt and rejects all three of attempt 1', async () => {
     const events = await run();
     const verdicts = events.filter((e): e is Extract<RewriteEvent, { type: 'verdict' }> => e.type === 'verdict');
 
-    expect(verdicts).toHaveLength(2);
-    expect(verdicts[0]).toMatchObject({ attempt: 1, approved: false });
-    expect(verdicts[1]).toMatchObject({ attempt: 2, approved: true });
+    // Three per-candidate verdicts per attempt, then one attempt-level verdict with
+    // no `candidate` — the only one a K-unaware client sees.
+    const perCandidate = verdicts.filter((v) => v.candidate !== undefined);
+    const perAttempt = verdicts.filter((v) => v.candidate === undefined);
+    expect(perCandidate.map((v) => [v.attempt, v.candidate, v.approved])).toEqual([
+      [1, 0, false],
+      [1, 1, false],
+      [1, 2, false],
+      [2, 0, false],
+      [2, 1, true],
+      [2, 2, false],
+    ]);
+    expect(perCandidate.every((v) => v.candidates === 3)).toBe(true);
+    expect(perAttempt).toHaveLength(2);
+    expect(perAttempt[0]).toMatchObject({ attempt: 1, approved: false });
+    expect(perAttempt[1]).toMatchObject({ attempt: 2, approved: true });
 
-    // The rejection is quantitative on both of spec §6.2's assertions: that
-    // sentence is the Coder's only feedback and the player's only proof.
-    const reason = verdicts[0]?.reason ?? '';
-    expect(reason).toContain('0.91 vs panel');
-    expect(reason).toContain('too hard');
-    expect(reason).toContain('0.35–0.50');
-    expect(reason).toContain('round 2');
-    expect(reason).toContain('0.41 vs Mimic');
-    expect(reason).toMatch(/0\.70/);
+    // The three aim points bracket the band, which is what the retry interpolates
+    // inside: one below it, two above.
+    const panels = perCandidate.filter((v) => v.attempt === 1).map((v) => v.panel);
+    expect(panels).toEqual([0.22, 0.55, 0.91]);
+
+    // Every rejection is quantitative on both of spec §6.2's assertions: those
+    // sentences are the Coder's only feedback and the player's only proof.
+    const worst = perCandidate.find((v) => v.attempt === 1 && v.candidate === 2)?.reason ?? '';
+    expect(worst).toContain('0.91 vs panel');
+    expect(worst).toContain('too hard');
+    expect(worst).toContain('0.35–0.50');
+    expect(worst).toContain('round 2');
+    expect(worst).toContain('0.41 vs Mimic');
+    expect(worst).toMatch(/0\.70/);
+    expect(perCandidate.find((v) => v.attempt === 1 && v.candidate === 0)?.reason).toContain('too easy');
 
     const gates = events.filter((e): e is Extract<RewriteEvent, { type: 'trial.gate' }> => e.type === 'trial.gate');
-    // Attempt 1 stops at the first failure: 1, 2, 3 and no Gate 4.
-    expect(gates.filter((g) => g.attempt === 1).map((g) => g.gate.gate)).toEqual([1, 2, 3]);
-    expect(gates.filter((g) => g.attempt === 2).map((g) => g.gate.gate)).toEqual([1, 2, 3, 4]);
+    // Each candidate stops at its first failure: 1, 2, 3 and no Gate 4 unless it passed.
+    for (const candidate of [0, 1, 2]) {
+      expect(gates.filter((g) => g.attempt === 1 && g.candidate === candidate).map((g) => g.gate.gate)).toEqual([1, 2, 3]);
+    }
+    expect(gates.filter((g) => g.attempt === 2 && g.candidate === 1).map((g) => g.gate.gate)).toEqual([1, 2, 3, 4]);
+    // Five Gate 3 rejections in all, and nothing else ever fails.
     const failing = gates.filter((g) => !g.gate.ok);
-    expect(failing).toHaveLength(1);
-    expect(failing[0]?.gate.gate).toBe(3);
-    expect(failing[0]?.gate.name).toBe('balance');
+    expect(failing).toHaveLength(5);
+    expect(failing.every((g) => g.gate.gate === 3 && g.gate.name === 'balance')).toBe(true);
   });
 
   it('reports Gate 3 in batches: 0, then every batch, then the total', async () => {
@@ -169,10 +190,11 @@ describe('buildMockScript', () => {
       (e): e is Extract<RewriteEvent, { type: 'trial.progress' }> => e.type === 'trial.progress',
     );
 
-    for (const attempt of [1, 2]) {
-      const series = progress.filter((p) => p.attempt === attempt);
+    for (const attempt of [1, 2]) for (const candidate of [0, 1, 2]) {
+      const series = progress.filter((p) => p.attempt === attempt && p.candidate === candidate);
       // The live simulator batches ~20 callbacks per gate; two events at the ends
-      // would leave the meter with nothing to show for four seconds of work.
+      // would leave the meter with nothing to show for a second of work. One series
+      // per candidate: the meter is redrawn for each file the harness picks up.
       expect(series.length).toBe(200 / MATCH_BATCH + 1);
       expect(series[0]).toMatchObject({ matchesDone: 0, matchesTotal: 200, gate: 'balance' });
       expect(series.at(-1)).toMatchObject({ matchesDone: 200, matchesTotal: 200 });
@@ -215,11 +237,19 @@ describe('buildMockScript', () => {
       (e): e is Extract<RewriteEvent, { type: 'rewrite.done' }> => e.type === 'rewrite.done',
     );
 
-    expect(dones).toHaveLength(2);
-    // Parsed from the source by the loop in a real run; hard-coded here, and pinned
-    // against the fixtures so the two cannot drift.
-    expect(dones[0]?.meta).toEqual({ ...ATTEMPT1_META });
-    expect(dones[1]?.meta).toEqual({ ...APPROVED_META });
+    expect(dones).toHaveLength(6);
+    expect(dones.map((d) => [d.attempt, d.candidate, d.dial])).toEqual([
+      [1, 0, 'conservative'],
+      [1, 1, 'balanced'],
+      [1, 2, 'aggressive'],
+      [2, 0, 'conservative'],
+      [2, 1, 'balanced'],
+      [2, 2, 'aggressive'],
+    ]);
+    // The Coder's suffix rule, so three candidates cannot collide on one boss name.
+    expect(dones.slice(0, 3).map((d) => d.meta?.name)).toEqual(['Warden I', 'Warden II', 'Warden III']);
+    // The one that ships is the fixture's own `meta`, byte for byte.
+    expect(dones[4]?.meta).toEqual({ ...APPROVED_META });
     for (const done of dones) {
       expect(done.source).toContain(`name: '${done.meta?.name ?? ''}'`);
       expect(done.source).toContain(done.meta?.rationale ?? '');
@@ -228,13 +258,17 @@ describe('buildMockScript', () => {
 
   it('streams the code it later shows as a diff, byte for byte', async () => {
     const events = await run();
-    for (const attempt of [1, 2]) {
+    for (const attempt of [1, 2]) for (const candidate of [0, 1, 2]) {
       const streamed = events
-        .filter((e): e is Extract<RewriteEvent, { type: 'rewrite.delta' }> => e.type === 'rewrite.delta' && e.attempt === attempt)
+        .filter(
+          (e): e is Extract<RewriteEvent, { type: 'rewrite.delta' }> =>
+            e.type === 'rewrite.delta' && e.attempt === attempt && e.candidate === candidate,
+        )
         .map((e) => e.delta)
         .join('');
       const done = events.find(
-        (e): e is Extract<RewriteEvent, { type: 'rewrite.done' }> => e.type === 'rewrite.done' && e.attempt === attempt,
+        (e): e is Extract<RewriteEvent, { type: 'rewrite.done' }> =>
+          e.type === 'rewrite.done' && e.attempt === attempt && e.candidate === candidate,
       );
       // If these two ever disagree, the player watched one file being written and
       // was then shown a diff of a different one.
@@ -269,6 +303,11 @@ describe('buildMockScript', () => {
     expect(done.result.attempts[0]?.approved).toBe(false);
     expect(done.result.attempts[1]?.approved).toBe(true);
     expect(done.result.attempts[0]?.reason).toContain('too hard');
+    // Every attempt logs all three files it wrote, and which one it settled on.
+    expect(done.result.attempts[0]?.candidates).toHaveLength(3);
+    expect(done.result.attempts[0]?.chosen).toBe(1);
+    expect(done.result.attempts[1]?.chosen).toBe(1);
+    expect(done.result.attempts[1]?.candidates?.filter((c) => c.approved)).toHaveLength(1);
     expect(done.result.analysis.observations.length).toBeGreaterThanOrEqual(3);
   });
 

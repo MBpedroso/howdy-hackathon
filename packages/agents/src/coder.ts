@@ -25,7 +25,14 @@
  */
 import { staticCheck, type Violation } from '@rematch/contract';
 import type { BalanceRound } from '@rematch/harness';
-import { coderPrompt, promptSize, type Analysis, type CoderRejection } from './context/prompts.ts';
+import {
+  coderPrompt,
+  promptSize,
+  type Analysis,
+  type CoderBracket,
+  type CoderDial,
+  type CoderRejection,
+} from './context/prompts.ts';
 import { collect, type LLMProvider, type LLMUsage } from './provider.ts';
 
 export type CoderInput = {
@@ -37,6 +44,17 @@ export type CoderInput = {
    * rejection, the per-bot rates the loop read out of `GateResult.detail`.
    */
   rejection?: CoderRejection;
+  /**
+   * Which of the attempt's K parallel candidates this call writes. The only thing
+   * that differs between the K prompts of one attempt — see `dialFor`.
+   */
+  dial?: CoderDial;
+  /**
+   * The two measured files that straddle the band. When present the prompt shows
+   * both instead of `prevSource`, and the dial's `blend` says where between them
+   * this candidate is aimed.
+   */
+  bracket?: CoderBracket;
 };
 
 export type CoderResult = {
@@ -64,8 +82,16 @@ export type CoderOptions = {
   now?: () => number;
 };
 
-/** A full strategy is ~100 lines; 4096 leaves room for comments without inviting an essay. */
-export const CODER_MAX_TOKENS = 4096;
+/**
+ * A full strategy is ~100 lines and measures at ~1500 output tokens; 5120 leaves
+ * room for comments without inviting an essay.
+ *
+ * Raised from 4096 after a ten-replay eval in which 3 of 66 candidate files arrived
+ * cut off mid-expression — a truncated file costs a whole candidate and reads on
+ * screen as a model that cannot write JavaScript. The budget is a ceiling, not a
+ * target: nothing is billed for tokens that are not generated.
+ */
+export const CODER_MAX_TOKENS = 5120;
 
 export async function runCoder(
   input: CoderInput,
@@ -89,6 +115,8 @@ export async function runCoder(
       prevSource: input.prevSource,
       round: input.round,
       ...(input.rejection === undefined ? {} : { rejection: input.rejection }),
+      ...(input.dial === undefined ? {} : { dial: input.dial }),
+      ...(input.bracket === undefined ? {} : { bracket: input.bracket }),
       ...(selfRetry === undefined ? {} : { selfRetry: { violations: selfRetry } }),
     });
     promptChars = promptSize(prompt);

@@ -6,7 +6,7 @@ boss when the loop misses.
 
 ```
 POST /api/rewrite            text/event-stream — the interlude (spec §2.2)
-GET  /api/health             { ok, hasApiKey, model, fallbackRounds, deadlineMs }
+GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds, deadlineMs }
 GET  /api/fallback/:round    { name, source } — one pre-approved strategy
 ```
 
@@ -20,10 +20,19 @@ No API key needed to run it. Without one the server answers in **fallback-only m
 below), which is what makes spec AC 1 true: `pnpm install && pnpm dev` is a playable game on
 a fresh clone.
 
+Which vendor it calls is decided in exactly one place — `selectProvider()` in
+`@rematch/agents` — so the boot banner, `/api/health` and `pnpm eval:agents` cannot claim
+different models. `auto` prefers Anthropic when both keys are set; an *explicit*
+`REMATCH_PROVIDER` whose key is missing selects fallback-only rather than quietly billing
+the other vendor, and `/api/health` says which happened.
+
 | Variable | Effect |
 |---|---|
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | present → the real loop runs; absent → fallback-only |
+| `OPENAI_API_KEY` | present → the real loop runs on OpenAI |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | present → the real loop runs on Anthropic |
+| `REMATCH_PROVIDER` | `anthropic` \| `openai` \| `auto` (default). No usable credential → fallback-only |
 | `REMATCH_MODEL`, `REMATCH_ANALYST_MODEL`, `REMATCH_CODER_MODEL` | model per agent (`@rematch/agents`) |
+| `REMATCH_REASONING_EFFORT` | OpenAI only: `low` (default), `minimal`, `medium`, `high`, or `none` to omit the block |
 | `REMATCH_DEADLINE_MS` | loop deadline, default 40 000 |
 | `REMATCH_MATCHES` | Gate 3 matches per attempt, default 200 (spec §6.2) |
 | `REMATCH_WORKERS` | Gate 3 simulation threads, default `availableParallelism() - 1` |
@@ -115,7 +124,8 @@ moment something has gone wrong should not have to make a second request to get 
 ## Fallback-only mode
 
 No credential is a *mode*, not an error. `GET /api/health` reports it as
-`hasApiKey: false`, and a rewrite request still produces a well-formed four-beat stream:
+`hasApiKey: false` with `provider: null`, and a rewrite request still produces a
+well-formed four-beat stream:
 
 ```
 replay → analysis.delta… → analysis.done → fallback → done
@@ -161,7 +171,8 @@ pnpm --filter @rematch/server test      # ~7 s, no network, no API key
 | File | Covers |
 |---|---|
 | `rewrite.test.ts` | the endpoint over a socket: the four beats in order, `done` last, all four gates as separate events, a Gate 1 rejection reaching the client verbatim then approving, the max-attempts fallback, fallback-only mode, seeded pick stability, and a client disconnect aborting the provider's signal |
-| `http.test.ts` | health, the fallback route, eight `400` shapes, `413`, `429` with `Retry-After`, CORS preflight and refusal, keep-alive comments, `404` |
+| `providers.test.ts` | which vendor and model the server resolves from the environment, including fallback-only on a fresh clone |
+| `http.test.ts` | health (`provider` and `model` for both vendors), the fallback route, eight `400` shapes, `413`, `429` with `Retry-After`, CORS preflight and refusal, keep-alive comments, `404` |
 | `units.test.ts` | the token bucket against an injected clock (including the drip-back a socket test cannot show), the validator, the frame format, the log line |
 | `fallback.test.ts` | balance regression: every pooled strategy still lands in its round's band (spec §7) |
 

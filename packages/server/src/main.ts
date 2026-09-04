@@ -16,7 +16,7 @@
 import { createServer, poolSummary } from './http.ts';
 import { resolveDeadlineMs } from './handleRewrite.ts';
 import { resolveArtifactDir } from './log.ts';
-import { activeModel, hasApiKey } from './providers.ts';
+import { selection } from './providers.ts';
 import { POOL_BYTES } from './fallback.ts';
 
 const port = Number(process.env['PORT'] ?? 8787);
@@ -25,11 +25,15 @@ const host = process.env['HOST'] ?? '127.0.0.1';
 const server = createServer();
 
 server.listen(port, host, () => {
-  const model = activeModel();
+  const chosen = selection();
   console.log(
     [
       `@rematch/server listening on http://${host}:${port}`,
-      `  agents:    ${hasApiKey() ? `live (${model})` : 'FALLBACK-ONLY — no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN'}`,
+      `  agents:    ${
+        chosen.vendor === null
+          ? `FALLBACK-ONLY — ${chosen.reason}`
+          : `live (${chosen.vendor}: analyst ${chosen.models?.analyst}, coder ${chosen.models?.coder}) — ${chosen.reason}`
+      }`,
       `  deadline:  ${resolveDeadlineMs()} ms`,
       `  pool:      ${(POOL_BYTES / 1024).toFixed(1)} kB — ${poolSummary()}`,
       `  artifacts: ${resolveArtifactDir()}`,

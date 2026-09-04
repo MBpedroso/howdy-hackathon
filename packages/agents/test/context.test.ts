@@ -6,13 +6,17 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   analystPrompt,
+  bracketHint,
   cellCentre,
   coderPrompt,
   contractDoc,
+  correctionHint,
+  dialFor,
   harnessHints,
   harnessRules,
   promptSize,
   renderBotRates,
+  renderCandidateTable,
   renderDashRose,
   renderHeatGrid,
   renderShotsDuring,
@@ -390,5 +394,198 @@ describe('renderers', () => {
   it('renders the same summary byte-for-byte every time', () => {
     const summary = cannedSummary('rusher-a');
     expect(renderSummary(summary, { round: 1 })).toBe(renderSummary(summary, { round: 1 }));
+  });
+});
+
+describe('correctionHint', () => {
+  const panel = (rates: number[]): { perBot: { name: string; winRate: number }[] } => ({
+    perBot: rates.map((winRate, i) => ({ name: `bot${i}`, winRate })),
+  });
+
+  it('turns a large "too hard" miss into a size of change, not a nudge', () => {
+    // 0.88 against a 0.42 target: the measured failure of a retry is a boss that
+    // moves 0.05 and comes back with the same rejection.
+    const hint = correctionHint(panel([1, 1, 1, 0.52]), 2);
+    expect(hint).toMatch(/You are at 0.88 and the target is 0.42/);
+    expect(hint).toMatch(/remove roughly 52% of your total pressure/);
+    expect(hint).toMatch(/3 of the four bots cannot win a single match/);
+  });
+
+  it('asks for more pressure when the boss is under the band', () => {
+    expect(correctionHint(panel([0.2, 0, 0.1, 0.1]), 2)).toMatch(/Add roughly 76% more/);
+  });
+
+  it('tells the Coder to freeze the panel when only ADAPTED failed', () => {
+    const hint = correctionHint({ ...panel([1, 0.2, 0.2, 0.2]), mimic: 0.4 }, 2);
+    expect(hint).toMatch(/already inside the band: change NOTHING/);
+  });
+
+  it('says nothing when there is nothing to correct', () => {
+    expect(correctionHint({ ...panel([1, 0.2, 0.2, 0.2]), mimic: 0.9 }, 2)).toBeUndefined();
+    expect(correctionHint({ perBot: [] }, 2)).toBeUndefined();
+  });
+
+  it('reaches the Coder, above the verbatim reason', () => {
+    const prompt = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: 'export const meta = {}; export function init() {} export function decide() {}',
+      round: 2,
+      rejection: {
+        gate: 'balance',
+        gateNumber: 3,
+        attempt: 1,
+        reason: '0.88 vs panel — too hard',
+        rates: panel([1, 1, 1, 0.52]),
+      },
+    });
+    const content = prompt.messages[0]!.content;
+    expect(content).toMatch(/remove roughly 52%/);
+    // The harness sentence still ends the context (spec §6.3).
+    expect(content.indexOf('remove roughly 52%')).toBeLessThan(content.indexOf('0.88 vs panel'));
+  });
+});
+
+describe('parallel candidates', () => {
+  const OUTCOMES = [
+    {
+      candidate: 0,
+      dial: 'conservative',
+      approved: false,
+      gate: 'balance' as const,
+      gateNumber: 3,
+      reason: '0.31 vs panel — too easy',
+      panel: 0.31,
+      rates: {
+        perBot: [
+          { name: 'Camper', winRate: 1 },
+          { name: 'Kiter', winRate: 0 },
+          { name: 'Rusher', winRate: 0.24 },
+          { name: 'Dodger', winRate: 0 },
+        ],
+        mimic: 0.72,
+      },
+    },
+    {
+      candidate: 1,
+      dial: 'balanced',
+      approved: false,
+      gate: 'balance' as const,
+      gateNumber: 3,
+      reason: '0.55 vs panel — too hard',
+      panel: 0.55,
+      rates: {
+        perBot: [
+          { name: 'Camper', winRate: 1 },
+          { name: 'Kiter', winRate: 0.2 },
+          { name: 'Rusher', winRate: 1 },
+          { name: 'Dodger', winRate: 0 },
+        ],
+        mimic: 0.81,
+      },
+    },
+    {
+      candidate: 2,
+      dial: 'aggressive',
+      approved: false,
+      gate: 'balance' as const,
+      gateNumber: 3,
+      reason: '0.78 vs panel — too hard',
+      panel: 0.78,
+      rates: {
+        perBot: [
+          { name: 'Camper', winRate: 1 },
+          { name: 'Kiter', winRate: 1 },
+          { name: 'Rusher', winRate: 1 },
+          { name: 'Dodger', winRate: 0.12 },
+        ],
+        mimic: 0.9,
+      },
+    },
+  ];
+
+  it('gives each candidate a different aim point and a different name suffix', () => {
+    const dials = [0, 1, 2].map((i) => dialFor(i, 3)!);
+    expect(dials.map((d) => d.name)).toEqual(['conservative', 'balanced', 'aggressive']);
+    expect(new Set(dials.map((d) => d.nameSuffix)).size).toBe(3);
+    expect(dials.map((d) => d.aim)).toEqual(['low', 'mid', 'high']);
+    // Mechanical, not adjectival: three qualitative nudges produced two identical
+    // files in the first real run, so the dials name the knobs instead.
+    expect(dials[0]!.instruction).toMatch(/ONE pressure source/);
+    expect(dials[0]!.instruction).toMatch(/Do not `spawn` at all/);
+    expect(dials[2]!.instruction).toMatch(/THREE pressure sources/);
+    // The band's own numbers reach the prompt, one edge per candidate.
+    const low = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2, dial: dials[0]! });
+    const high = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2, dial: dials[2]! });
+    expect(low.messages[0]!.content).toContain('TARGET 0.35 VS THE PANEL');
+    expect(high.messages[0]!.content).toContain('TARGET 0.50 VS THE PANEL');
+    // K = 1 is the legacy loop: no dial, so the prompt is the one it always sent.
+    expect(dialFor(0, 1)).toBeUndefined();
+  });
+
+  it('puts the aim point in the message, never in the cached system prompt', () => {
+    const withDial = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('idle'),
+      round: 2,
+      dial: dialFor(1, 3)!,
+    });
+    const without = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2 });
+    // Byte-identical system prompts across candidates: the ~13 KB prefix is cached.
+    expect(withDial.system).toBe(without.system);
+    expect(withDial.system.length).toBeLessThan(13_000);
+    expect(withDial.messages[0]!.content).toContain('# YOUR AIM POINT: BALANCED');
+    expect(withDial.messages[0]!.content).toContain('meta.name` must end with');
+  });
+
+  it('renders every candidate as one table with per-bot rates', () => {
+    const table = renderCandidateTable(OUTCOMES, 2);
+    for (const dial of ['conservative', 'balanced', 'aggressive']) expect(table).toContain(dial);
+    for (const bot of ['Camper', 'Kiter', 'Rusher', 'Dodger', 'Mimic']) expect(table).toContain(bot);
+    expect(table).toContain('too easy');
+    expect(table).toContain('too hard');
+    expect(table).toContain('0.31');
+    expect(table).toContain('0.78');
+  });
+
+  it('turns a bracketed band into an interpolation instead of a correction', () => {
+    const hint = bracketHint(OUTCOMES, 2)!;
+    expect(hint).toContain('"conservative" measured 0.31');
+    expect(hint).toContain('"balanced" measured 0.55');
+    // 0.425 sits 48% of the way from 0.31 to 0.55.
+    expect(hint).toMatch(/about 48% of the way towards "balanced"/);
+    expect(hint).toContain('spawn cadence');
+    expect(hint).toContain('hold distance');
+    // Nothing to interpolate between when every candidate missed the same way.
+    expect(bracketHint(OUTCOMES.slice(1), 2)).toBeUndefined();
+  });
+
+  it('replaces the single-point correction when the band was bracketed', () => {
+    const prompt = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('chaser'),
+      round: 2,
+      rejection: {
+        gate: 'balance',
+        gateNumber: 3,
+        reason: '0.55 vs panel — too hard',
+        attempt: 1,
+        rates: OUTCOMES[1]!.rates,
+        candidates: OUTCOMES,
+      },
+    });
+    const content = prompt.messages[0]!.content;
+    expect(content).toContain('ALL 3 CANDIDATES WERE REJECTED');
+    expect(content).toContain('The band is bracketed');
+    // `correctionHint`'s "remove roughly N% of your pressure" would contradict it.
+    expect(content).not.toMatch(/remove roughly \d+% of your total pressure/);
+    // Spec §6.3 is unchanged: the harness's sentence is still the last thing read.
+    expect(content.indexOf('0.55 vs panel — too hard')).toBeGreaterThan(content.length - 400);
+  });
+
+  it('states the near-binary arithmetic that makes a 0.15-wide band hard', () => {
+    const rules = harnessRules(2);
+    expect(rules).toContain('near-binary');
+    expect(rules).toContain('steps of 0.25');
+    expect(rules).toContain('`rand()` roll per phase');
   });
 });

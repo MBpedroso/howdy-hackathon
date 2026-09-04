@@ -20,6 +20,7 @@ import {
   recorder,
   rewrite,
   type Analysis,
+  type LLMProvider,
   type RewriteEvent,
 } from '../src/index.ts';
 import { asAnalystReply, asCoderReply, cannedSummary, readGood, readHarnessFixture } from './helpers.ts';
@@ -83,6 +84,9 @@ describe('the autonomous rewrite loop', () => {
         round: 2,
         prevSource: readGood('idle'),
         providers: { analyst, coder },
+        // The legacy single-candidate loop: this file's assertions are about the
+        // rejection -> retry sequence, one file at a time (see `parallel candidates`).
+        candidates: 1,
         harnessOpts: { gate3: { matches: MATCHES } },
       },
       timed,
@@ -254,6 +258,7 @@ describe('the autonomous rewrite loop', () => {
       round: 2,
       prevSource: readGood('idle'),
       providers: { analyst, coder },
+      candidates: 1,
       harnessOpts: { gate3: { matches: MATCHES } },
     });
 
@@ -279,6 +284,9 @@ describe('the autonomous rewrite loop', () => {
         round: 2,
         prevSource: readGood('chaser'),
         providers: { analyst, coder },
+        // The legacy single-candidate loop: this file's assertions are about the
+        // rejection -> retry sequence, one file at a time (see `parallel candidates`).
+        candidates: 1,
         harnessOpts: { gate3: { matches: 16 } },
         maxAttempts: 2,
       },
@@ -313,6 +321,9 @@ describe('the autonomous rewrite loop', () => {
         round: 2,
         prevSource: readGood('idle'),
         providers: { analyst, coder },
+        // The legacy single-candidate loop: this file's assertions are about the
+        // rejection -> retry sequence, one file at a time (see `parallel candidates`).
+        candidates: 1,
         deadlineMs: 250,
       },
       emit,
@@ -345,6 +356,9 @@ describe('the autonomous rewrite loop', () => {
         round: 2,
         prevSource: readGood('idle'),
         providers: { analyst, coder },
+        // The legacy single-candidate loop: this file's assertions are about the
+        // rejection -> retry sequence, one file at a time (see `parallel candidates`).
+        candidates: 1,
         deadlineMs: 300,
       },
       emit,
@@ -369,6 +383,9 @@ describe('the autonomous rewrite loop', () => {
         round: 2,
         prevSource: readGood('idle'),
         providers: { analyst, coder },
+        // The legacy single-candidate loop: this file's assertions are about the
+        // rejection -> retry sequence, one file at a time (see `parallel candidates`).
+        candidates: 1,
       },
       emit,
     );
@@ -392,6 +409,7 @@ describe('the autonomous rewrite loop', () => {
       round: 2,
       prevSource: readGood('idle'),
       providers: { analyst, coder },
+      candidates: 1,
       signal: controller.signal,
       deadlineMs: 30_000,
     });
@@ -411,9 +429,190 @@ describe('the autonomous rewrite loop', () => {
       round: 2,
       prevSource: readGood('idle'),
       providers: provider,
+      candidates: 1,
       harnessOpts: { gate3: { matches: MATCHES } },
     });
     expect(result.approved).toBe(true);
     expect(provider.calls).toHaveLength(2);
   });
+});
+
+/**
+ * PARALLEL CANDIDATES — the fix for the loop's real-world pass rate.
+ *
+ * Five round-2 evals against gpt-5.4-mini put the loop at 0.2-0.3 approved with
+ * 54 of 55 rejections coming from Gate 3, and the reasons alternating "too hard"
+ * and "too easy" between attempts: the Coder was being handed one measured point
+ * and over-correcting past the band every time. An attempt now writes K files at
+ * once — same context, one differing line each — so a rejection comes back as an
+ * interval instead of a point.
+ *
+ * These tests are about the mechanism, not the model: the provider is keyed on the
+ * dial so each candidate's file is chosen by the test, and the gates are real.
+ */
+
+/** A Coder provider that answers by aim point, so candidate order cannot matter. */
+function dialProvider(byDial: Record<string, readonly string[]>): {
+  provider: LLMProvider;
+  prompts: string[];
+} {
+  const prompts: string[] = [];
+  const used = new Map<string, number>();
+  const provider = {
+    name: 'mock-dial',
+    model: 'mock-dial',
+    async *stream(req: { system: string; messages: readonly { content: string }[] }) {
+      const text = [req.system, ...req.messages.map((m) => m.content)].join('\n');
+      prompts.push(text);
+      const dial =
+        Object.keys(byDial).find((name) => text.includes(`# YOUR AIM POINT: ${name.toUpperCase()}`)) ??
+        Object.keys(byDial)[0]!;
+      const n = used.get(dial) ?? 0;
+      used.set(dial, n + 1);
+      const script = byDial[dial]!;
+      const reply = asCoderReply(script[Math.min(n, script.length - 1)]!);
+      yield { type: 'text' as const, delta: reply };
+      yield {
+        type: 'done' as const,
+        text: reply,
+        model: 'mock-dial',
+        usage: { inputTokens: Math.ceil(text.length / 4), outputTokens: Math.ceil(reply.length / 4) },
+      };
+    },
+  };
+  return { provider: provider as unknown as LLMProvider, prompts };
+}
+
+describe('parallel candidates', () => {
+  it('writes three files in one attempt and ships the one the harness likes', async () => {
+    const analyst = mockProvider([asAnalystReply(ANALYSIS)]);
+    const { provider: coder } = dialProvider({
+      // Fails `staticCheck` twice, so it is submitted flagged and Gate 1 rejects it.
+      conservative: [readHarnessFixture('uses-date')],
+      // Valid, but 0.78 against the panel — Gate 3, too hard.
+      balanced: [readGood('chaser')],
+      // The hand-written Round 2 boss: inside the band and beats the Mimic.
+      aggressive: [readHarnessFixture('round2-candidate')],
+    });
+
+    const { emit, events } = recorder();
+    const result = await rewrite(
+      {
+        summary: cannedSummary('camper-a'),
+        round: 2,
+        prevSource: readGood('idle'),
+        providers: { analyst, coder },
+        candidates: 3,
+        harnessOpts: { gate3: { matches: MATCHES } },
+      },
+      emit,
+    );
+
+    expect(result.approved).toBe(true);
+    expect(result.attempts).toHaveLength(1);
+
+    // Three files, tagged 0/1/2 out of 3, each labelled with its aim point.
+    const written = eventsOf(events, 'rewrite.done');
+    expect(written.map((e) => e.candidate)).toEqual([0, 1, 2]);
+    expect(written.map((e) => e.candidates)).toEqual([3, 3, 3]);
+    expect(written.map((e) => e.dial)).toEqual(['conservative', 'balanced', 'aggressive']);
+
+    // One verdict per candidate — the conservative one rejected by Gate 1, the
+    // balanced one by Gate 3, the aggressive one approved — then exactly one
+    // attempt-level verdict with no `candidate`, which is all a K-unaware client sees.
+    const verdicts = eventsOf(events, 'verdict');
+    expect(verdicts.filter((v) => v.candidate !== undefined).map((v) => [v.candidate, v.approved])).toEqual([
+      [0, false],
+      [1, false],
+      [2, true],
+    ]);
+    const attemptLevel = verdicts.filter((v) => v.candidate === undefined);
+    expect(attemptLevel).toHaveLength(1);
+    expect(attemptLevel[0]).toMatchObject({ attempt: 1, approved: true });
+
+    // Gate events carry the candidate they belong to, so the Trial panel can group them.
+    const gates = eventsOf(events, 'trial.gate');
+    expect(gates.filter((g) => g.candidate === 0).map((g) => g.gate.gate)).toEqual([1]);
+    expect(gates.filter((g) => g.candidate === 1).map((g) => g.gate.gate)).toEqual([1, 2, 3]);
+    expect(gates.filter((g) => g.candidate === 2).map((g) => g.gate.gate)).toEqual([1, 2, 3, 4]);
+
+    const log = result.attempts[0]!;
+    expect(log.candidates).toHaveLength(3);
+    expect(log.chosen).toBe(2);
+    expect(log.source.trim()).toBe(readHarnessFixture('round2-candidate').trim());
+    // The attempt's cost is the whole attempt's, not the winner's.
+    expect(log.coder.calls).toBe(4); // 2 for the self-retrying candidate, 1 each for the others
+  }, 40_000);
+
+  it('hands the next attempt every candidate\'s rates, not just one point', async () => {
+    const analyst = mockProvider([asAnalystReply(ANALYSIS)]);
+    const { provider: coder, prompts } = dialProvider({
+      // Below the band: a boss that does nothing.
+      conservative: [readGood('idle'), readGood('idle')],
+      // Above it: `chaser` is measured at 0.78 by the harness's own balance suite.
+      balanced: [readGood('chaser'), readGood('chaser')],
+      aggressive: [readGood('chaser'), readGood('chaser')],
+    });
+
+    const result = await rewrite({
+      summary: cannedSummary('camper-a'),
+      round: 2,
+      prevSource: readGood('cornerbreaker'),
+      providers: { analyst, coder },
+      candidates: 3,
+      maxAttempts: 2,
+      harnessOpts: { gate3: { matches: MATCHES } },
+    });
+
+    expect(result.approved).toBe(false);
+
+    // The attempt-2 prompts each carry the whole comparison table.
+    const second = prompts.filter((p) => p.includes('CANDIDATES WERE REJECTED'));
+    expect(second.length).toBeGreaterThanOrEqual(3);
+    const table = second[0]!;
+    for (const dial of ['conservative', 'balanced', 'aggressive']) expect(table).toContain(dial);
+    expect(table).toContain('too easy');
+    expect(table).toContain('too hard');
+    // …and the bisection the bracket makes possible: the second attempt is aimed at
+    // a point *between* the two measured files, and carries both of them.
+    expect(table).toMatch(/# YOUR AIM POINT: \d+% OF THE WAY FROM TOO EASY TO TOO HARD/);
+    expect(table).toContain('# FILE A — TOO EASY');
+    expect(table).toContain('# FILE B — TOO HARD');
+    expect(table).toContain('spawn cadence');
+    // Three candidates at three different points on the same line.
+    const fractions = second.map((p) => /AIM POINT: (\d+)%/.exec(p)?.[1]);
+    expect(new Set(fractions).size).toBe(3);
+    // Spec §6.3 still holds: the harness's own sentence is the last thing it reads.
+    const reason = result.attempts[0]!.reason!;
+    expect(table).toContain(reason);
+    expect(table.indexOf(reason)).toBeGreaterThan(table.length - 400);
+  }, 60_000);
+
+  it('emits the byte-identical legacy stream at K = 1', async () => {
+    const analyst = mockProvider([asAnalystReply(ANALYSIS)]);
+    const coder = mockProvider([asCoderReply(readHarnessFixture('round2-candidate'))]);
+    const { emit, events } = recorder();
+    const result = await rewrite(
+      {
+        summary: cannedSummary('camper-a'),
+        round: 2,
+        prevSource: readGood('idle'),
+        providers: { analyst, coder },
+        candidates: 1,
+        harnessOpts: { gate3: { matches: MATCHES } },
+      },
+      emit,
+    );
+
+    expect(result.approved).toBe(true);
+    // No candidate fields anywhere, and one verdict for the attempt.
+    for (const event of events) {
+      expect(event).not.toHaveProperty('candidate');
+      expect(event).not.toHaveProperty('candidates');
+    }
+    expect(eventsOf(events, 'verdict')).toHaveLength(1);
+    expect(result.attempts[0]!.candidates).toBeUndefined();
+    // And the prompt is the one the single-candidate loop always sent.
+    expect(coder.promptOf(0)).not.toContain('YOUR AIM POINT');
+  }, 40_000);
 });

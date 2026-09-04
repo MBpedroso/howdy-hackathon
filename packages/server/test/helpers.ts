@@ -121,6 +121,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<TestServer>
     log: () => {},
     rateLimit: false,
     harnessOpts: { gate3: { matches: MATCHES } },
+    // One file per attempt. These suites script the Coder call by call, so a
+    // three-candidate attempt would consume three scripted replies for one file;
+    // the parallel-candidate search itself is covered in `@rematch/agents`.
+    candidates: 1,
     // Nothing in the environment may change a test's verdict: no key, no model
     // override, no deadline override, no origin allow-list from a `.env`.
     env: {},

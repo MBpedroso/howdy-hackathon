@@ -22,6 +22,7 @@ describe('GET /api/health', () => {
       expect(body['ok']).toBe(true);
       // `env: {}` in the test defaults, so this is the fresh-clone answer (AC 1).
       expect(body['hasApiKey']).toBe(false);
+      expect(body['provider']).toBeNull();
       expect(body['model']).toBeNull();
       expect(body['fallbackRounds']).toEqual([...BALANCE_ROUNDS]);
     } finally {
@@ -36,7 +37,19 @@ describe('GET /api/health', () => {
     try {
       const body = (await (await fetch(`${server.url}/api/health`)).json()) as Record<string, unknown>;
       expect(body['hasApiKey']).toBe(true);
+      expect(body['provider']).toBe('anthropic');
       expect(body['model']).toBe('claude-sonnet-5');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('names the vendor, not just the model, so the demo cannot lie about who it calls', async () => {
+    const server = await startServer({ env: { OPENAI_API_KEY: 'sk-test', REMATCH_PROVIDER: 'openai' } });
+    try {
+      const body = (await (await fetch(`${server.url}/api/health`)).json()) as Record<string, unknown>;
+      expect(body['provider']).toBe('openai');
+      expect(body['model']).toMatch(/^gpt-/);
     } finally {
       await server.close();
     }

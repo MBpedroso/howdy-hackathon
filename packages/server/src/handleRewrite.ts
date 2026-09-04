@@ -32,6 +32,7 @@
  *    It should never fire; if it does, the player still gets a boss.
  */
 import {
+  resolveCandidates,
   rewrite,
   type Analysis,
   type LLMProvider,
@@ -72,6 +73,11 @@ export type RewriteHandlerOptions = {
   /** Extra time for one overshooting gate before the handler ends the stream itself. */
   graceMs?: number;
   maxAttempts?: number;
+  /**
+   * Files the Coder writes per attempt. Defaults to `REMATCH_CANDIDATES` (else 3).
+   * `1` is the single-candidate loop, which is what the scripted-provider tests use.
+   */
+  candidates?: number;
   /** Gate options. `gate3.round` and `gate3.mimicSummary` are the loop's; see `loop.ts`. */
   harnessOpts?: RunGatesOptions;
   /** Read instead of `process.env`. */
@@ -231,6 +237,10 @@ export async function handleRewrite(
         deadlineMs,
         signal: controller.signal,
         ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),
+        // Read from this handler's `env` rather than left to the loop's own
+        // `process.env` lookup, so a test (or a serverless config) that passes an
+        // env gets the candidate count it asked for.
+        candidates: opts.candidates ?? resolveCandidates(env),
       },
       relay,
     );

@@ -62,7 +62,13 @@ export type AnalystOptions = {
   now?: () => number;
 };
 
-export const ANALYST_MAX_TOKENS = 1200;
+/**
+ * 3-6 sentences plus a small JSON block measures at ~600 output tokens. 1800 is
+ * headroom for a wordy reply; raised from 1200 after one eval run in which the
+ * Analyst's reply was cut off before its fenced block and the whole rewrite fell
+ * back for want of ~200 tokens.
+ */
+export const ANALYST_MAX_TOKENS = 1800;
 
 /**
  * Run the Analyst. Resolves with a validated `Analysis`; throws only if both the

@@ -74,6 +74,52 @@ export const ATTEMPT1_META = {
   version: 1,
 } as const;
 
+// ------------------------------------------------------------- the candidates
+
+/**
+ * The three aim points an attempt is fired at, low edge to high edge.
+ *
+ * The live loop writes K files per attempt (`REMATCH_CANDIDATES`, default 3) from
+ * one context, separated by a single "aim for the low / middle / high edge of the
+ * band" line, and keeps whichever the harness likes best. The mock has to play that
+ * shape or the tab strip and the grouped gate rows are only ever exercised in
+ * production.
+ */
+export const MOCK_DIALS = ['conservative', 'balanced', 'aggressive'] as const;
+
+/**
+ * The two flanking candidates, derived from the real fixture rather than invented.
+ *
+ * There are two hand-written strategy files in the repo and an attempt needs three,
+ * so the conservative and aggressive siblings are the real file with the named
+ * constants the dials actually move — spawn cadence, hold distance, burst width —
+ * turned down and up, and `meta.name` given the suffix the Coder is told to use.
+ * Every line the player reads in those two diffs is therefore real code that would
+ * load; only the *choice* of numbers is the mock's.
+ */
+export function mockVariant(source: string, dial: (typeof MOCK_DIALS)[number], suffix: string): string {
+  const knobs: Readonly<Record<string, number>> =
+    dial === 'conservative'
+      ? { HOLD_RANGE: 1.3, SPAWN_EVERY: 1.75, BURST_MIN_RANGE: 1.15, REFRESH_TICKS: 1.5, LEAD_TICKS: 0.7 }
+      : dial === 'aggressive'
+        ? { HOLD_RANGE: 0.72, SPAWN_EVERY: 0.62, BURST_MIN_RANGE: 0.8, REFRESH_TICKS: 0.7, LEAD_TICKS: 1.3 }
+        : {};
+  let out = source;
+  for (const [name, factor] of Object.entries(knobs)) {
+    out = out.replace(
+      new RegExp(`(const ${name} = )(\\d+)`),
+      (_m: string, head: string, value: string) => `${head}${Math.round(Number(value) * factor)}`,
+    );
+  }
+  if (dial === 'conservative') out = out.replace(/count: 8/g, 'count: 5');
+  return out.replace(/(name: ')([^']+)(')/, (_m, head: string, name: string, tail: string) =>
+    `${head}${name} ${suffix}${tail}`,
+  );
+}
+
+/** `Warden I` / `Warden II` / `Warden III` — the suffix rule the Coder is given. */
+export const NAME_SUFFIXES = ['I', 'II', 'III'] as const;
+
 /**
  * Matches per `trial.progress` event.
  *
@@ -190,31 +236,68 @@ function gateFail(gate: 1 | 2 | 3 | 4, name: GateResult['name'], ms: number, rea
  * thing the player is meant to be able to read.
  */
 export function rejectionReason(round: number): string {
-  const band = round === 2 ? '0.35–0.50' : round === 3 ? '0.45–0.60' : round === 4 ? '0.50–0.65' : '0.55–0.70';
-  return (
-    `0.91 vs panel — too hard (band ${band} for round ${round}; Camper 1.00, Kiter 0.96, Rusher 0.88, Dodger 0.80); ` +
-    `0.41 vs Mimic — didn't adapt (need ≥ 0.70)`
-  );
+  return balanceReason(round, {
+    panel: 0.91,
+    perBot: [1, 0.96, 0.88, 0.8],
+    mimic: 0.41,
+  });
 }
 
-const G3_DETAIL_FAIL = {
-  round: 2,
-  matches: 200,
-  workers: 4,
-  panel: { winRate: 0.91, matches: 100, violations: 0, killed: 0, ms: 3980 },
-  mimic: { winRate: 0.41, matches: 100, avgTicks: 1520 },
-};
+/** `0.35–0.50` and the rest, per round. Spec §6.2's table. */
+export function bandOf(round: number): string {
+  return round === 2 ? '0.35–0.50' : round === 3 ? '0.45–0.60' : round === 4 ? '0.50–0.65' : '0.55–0.70';
+}
 
-const G3_DETAIL_OK = {
-  round: 2,
-  matches: 200,
-  workers: 4,
-  panel: { winRate: 0.52, matches: 100, violations: 0, killed: 0, ms: 3870 },
-  mimic: { winRate: 0.78, matches: 100, avgTicks: 2140 },
-};
+const BOT_NAMES = ['Camper', 'Kiter', 'Rusher', 'Dodger'] as const;
 
 /**
- * Gate 3's progress for one attempt: the opening event, then one per batch of
+ * A Gate 3 rejection in the harness's own voice, for one candidate's numbers.
+ *
+ * Both halves of spec §6.2 are quoted with a number when both fail, because that
+ * sentence is the entire feedback channel to the Coder (spec §6.3) *and* the thing
+ * the player is meant to be able to read. The bands and the wording come from
+ * `packages/harness/src/gates/gate3Balance.ts`, which is what a live run prints.
+ */
+export function balanceReason(
+  round: number,
+  rates: { panel: number; perBot: readonly number[]; mimic: number },
+): string {
+  const lo = Number(bandOf(round).split('–')[0]);
+  const hi = Number(bandOf(round).split('–')[1]);
+  const perBot = BOT_NAMES.map((name, i) => `${name} ${(rates.perBot[i] ?? 0).toFixed(2)}`).join(', ');
+  const problems: string[] = [];
+  if (rates.panel > hi) {
+    problems.push(`${rates.panel.toFixed(2)} vs panel — too hard (band ${bandOf(round)} for round ${round}; ${perBot})`);
+  } else if (rates.panel < lo) {
+    problems.push(`${rates.panel.toFixed(2)} vs panel — too easy (band ${bandOf(round)} for round ${round}; ${perBot})`);
+  }
+  if (rates.mimic < 0.7) problems.push(`${rates.mimic.toFixed(2)} vs Mimic — didn't adapt (need ≥ 0.70)`);
+  return problems.join('; ');
+}
+
+/** `detail` for one candidate's Gate 3 result, in the shape the gate reports. */
+function balanceDetail(
+  round: number,
+  rates: { panel: number; perBot: readonly number[]; mimic: number },
+): unknown {
+  return {
+    round,
+    matches: 200,
+    workers: 4,
+    panel: {
+      winRate: rates.panel,
+      matches: 100,
+      perBot: BOT_NAMES.map((name, i) => ({ name, winRate: rates.perBot[i] ?? 0 })),
+      violations: 0,
+      killed: 0,
+      ms: 1240,
+    },
+    mimic: { winRate: rates.mimic, matches: 100, avgTicks: 1820 },
+  };
+}
+
+/**
+ * Gate 3's progress for one candidate: the opening event, then one per batch of
  * matches, spread evenly over `ms` — the shape `simulate()`'s `onProgress`
  * produces once the worker pool is running.
  *
@@ -224,10 +307,11 @@ const G3_DETAIL_OK = {
 function pushBalanceProgress(
   push: (delay: number, event: RewriteEvent) => void,
   attempt: number,
+  tag: { candidate?: number; candidates?: number },
   total: number,
   ms: number,
 ): void {
-  push(250, { type: 'trial.progress', attempt, matchesDone: 0, matchesTotal: total, gate: 'balance' });
+  push(200, { type: 'trial.progress', attempt, matchesDone: 0, matchesTotal: total, gate: 'balance', ...tag });
   const batches = Math.max(1, Math.ceil(total / MATCH_BATCH));
   const per = ms / batches;
   for (let i = 1; i <= batches; i += 1) {
@@ -237,17 +321,169 @@ function pushBalanceProgress(
       matchesDone: Math.min(i * MATCH_BATCH, total),
       matchesTotal: total,
       gate: 'balance',
+      ...tag,
     });
   }
+}
+
+/** One candidate of a scripted attempt: the file it wrote and what the gates said. */
+type MockCandidate = {
+  dial: (typeof MOCK_DIALS)[number];
+  source: string;
+  meta: { name: string; rationale: string; version: number };
+  /** `undefined` means every gate passed. */
+  rates?: { panel: number; perBot: readonly number[]; mimic: number };
+  /** The approved one, with its passing Gate 3 numbers. */
+  ok?: { panel: number; perBot: readonly number[]; mimic: number };
+};
+
+/** `meta` of a derived variant: the fixture's, with the Coder's name suffix on it. */
+function variantMeta(
+  base: { name: string; rationale: string; version: number },
+  suffix: string,
+): { name: string; rationale: string; version: number } {
+  return { ...base, name: `${base.name} ${suffix}` };
+}
+
+/**
+ * The three files one attempt writes, from one real fixture.
+ *
+ * `balanced` is the fixture itself; the two flanking it are the same file with the
+ * named constants the dials move turned down and up (see `mockVariant`). The
+ * `meta.name` suffixes are the ones the live Coder is told to use, so the tab strip
+ * shows what a real run shows.
+ */
+function candidatesFor(
+  base: string,
+  baseMeta: { name: string; rationale: string; version: number },
+  outcomes: {
+    conservative: MockCandidate['rates'];
+    balanced: MockCandidate['rates'];
+    aggressive: MockCandidate['rates'];
+    approved?: (typeof MOCK_DIALS)[number];
+    approvedRates?: { panel: number; perBot: readonly number[]; mimic: number };
+  },
+): MockCandidate[] {
+  return MOCK_DIALS.map((dial, i) => {
+    const suffix = NAME_SUFFIXES[i] as string;
+    const source = mockVariant(base, dial, suffix);
+    const meta = variantMeta(baseMeta, suffix);
+    if (outcomes.approved === dial) {
+      return { dial, source, meta, ...(outcomes.approvedRates === undefined ? {} : { ok: outcomes.approvedRates }) };
+    }
+    return { dial, source, meta, ...(outcomes[dial] === undefined ? {} : { rates: outcomes[dial] }) };
+  });
+}
+
+/**
+ * One attempt: K files streamed at once, then the harness on each in turn.
+ *
+ * The deltas are interleaved round-robin rather than played one file after another,
+ * because that is what the live loop does — the K model calls run concurrently and
+ * their deltas arrive mixed — and it is what the tab strip has to survive. The
+ * gates then run candidate by candidate, in index order, exactly as the loop
+ * sequences them (one worker pool at a time).
+ */
+function pushAttempt(
+  push: (delay: number, event: RewriteEvent) => void,
+  attempt: number,
+  baseline: string,
+  candidates: readonly MockCandidate[],
+  round: number,
+): { gates: GateResult[][]; diffs: string[] } {
+  const total = candidates.length;
+  const tagOf = (i: number): { candidate?: number; candidates?: number } =>
+    total > 1 ? { candidate: i, candidates: total } : {};
+
+  // ------------------------------------------------------------- the streams
+  const streams = candidates.map((c) => codeChunks(c.source));
+  const longest = Math.max(...streams.map((s) => s.length));
+  let first = true;
+  for (let line = 0; line < longest; line += 1) {
+    for (let i = 0; i < total; i += 1) {
+      const delta = streams[i]?.[line];
+      if (delta === undefined) continue;
+      push(first ? 500 : Math.max(1, Math.round(CODE_LINE_MS / total)), {
+        type: 'rewrite.delta',
+        attempt,
+        delta,
+        ...tagOf(i),
+      });
+      first = false;
+    }
+  }
+
+  const diffs = candidates.map((c) =>
+    unifiedDiff(baseline, c.source, {
+      fromFile: 'strategy.js (previous)',
+      toFile: `strategy.js (attempt ${attempt})`,
+    }),
+  );
+  candidates.forEach((c, i) => {
+    push(i === 0 ? 300 : 60, {
+      type: 'rewrite.done',
+      attempt,
+      source: c.source,
+      diff: diffs[i] as string,
+      meta: { ...c.meta },
+      dial: c.dial,
+      ...tagOf(i),
+    });
+  });
+
+  // -------------------------------------------------------------- the gates
+  const gates: GateResult[][] = [];
+  candidates.forEach((c, i) => {
+    const tag = tagOf(i);
+    const mine: GateResult[] = [];
+
+    const g1 = gateOk(1, 'static', 11 + i, { identifiers: 0, exports: ['meta', 'init', 'decide'] });
+    push(300, { type: 'trial.gate', attempt, gate: g1, ...tag });
+    mine.push(g1);
+
+    const g2 = gateOk(2, 'fuzz', 780 + i * 20, { states: 500, invalid: 0, threw: 0 });
+    push(420, { type: 'trial.gate', attempt, gate: g2, ...tag });
+    mine.push(g2);
+
+    pushBalanceProgress(push, attempt, tag, 200, 1150);
+    const measured = c.ok ?? c.rates;
+    const g3 =
+      c.rates === undefined
+        ? gateOk(3, 'balance', 1290, balanceDetail(round, measured ?? { panel: 0.5, perBot: [1, 0.3, 0.4, 0.3], mimic: 0.78 }))
+        : gateFail(3, 'balance', 1290, balanceReason(round, c.rates), balanceDetail(round, c.rates));
+    push(60, { type: 'trial.gate', attempt, gate: g3, ...tag });
+    mine.push(g3);
+
+    if (c.rates === undefined) {
+      const g4 = gateOk(4, 'perf', 590, { samples: 2000, p50: 0.09, p99: 0.41, max: 1.2, budgetMs: 2 });
+      push(560, { type: 'trial.gate', attempt, gate: g4, ...tag });
+      mine.push(g4);
+    }
+
+    push(180, {
+      type: 'verdict',
+      attempt,
+      approved: c.rates === undefined,
+      ...(c.rates === undefined ? {} : { reason: balanceReason(round, c.rates) }),
+      ...(measured === undefined ? {} : { panel: measured.panel }),
+      ...tag,
+    });
+    gates.push(mine);
+  });
+
+  return { gates, diffs };
 }
 
 /**
  * Build the canned run for one request.
  *
- * The shape is spec §6.3's loop with exactly one rejection: Coder → Gates 1,2 pass →
- * Gate 3 fails "too hard" → rejection reason → Coder → all four pass → APPROVED.
- * That is the minimum sequence that proves the product's thesis on screen, so it is
- * what the mock always plays.
+ * The shape is spec §6.3's loop as it now runs: each attempt writes three files at
+ * once — aimed at the low edge, the middle and the high edge of the round's band —
+ * and the harness judges all three. Attempt 1's three all miss (one too easy, two
+ * too hard, which is exactly the bracket the retry prompt interpolates inside) and
+ * attempt 2's middle candidate lands in the band and beats the Mimic. That is the
+ * minimum sequence that proves the product's thesis on screen, so it is what the
+ * mock always plays.
  */
 export function buildMockScript(req: RewriteRequest): MockScript {
   const steps: MockStep[] = [];
@@ -277,85 +513,85 @@ export function buildMockScript(req: RewriteRequest): MockScript {
     ms: 2960,
   });
 
-  // ------------------------------------------------- attempt 1: too hard
-  const a1Gates: GateResult[] = [];
-  first = true;
-  for (const delta of codeChunks(attempt1Source)) {
-    push(first ? 500 : CODE_LINE_MS, { type: 'rewrite.delta', attempt: 1, delta });
-    first = false;
-  }
-  const diff1 = unifiedDiff(req.prevSource, attempt1Source, {
-    fromFile: 'strategy.js (previous)',
-    toFile: 'strategy.js (attempt 1)',
+  // --------------------------------------- attempt 1: three files, all rejected
+  // Below the band, above it, and far above it: the bracket the retry prompt
+  // interpolates inside, and the 0.91 of spec §2.2's rejection line.
+  const a1 = candidatesFor(attempt1Source, ATTEMPT1_META, {
+    conservative: { panel: 0.22, perBot: [0.64, 0, 0.24, 0], mimic: 0.66 },
+    balanced: { panel: 0.55, perBot: [1, 0.2, 1, 0], mimic: 0.62 },
+    aggressive: { panel: 0.91, perBot: [1, 0.96, 0.88, 0.8], mimic: 0.41 },
   });
-  push(350, { type: 'rewrite.done', attempt: 1, source: attempt1Source, diff: diff1, meta: { ...ATTEMPT1_META } });
-
-  const g1a = gateOk(1, 'static', 12, { identifiers: 0, exports: ['meta', 'init', 'decide'] });
-  push(500, { type: 'trial.gate', attempt: 1, gate: g1a });
-  a1Gates.push(g1a);
-
-  const g2a = gateOk(2, 'fuzz', 842, { states: 500, invalid: 0, threw: 0 });
-  push(1050, { type: 'trial.gate', attempt: 1, gate: g2a });
-  a1Gates.push(g2a);
-
-  pushBalanceProgress(push, 1, 200, 3950);
-  const g3a = gateFail(3, 'balance', 4118, rejectionReason(round), G3_DETAIL_FAIL);
-  push(60, { type: 'trial.gate', attempt: 1, gate: g3a });
-  a1Gates.push(g3a);
-
-  push(300, { type: 'verdict', attempt: 1, approved: false, reason: rejectionReason(round) });
-
-  // ------------------------------------------------ attempt 2: approved
-  const a2Gates: GateResult[] = [];
-  first = true;
-  for (const delta of codeChunks(approvedSource)) {
-    push(first ? 900 : CODE_LINE_MS, { type: 'rewrite.delta', attempt: 2, delta });
-    first = false;
-  }
-  const diff2 = unifiedDiff(attempt1Source, approvedSource, {
-    fromFile: 'strategy.js (previous)',
-    toFile: 'strategy.js (attempt 2)',
+  const run1 = pushAttempt(push, 1, req.prevSource, a1, round);
+  // The attempt's own verdict, with no `candidate`: the summary a K-unaware client
+  // sees, carrying the reason of the candidate closest to the middle of the band —
+  // the one the loop feeds forward as the next attempt's baseline.
+  const chosen1 = 1;
+  push(280, {
+    type: 'verdict',
+    attempt: 1,
+    approved: false,
+    reason: balanceReason(round, a1[chosen1]!.rates!),
   });
-  push(350, { type: 'rewrite.done', attempt: 2, source: approvedSource, diff: diff2, meta: { ...APPROVED_META } });
 
-  const g1b = gateOk(1, 'static', 11, { identifiers: 0, exports: ['meta', 'init', 'decide'] });
-  push(450, { type: 'trial.gate', attempt: 2, gate: g1b });
-  a2Gates.push(g1b);
-
-  const g2b = gateOk(2, 'fuzz', 795, { states: 500, invalid: 0, threw: 0 });
-  push(900, { type: 'trial.gate', attempt: 2, gate: g2b });
-  a2Gates.push(g2b);
-
-  pushBalanceProgress(push, 2, 200, 3850);
-  const g3b = gateOk(3, 'balance', 4032, G3_DETAIL_OK);
-  push(60, { type: 'trial.gate', attempt: 2, gate: g3b });
-  a2Gates.push(g3b);
-
-  const g4b = gateOk(4, 'perf', 611, { samples: 2000, p50: 0.09, p99: 0.41, max: 1.2, budgetMs: 2 });
-  push(650, { type: 'trial.gate', attempt: 2, gate: g4b });
-  a2Gates.push(g4b);
-
-  push(400, { type: 'verdict', attempt: 2, approved: true });
+  // -------------------------------------- attempt 2: the middle one is approved
+  const a2 = candidatesFor(approvedSource, APPROVED_META, {
+    conservative: { panel: 0.29, perBot: [0.84, 0, 0.32, 0], mimic: 0.71 },
+    balanced: undefined,
+    aggressive: { panel: 0.74, perBot: [1, 0.68, 0.96, 0.32], mimic: 0.86 },
+    approved: 'balanced',
+    approvedRates: { panel: 0.52, perBot: [1, 0.24, 0.6, 0.24], mimic: 0.78 },
+  });
+  // The middle candidate is the real fixture, byte for byte, because it is the file
+  // the game is about to run — only its name carries the suffix.
+  a2[1] = { ...a2[1]!, source: approvedSource, meta: { ...APPROVED_META } };
+  const run2 = pushAttempt(push, 2, a1[chosen1]!.source, a2, round);
+  push(320, { type: 'verdict', attempt: 2, approved: true });
 
   const attempts: AttemptLog[] = [
     {
       attempt: 1,
-      source: attempt1Source,
-      diff: diff1,
-      coder: { calls: 1, promptChars: 9840, usage: { inputTokens: 3010, outputTokens: 742 }, ms: 5210 },
-      gates: a1Gates,
+      source: a1[chosen1]!.source,
+      diff: run1.diffs[chosen1] as string,
+      coder: { calls: 3, promptChars: 9840, usage: { inputTokens: 9030, outputTokens: 2226 }, ms: 5210 },
+      gates: run1.gates[chosen1] as GateResult[],
       approved: false,
-      reason: rejectionReason(round),
-      ms: 10_290,
+      reason: balanceReason(round, a1[chosen1]!.rates!),
+      ms: 12_400,
+      chosen: chosen1,
+      candidates: a1.map((c, i) => ({
+        candidate: i,
+        dial: c.dial,
+        source: c.source,
+        diff: run1.diffs[i] as string,
+        name: c.meta.name,
+        coder: { calls: 1, promptChars: 9840, usage: { inputTokens: 3010, outputTokens: 742 }, ms: 5210 },
+        gates: run1.gates[i] as GateResult[],
+        approved: false,
+        reason: balanceReason(round, c.rates!),
+        panel: c.rates!.panel,
+      })),
     },
     {
       attempt: 2,
       source: approvedSource,
-      diff: diff2,
-      coder: { calls: 1, promptChars: 11_260, usage: { inputTokens: 3488, outputTokens: 968 }, ms: 5620 },
-      gates: a2Gates,
+      diff: run2.diffs[1] as string,
+      coder: { calls: 3, promptChars: 11_260, usage: { inputTokens: 10_464, outputTokens: 2904 }, ms: 5620 },
+      gates: run2.gates[1] as GateResult[],
       approved: true,
-      ms: 11_120,
+      ms: 13_100,
+      chosen: 1,
+      candidates: a2.map((c, i) => ({
+        candidate: i,
+        dial: c.dial,
+        source: c.source,
+        diff: run2.diffs[i] as string,
+        name: c.meta.name,
+        coder: { calls: 1, promptChars: 11_260, usage: { inputTokens: 3488, outputTokens: 968 }, ms: 5620 },
+        gates: run2.gates[i] as GateResult[],
+        approved: c.rates === undefined,
+        ...(c.rates === undefined ? {} : { reason: balanceReason(round, c.rates) }),
+        panel: (c.ok ?? c.rates)!.panel,
+      })),
     },
   ];
 
@@ -367,7 +603,7 @@ export function buildMockScript(req: RewriteRequest): MockScript {
   return steps;
 }
 
-/** Sum of the script's delays at `speed: 1` — what "~25 s" is measured against. */
+
 export function scriptDuration(script: MockScript): number {
   return script.reduce((total, step) => total + step.delay, 0);
 }

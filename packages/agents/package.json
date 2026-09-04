@@ -13,16 +13,17 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "eval": "node --experimental-strip-types scripts/eval.ts",
+    "eval": "node --experimental-strip-types --env-file-if-exists=../../.env scripts/eval.ts",
     "gen-canned": "node --experimental-strip-types scripts/gen-canned.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",
-    "acorn": "^8.15.0",
     "@rematch/contract": "workspace:*",
     "@rematch/engine": "workspace:*",
     "@rematch/harness": "workspace:*",
-    "diff": "^8.0.2"
+    "acorn": "^8.15.0",
+    "diff": "^8.0.2",
+    "openai": "^7.9.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

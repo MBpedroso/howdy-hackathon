@@ -3,17 +3,17 @@
  * the harness's back pressure (spec §6.3, §8).
  *
  * ```ts
- * import { anthropicProvider, modelFor, rewrite } from '@rematch/agents';
+ * import { rewrite, selectProvider } from '@rematch/agents';
+ *
+ * const selection = selectProvider();          // REMATCH_PROVIDER: anthropic | openai | auto
+ * if (selection.vendor === null) shipFallback(selection.reason);
  *
  * const result = await rewrite(
  *   {
  *     summary,                       // summarizeReplay() of the round just won
  *     round: 2,
  *     prevSource,                    // the strategy.js that lost
- *     providers: {
- *       analyst: anthropicProvider({ model: modelFor('analyst') }),
- *       coder: anthropicProvider({ model: modelFor('coder') }),
- *     },
+ *     providers: selection.create(), // one Analyst provider, one Coder provider
  *   },
  *   (event) => sse.send(event),      // the four interlude beats, as they happen
  * );
@@ -29,12 +29,25 @@
 export {
   AbortError,
   DEFAULT_MODEL,
+  EFFORT_ENV,
+  EFFORT_OFF,
   MODEL_ENV,
+  OPENAI_DEFAULT_EFFORT,
+  OPENAI_DEFAULT_MODEL,
+  PROVIDER_ENV,
+  REASONING_HEADROOM_TOKENS,
+  VENDOR_DEFAULT_MODEL,
+  VENDOR_KEY_ENV,
+  VENDOR_PREFERENCE,
   anthropicProvider,
   collect,
   isAbortError,
+  isUnsupportedParamError,
   mockProvider,
   modelFor,
+  openaiError,
+  openaiProvider,
+  selectProvider,
   type AgentKind,
   type AnthropicProviderOptions,
   type LLMEvent,
@@ -47,18 +60,32 @@ export {
   type MockProvider,
   type MockScript,
   type MockStep,
+  type OpenAIProviderOptions,
+  type OpenAIResponsesLike,
+  type OpenAIStreamEvent,
+  type ProviderPair,
+  type ProviderSelection,
+  type ProviderVendor,
 } from './provider.ts';
 
 export {
+  ADAPT_DIALS,
   ARCHETYPES,
+  DIALS,
   TIMELINE_BUDGET,
   analystPrompt,
+  adaptDials,
+  blendDials,
+  bracketHint,
   cellCentre,
   coderPrompt,
+  correctionHint,
   contractDoc,
+  dialFor,
   harnessHints,
   harnessRules,
   renderBotRates,
+  renderCandidateTable,
   markdownSection,
   promptSize,
   renderDashRose,
@@ -72,7 +99,10 @@ export {
   type Analysis,
   type AnalystContext,
   type BotRates,
+  type CandidateOutcome,
+  type CoderBracket,
   type CoderContext,
+  type CoderDial,
   type CoderRejection,
   type PlayerArchetype,
   type Prompt,
@@ -106,13 +136,23 @@ export {
 export { extractMeta } from './meta.ts';
 
 export {
+  CANDIDATES_ENV,
+  CANDIDATE_GATE_RESERVE_MS,
   DEADLINE_MS,
+  DEFAULT_CANDIDATES,
   MAX_ATTEMPTS,
+  MAX_CANDIDATES,
   PROGRESS_MIN_GAP_MS,
+  STRAGGLER_GRACE_MS,
   balanceRates,
+  bracketOf,
+  chooseCandidate,
+  panelRate,
   readMeta,
   recorder,
+  resolveCandidates,
   rewrite,
+  tagOf,
   unifiedDiff,
   type RewriteInput,
   type RewriteProviders,
@@ -120,6 +160,7 @@ export {
 
 export type {
   AttemptLog,
+  CandidateLog,
   Emit,
   FailureReason,
   RewriteEvent,
@@ -132,6 +173,7 @@ export {
   formatEvalTable,
   runEval,
   selectCanned,
+  workersPerRun,
   writeEvalArtifact,
   type EvalOptions,
   type EvalReport,

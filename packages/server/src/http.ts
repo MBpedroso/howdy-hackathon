@@ -3,7 +3,7 @@
  *
  * ```
  * POST /api/rewrite            text/event-stream — the interlude (spec §2.2)
- * GET  /api/health             { ok, hasApiKey, model, fallbackRounds }
+ * GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds }
  * GET  /api/fallback/:round    { name, source } — one pre-approved strategy
  * OPTIONS *                    CORS preflight
  * ```
@@ -40,7 +40,7 @@ import {
   writeRewriteArtifact,
   type RequestLogLine,
 } from './log.ts';
-import { activeModel, hasApiKey } from './providers.ts';
+import { activeModel, activeVendor, hasApiKey } from './providers.ts';
 import { createRateLimiter, type RateLimiter, type RateLimitOptions } from './rateLimit.ts';
 import { parseRewriteRequest } from './request.ts';
 import { startSse } from './sse.ts';
@@ -163,6 +163,7 @@ export function createRequestListener(opts: ServerOptions = {}): RequestListener
         {
           ok: true,
           hasApiKey: hasApiKey(env),
+          provider: activeVendor(env),
           model: activeModel(env),
           fallbackRounds: BALANCE_ROUNDS,
           deadlineMs: opts.deadlineMs ?? resolveDeadlineMs(env),

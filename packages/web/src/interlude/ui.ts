@@ -86,9 +86,22 @@ export type InterludeState = {
   attempt: number;
   maxAttempts: number;
   kind: SourceKind;
-  gates: Array<{ attempt: number; gate: GateNumber; name: GateName; ok: boolean; ms: number; reason?: string }>;
-  /** Append-only. One entry per rejected attempt. */
-  rejections: Array<{ attempt: number; gate: GateNumber; reason: string }>;
+  gates: Array<{
+    attempt: number;
+    /** 0-based index of the candidate file this gate judged, when there was more than one. */
+    candidate?: number;
+    gate: GateNumber;
+    name: GateName;
+    ok: boolean;
+    ms: number;
+    reason?: string;
+  }>;
+  /**
+   * Append-only. One entry per rejected candidate — spec §2.2: "the player must be
+   * able to read every rejection". Three candidates that all miss the band produce
+   * three entries, not one.
+   */
+  rejections: Array<{ attempt: number; candidate?: number; dial?: string; gate: GateNumber; reason: string }>;
   approved: boolean | null;
   fallback: { reason: FailureReason; message?: string } | null;
   done: boolean;
@@ -107,6 +120,10 @@ export type InterludeState = {
   analysisChars: number;
   codeChars: number;
   events: number;
+  /** Files this attempt is writing at once. 1 for a single-candidate run. */
+  candidates: number;
+  /** Which candidate's diff the Rewrite panel is showing. */
+  selectedCandidate: number;
 };
 
 export type InterludeUiOptions = {
@@ -208,6 +225,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     analysisChars: 0,
     codeChars: 0,
     events: 0,
+    candidates: 1,
+    selectedCandidate: 0,
   };
 
   // ------------------------------------------------------------------ header
@@ -317,12 +336,18 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
 
   // ------------------------------------------------------ beat 3: the rewrite
   const rewriteBody = bodyFor.get('rewrite') as HTMLElement;
+  // The tab strip: one tab per candidate file the attempt is writing, with the
+  // harness's mark on it as each verdict lands. Hidden for a single-candidate run,
+  // so nothing about the pre-candidate screen changes.
+  const candStrip = el('div', 'il-cands');
+  candStrip.dataset.testid = 'il-cands';
+  candStrip.hidden = true;
   const code = el('pre', 'il-code');
   code.dataset.testid = 'il-code';
   const diff = el('pre', 'il-diff');
   diff.dataset.testid = 'il-diff';
   diff.hidden = true;
-  rewriteBody.append(code, diff);
+  rewriteBody.append(candStrip, code, diff);
 
   // -------------------------------------------------------- beat 4: the trial
   const trialBody = bodyFor.get('trial') as HTMLElement;
@@ -444,6 +469,139 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   }
   let frame = requestAnimationFrame(tickClock);
 
+  // ------------------------------------------------------------- candidates
+  /**
+   * One tab per file the attempt is writing.
+   *
+   * An attempt writes K strategies at once — aimed at the low edge, the middle and
+   * the high edge of the round's fairness band — and the harness keeps whichever it
+   * likes best. That is the interesting part of the beat, so the panel shows all of
+   * them: the strip is the search, and the pane below it is whichever one the
+   * player is looking at.
+   *
+   * The text of an unselected candidate is kept as a string rather than as DOM. A
+   * candidate streams ~4 KB and only one is on screen, so three hidden `<pre>`s
+   * would be three times the nodes for nothing; switching tabs re-renders from the
+   * string, which is one paint.
+   */
+  type CandidateView = {
+    index: number;
+    label: string;
+    dial: string | null;
+    /** Streamed source so far. */
+    code: string;
+    /** The unified diff, once `rewrite.done` landed. */
+    diff: string | null;
+    status: 'writing' | 'testing' | 'ok' | 'fail';
+    tab: HTMLButtonElement;
+  };
+
+  let views: CandidateView[] = [];
+  /** The player clicked a tab; stop following the newest one until the next attempt. */
+  let pinned = false;
+  /**
+   * The candidate that passed, once one has.
+   *
+   * The loop keeps measuring the remaining candidates after one is approved (it
+   * ships whichever lands closest to the middle of the band), so without this the
+   * pane and the win rate on the verdict line would both drift onto a *rejected*
+   * file after the approval — the last thing the player should be left looking at.
+   */
+  let locked: { candidate: number; panel: number | null; mimic: number | null } | null = null;
+  /** One gate-row container per candidate, so the Trial panel reads as K columns of proof. */
+  const groups = new Map<number, HTMLElement>();
+
+  const MARKS: Readonly<Record<CandidateView['status'], string>> = {
+    writing: '…',
+    testing: '·',
+    ok: '✓',
+    fail: '✗',
+  };
+
+  function paintTab(view: CandidateView): void {
+    view.tab.replaceChildren(
+      el('span', 'mark', MARKS[view.status]),
+      el('span', 'name', view.label),
+    );
+    view.tab.dataset.status = view.status;
+    view.tab.dataset.selected = view.index === state.selectedCandidate ? 'true' : 'false';
+  }
+
+  function showCandidate(index: number): void {
+    state.selectedCandidate = index;
+    const view = views[index];
+    for (const other of views) paintTab(other);
+    if (view === undefined) return;
+    if (view.diff !== null) {
+      renderDiff(view.diff === '' ? '(no change from the previous strategy)' : view.diff);
+    } else {
+      diff.hidden = true;
+      code.hidden = false;
+      code.textContent = view.code;
+      code.scrollTop = code.scrollHeight;
+    }
+  }
+
+  function candidateView(index: number, total: number): CandidateView {
+    const existing = views[index];
+    if (existing !== undefined) return existing;
+    const tab = el('button', 'il-cand');
+    tab.type = 'button';
+    tab.dataset.testid = `il-cand-${index}`;
+    const view: CandidateView = {
+      index,
+      label: total > 1 ? `candidate ${index + 1}` : 'strategy',
+      dial: null,
+      code: '',
+      diff: null,
+      status: 'writing',
+      tab,
+    };
+    tab.addEventListener('click', () => {
+      pinned = true;
+      showCandidate(index);
+    });
+    views[index] = view;
+    // Insert in index order: the tabs are the low/middle/high aim points and their
+    // order is the thing that makes the strip readable, but the files arrive in
+    // whatever order the model finishes them.
+    const after = views.slice(index + 1).find((v) => v !== undefined);
+    if (after === undefined) candStrip.append(tab);
+    else candStrip.insertBefore(tab, after.tab);
+    candStrip.hidden = total <= 1;
+    paintTab(view);
+    return view;
+  }
+
+  /** A new attempt: a fresh strip, a fresh pane, nothing pinned. */
+  function resetCandidates(attempt: number, total: number): void {
+    state.attempt = attempt;
+    state.candidates = total;
+    state.selectedCandidate = 0;
+    state.matchesDone = 0;
+    state.matchesTotal = 0;
+    state.panelRate = null;
+    state.mimicRate = null;
+    state.codeChars = 0;
+    pinned = false;
+    locked = null;
+    views = [];
+    candStrip.replaceChildren();
+    candStrip.hidden = total <= 1;
+    gateList.replaceChildren();
+    groups.clear();
+    code.replaceChildren();
+    code.hidden = false;
+    diff.hidden = true;
+  }
+
+  function setCandidateStatus(index: number, status: CandidateView['status']): void {
+    const view = views[index];
+    if (view === undefined) return;
+    view.status = status;
+    paintTab(view);
+  }
+
   // -------------------------------------------------------------- rendering
   function renderStructuredAnalysis(analysis: Analysis): void {
     structured.replaceChildren();
@@ -479,9 +637,32 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     code.hidden = true;
   }
 
+  /**
+   * The gate rows for one candidate.
+   *
+   * Grouped rather than appended flat: with three candidates the panel would
+   * otherwise be twelve unlabelled rows, and which file a `✗ Gate 3` belongs to is
+   * the whole content of the beat.
+   */
+  function gateGroup(candidate: number | undefined): HTMLElement {
+    const key = candidate ?? -1;
+    const existing = groups.get(key);
+    if (existing !== undefined) return existing;
+    const group = el('div', 'il-gate-group');
+    group.dataset.candidate = String(key);
+    group.dataset.testid = key < 0 ? 'il-gate-group' : `il-gate-group-${key}`;
+    if (key >= 0) {
+      group.append(el('div', 'il-gate-group-head', views[key]?.label ?? `candidate ${key + 1}`));
+    }
+    groups.set(key, group);
+    gateList.append(group);
+    return group;
+  }
+
   /** One row per gate. A pending Gate 3 row is replaced when its result lands. */
-  function addGateRow(gate: GateResult): void {
-    const existing = gateList.querySelector<HTMLElement>(`[data-gate="${gate.gate}"][data-pending="1"]`);
+  function addGateRow(gate: GateResult, candidate?: number): void {
+    const group = gateGroup(candidate);
+    const existing = group.querySelector<HTMLElement>(`[data-gate="${gate.gate}"][data-pending="1"]`);
     const row = existing ?? el('div', 'il-gate');
     row.replaceChildren();
     row.className = 'il-gate';
@@ -498,20 +679,20 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     } else {
       row.append(el('span', 'why', `REJECTED — ${gate.reason}`));
     }
-    if (existing === null) gateList.append(row);
+    if (existing === null) group.append(row);
     // Follow the newest gate. The list is short but it scrolls (a Gate 3 reason is
     // four wrapped lines), and the row worth seeing is always the last one — the
     // earlier attempts' rejections are preserved in the log below regardless.
     gateList.scrollTop = gateList.scrollHeight;
   }
 
-  function addPendingGateRow(gate: GateNumber, label: string): void {
+  function addPendingGateRow(gate: GateNumber, label: string, candidate?: number): void {
     const row = el('div', 'il-gate');
     row.dataset.gate = String(gate);
     row.dataset.pending = '1';
     row.dataset.ok = 'pending';
     row.append(el('span', 'mark', '·'), el('span', 'name', GATE_LABELS[gate]), el('span', 'ms', label));
-    gateList.append(row);
+    gateGroup(candidate).append(row);
     gateList.scrollTop = gateList.scrollHeight;
   }
 
@@ -572,41 +753,73 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
 
       case 'rewrite.delta': {
         advance('rewrite');
+        const total = event.candidates ?? 1;
+        const index = event.candidate ?? 0;
         if (event.attempt !== state.attempt) {
-          // A new attempt: fresh code pane, and the verdict line becomes the
-          // "it is fixing itself" moment the rejection set up.
-          state.attempt = event.attempt;
-          state.matchesDone = 0;
-          state.matchesTotal = 0;
-          state.panelRate = null;
-          state.mimicRate = null;
-          code.replaceChildren();
-          code.hidden = false;
-          diff.hidden = true;
-          state.codeChars = 0;
+          // A new attempt: fresh strip, fresh pane, and the verdict line becomes
+          // the "it is fixing itself" moment the rejection set up.
+          resetCandidates(event.attempt, total);
           if (state.rejections.length > 0) {
-            setVerdict('working', '↻ rewriting…', `attempt ${event.attempt} of ${MAX_ATTEMPTS}, with the rejection as its only feedback`);
+            setVerdict(
+              'working',
+              '↻ rewriting…',
+              total > 1
+                ? `attempt ${event.attempt} of ${MAX_ATTEMPTS} — ${total} files at once, with the rejections as their only feedback`
+                : `attempt ${event.attempt} of ${MAX_ATTEMPTS}, with the rejection as its only feedback`,
+            );
           }
         }
+        const view = candidateView(index, total);
+        view.code += event.delta;
         state.codeChars += event.delta.length;
-        code.append(document.createTextNode(event.delta));
-        code.scrollTop = code.scrollHeight;
-        setNote('rewrite', `attempt ${state.attempt} / ${MAX_ATTEMPTS} · ${state.codeChars} chars`);
+        // The K files stream at once, so "follow the newest delta" would flicker
+        // between three tabs sixty times a second. The pane stays on the first file
+        // to arrive while they are all being written, and moves to whichever one is
+        // under the harness once the Trial beat starts (see `trial.gate`).
+        if (!pinned && locked === null && views[state.selectedCandidate] === undefined) showCandidate(index);
+        if (state.selectedCandidate === index && view.diff === null) {
+          code.hidden = false;
+          diff.hidden = true;
+          code.append(document.createTextNode(event.delta));
+          code.scrollTop = code.scrollHeight;
+        }
+        setNote(
+          'rewrite',
+          total > 1
+            ? `attempt ${state.attempt} / ${MAX_ATTEMPTS} · ${total} candidates · ${state.codeChars} chars`
+            : `attempt ${state.attempt} / ${MAX_ATTEMPTS} · ${state.codeChars} chars`,
+        );
         break;
       }
 
       case 'rewrite.done': {
         advance('rewrite');
+        const total = event.candidates ?? 1;
+        const index = event.candidate ?? 0;
+        if (event.attempt !== state.attempt) resetCandidates(event.attempt, total);
         state.attempt = event.attempt;
         // The file's own `meta`, parsed from its source by the loop — not guessed
         // from the text here, and not the sandbox's (this attempt may never load).
         const name = event.meta?.name ?? null;
-        renderDiff(event.diff === '' ? '(no change from the previous strategy)' : event.diff);
+        const view = candidateView(index, total);
+        view.diff = event.diff;
+        view.status = 'testing';
+        if (event.dial !== undefined) view.dial = event.dial;
+        view.label = name ?? event.dial ?? view.label;
+        paintTab(view);
+        // Re-render only if this is the file on screen: the diff replaces the code.
+        if (state.selectedCandidate === index) showCandidate(index);
         const note = noteFor.get('rewrite');
         if (note !== undefined) {
           note.replaceChildren();
           if (name !== null) note.append(el('span', 'il-strategy-name', name), document.createTextNode(' · '));
-          note.append(document.createTextNode(`attempt ${event.attempt} / ${MAX_ATTEMPTS} · ${event.source.length} bytes`));
+          note.append(
+            document.createTextNode(
+              total > 1
+                ? `attempt ${event.attempt} / ${MAX_ATTEMPTS} · candidate ${index + 1} of ${total} · ${event.source.length} bytes`
+                : `attempt ${event.attempt} / ${MAX_ATTEMPTS} · ${event.source.length} bytes`,
+            ),
+          );
         }
         setPhase('trial');
         break;
@@ -614,9 +827,14 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
 
       case 'trial.gate': {
         advance('trial');
-        addGateRow(event.gate);
+        // Whatever the harness is judging is what the diff should be showing.
+        if (!pinned && locked === null && event.candidate !== undefined && event.candidate !== state.selectedCandidate) {
+          showCandidate(event.candidate);
+        }
+        addGateRow(event.gate, event.candidate);
         state.gates.push({
           attempt: event.attempt,
+          ...(event.candidate === undefined ? {} : { candidate: event.candidate }),
           gate: event.gate.gate,
           name: event.gate.name,
           ok: event.gate.ok,
@@ -644,35 +862,79 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         meterRight.textContent = view.count;
         meter.classList.toggle('done', view.done);
         // The first event of an attempt is the one that puts the row on screen.
-        if (event.matchesDone <= 0) addPendingGateRow(3, 'simulating…');
+        if (event.matchesDone <= 0) addPendingGateRow(3, 'simulating…', event.candidate);
+        // The meter belongs to whichever candidate is being simulated; show that
+        // one, so the diff on screen is the file the bar is measuring.
+        if (!pinned && locked === null && event.candidate !== undefined && event.candidate !== state.selectedCandidate) {
+          showCandidate(event.candidate);
+        }
         break;
       }
 
       case 'verdict': {
         advance('trial');
-        state.approved = event.approved;
+        // Per-candidate verdicts carry `candidate`; the attempt's own verdict does
+        // not. Both are rendered, and neither is dropped — the attempt-level one is
+        // what a K-unaware stream sends, and the per-candidate ones are the search.
+        const perCandidate = event.candidate !== undefined;
+        if (perCandidate) {
+          setCandidateStatus(event.candidate as number, event.approved ? 'ok' : 'fail');
+          if (event.approved) {
+            // The approved file is the one that ships, so it is the one the panel is
+            // left on and its rates are the ones the verdict line quotes — even
+            // though the harness goes on to measure the candidates after it.
+            locked = { candidate: event.candidate as number, panel: state.panelRate, mimic: state.mimicRate };
+            if (!pinned) showCandidate(event.candidate as number);
+          }
+        } else state.approved = event.approved;
+
         if (event.approved) {
-          const pct = state.panelRate === null ? null : `${Math.round(state.panelRate * 100)}%`;
-          setVerdict(
-            'approved',
-            pct === null ? '✓ APPROVED' : `✓ APPROVED — ${pct}`,
-            state.mimicRate === null
-              ? 'the harness will ship this strategy'
-              : `${Math.round(state.mimicRate * 100)}% against a bot built from your own replay — it adapted`,
-          );
-        } else {
-          const reason = event.reason ?? 'no reason given';
-          setVerdict('rejected', '✗ REJECTED', reason);
-          const failing = state.gates.filter((g) => g.attempt === event.attempt && !g.ok).at(-1);
+          if (!perCandidate) {
+            if (locked !== null) {
+              state.panelRate = locked.panel;
+              state.mimicRate = locked.mimic;
+            }
+            const pct = state.panelRate === null ? null : `${Math.round(state.panelRate * 100)}%`;
+            setVerdict(
+              'approved',
+              pct === null ? '✓ APPROVED' : `✓ APPROVED — ${pct}`,
+              state.mimicRate === null
+                ? 'the harness will ship this strategy'
+                : `${Math.round(state.mimicRate * 100)}% against a bot built from your own replay — it adapted`,
+            );
+          }
+          break;
+        }
+
+        const reason = event.reason ?? 'no reason given';
+        // An attempt-level rejection that already logged its candidates' reasons
+        // would double every entry; the candidates' rejections are the specific
+        // ones, so the summary yields to them.
+        const alreadyLogged =
+          !perCandidate && state.rejections.some((r) => r.attempt === event.attempt && r.candidate !== undefined);
+        if (!alreadyLogged) {
+          const failing = state.gates
+            .filter((g) => g.attempt === event.attempt && !g.ok && g.candidate === event.candidate)
+            .at(-1);
           const gateNumber = failing?.gate ?? 3;
-          state.rejections.push({ attempt: event.attempt, gate: gateNumber, reason });
+          const dial = perCandidate ? (views[event.candidate as number]?.dial ?? null) : null;
+          state.rejections.push({
+            attempt: event.attempt,
+            ...(event.candidate === undefined ? {} : { candidate: event.candidate }),
+            ...(dial === null ? {} : { dial }),
+            gate: gateNumber,
+            reason,
+          });
+          const who = perCandidate
+            ? `attempt ${event.attempt} · ${dial ?? `candidate ${(event.candidate as number) + 1}`} · rejected by ${GATE_LABELS[gateNumber]}`
+            : `attempt ${event.attempt} · rejected by ${GATE_LABELS[gateNumber]}`;
           const item = el('li');
-          item.append(
-            el('b', undefined, `attempt ${event.attempt} · rejected by ${GATE_LABELS[gateNumber]}`),
-            document.createTextNode(reason),
-          );
+          item.append(el('b', undefined, who), document.createTextNode(reason));
           rejections.append(item);
           rejections.scrollTop = rejections.scrollHeight;
+        }
+        if (!perCandidate) {
+          setVerdict('rejected', '✗ REJECTED', reason);
           status.replaceChildren(
             document.createTextNode('The harness rejected it. The reason goes straight back to the coder — '),
             el('b', undefined, 'no human in the loop'),
