@@ -55,7 +55,9 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await winRound1(page, 'agent=mock&speed=20&autofight=0');
 
   const root = page.getByTestId('il-root');
-  await expect(page.getByTestId('il-kind')).toHaveText('mock');
+  // `MOCK` / `LIVE` / `RECORDED RUN` — the three honest answers (see `KIND_LABEL`).
+  await expect(page.getByTestId('il-kind')).toHaveText('MOCK');
+  await expect(page.getByTestId('il-provenance')).toHaveText('MOCK');
   await expect(page.getByTestId('il-rounds')).toContainText('Round 1 → 2');
 
   // Wait for the run to finish. Everything below is asserted on the finished

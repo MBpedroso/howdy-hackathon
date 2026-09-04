@@ -15,6 +15,23 @@
  * provider is built lazily and throws at call time, which is the wrong moment — it
  * would fail mid-beat, after the Analysis panel has opened — so the credential is
  * checked up front and its absence selects fallback-only mode instead.
+ *
+ * ## `REMATCH_PROVIDER=none` — the local-development default
+ *
+ * One value is handled *here* rather than in `selectProvider`: `none`, which forces
+ * fallback-only mode **even when a key is present and valid**.
+ *
+ * `selectProvider` treats any unrecognised `REMATCH_PROVIDER` as `auto` — a sensible
+ * rule for a typo, and the wrong one for an off switch, because "I set it to none and
+ * it billed me anyway" is exactly the failure this project already had once (see
+ * `docs/AI-DEV-LOG.md`, 2026-09-03). Deleting the key from `.env` works but is
+ * destructive and easy to get wrong under time pressure; an off switch that leaves the
+ * credential in place is the one a developer will actually use, so `none` is the
+ * documented setting for local work and is what `.env.example` ships with.
+ *
+ * It is implemented in the server rather than in `@rematch/agents` because the agents
+ * package's `selectProvider` is a shared contract with the eval CLI and is out of this
+ * change's scope; the eval has its own, louder guard (`REMATCH_ALLOW_SPEND`).
  */
 import {
   VENDOR_KEY_ENV,
@@ -28,14 +45,44 @@ import {
 /** Every credential variable the selection looks at, in the order it looks. */
 export const KEY_ENV = [...VENDOR_KEY_ENV.anthropic, ...VENDOR_KEY_ENV.openai] as const;
 
+/** `REMATCH_PROVIDER=none` — fallback-only, whatever keys are set. */
+export const PROVIDER_NONE = 'none';
+
+/** Is the loop switched off by configuration rather than by a missing key? */
+export function providerDisabled(env: Record<string, string | undefined> = process.env): boolean {
+  return (env['REMATCH_PROVIDER'] ?? '').trim().toLowerCase() === PROVIDER_NONE;
+}
+
+/**
+ * A `ProviderSelection` that reports fallback-only and throws if anyone builds it.
+ *
+ * Shaped exactly like `selectProvider`'s own no-credential answer so that the banner,
+ * `/api/health` and `resolveProviders` need no special case for `none` — the reason
+ * string is the only thing that differs, and it is the thing a human reads.
+ */
+function disabledSelection(): ProviderSelection {
+  const reason = 'REMATCH_PROVIDER=none — fallback-only by configuration (no model will be called)';
+  return {
+    vendor: null,
+    requested: 'auto',
+    reason,
+    models: null,
+    model: null,
+    create(): never {
+      throw new Error(`selectProvider: ${reason}`);
+    },
+  };
+}
+
 /** The one call the rest of the server makes. Cheap: it builds no client. */
 export function selection(env: Record<string, string | undefined> = process.env): ProviderSelection {
+  if (providerDisabled(env)) return disabledSelection();
   return selectProvider(env);
 }
 
 /** Is a usable credential present? `false` means fallback-only mode (spec AC 1). */
 export function hasApiKey(env: Record<string, string | undefined> = process.env): boolean {
-  return selectProvider(env).vendor !== null;
+  return selection(env).vendor !== null;
 }
 
 /**
@@ -49,7 +96,7 @@ export function hasApiKey(env: Record<string, string | undefined> = process.env)
 export function resolveProviders(
   env: Record<string, string | undefined> = process.env,
 ): RewriteProviders | undefined {
-  const chosen = selectProvider(env);
+  const chosen = selection(env);
   return chosen.vendor === null ? undefined : chosen.create();
 }
 
@@ -60,10 +107,10 @@ export function bothFrom(provider: LLMProvider): RewriteProviders {
 
 /** What `/api/health` reports as `model`. `null` in fallback-only mode. */
 export function activeModel(env: Record<string, string | undefined> = process.env): string | null {
-  return selectProvider(env).model;
+  return selection(env).model;
 }
 
 /** What `/api/health` reports as `provider`. `null` in fallback-only mode. */
 export function activeVendor(env: Record<string, string | undefined> = process.env): ProviderVendor | null {
-  return selectProvider(env).vendor;
+  return selection(env).vendor;
 }

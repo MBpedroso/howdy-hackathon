@@ -54,6 +54,21 @@ export const SKIP_AFTER_MS = 50_000;
 /** After `done`, the next round starts on its own this long later. */
 export const AUTO_FIGHT_MS = 3000;
 
+/**
+ * What each source is called on screen.
+ *
+ * The three words are the demo's honesty contract, so they are short enough to read
+ * at a glance from the back of a room: `LIVE` is happening now, `RECORDED RUN` is real
+ * model output from a past run, `MOCK` is scripted. `recorded` is refined to
+ * `RECORDED RUN · <model> · <date>` by `setProvenance` once the file's header has
+ * loaded — this is the placeholder that shows during the fetch.
+ */
+export const KIND_LABEL: Readonly<Record<SourceKind, string>> = {
+  mock: 'MOCK',
+  sse: 'LIVE',
+  recorded: 'RECORDED RUN',
+};
+
 const GATE_LABELS: Readonly<Record<GateNumber, string>> = {
   1: 'Gate 1 static',
   2: 'Gate 2 fuzz',
@@ -86,6 +101,8 @@ export type InterludeState = {
   attempt: number;
   maxAttempts: number;
   kind: SourceKind;
+  /** The footer badge's text: `MOCK`, `LIVE`, or `RECORDED RUN · <model> · <date>`. */
+  provenance: string;
   gates: Array<{
     attempt: number;
     /** 0-based index of the candidate file this gate judged, when there was more than one. */
@@ -132,6 +149,8 @@ export type InterludeUiOptions = {
   /** The round just won. The header reads `Round N → N+1`. */
   round: number;
   kind: SourceKind;
+  /** Footer badge text. Defaults to `KIND_LABEL[kind]`; `recorded` refines it later. */
+  provenance?: string;
   /** Start the next round. Called by FIGHT, by the auto-continue, and by Enter. */
   onFight: () => void;
   /** The 50 s safety valve. Ships a bundled strategy (see `app.ts`). */
@@ -149,6 +168,8 @@ export type InterludeUi = {
   /** Reveal FIGHT and start the auto-continue. Idempotent. */
   finish(): void;
   setKind(kind: SourceKind, why?: string): void;
+  /** Replace the footer badge's text. `recorded` calls this once its header lands. */
+  setProvenance(text: string): void;
   state(): InterludeState;
   dispose(): void;
 };
@@ -210,6 +231,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     attempt: 0,
     maxAttempts: MAX_ATTEMPTS,
     kind: options.kind,
+    provenance: options.provenance ?? KIND_LABEL[options.kind],
     gates: [],
     rejections: [],
     approved: null,
@@ -254,7 +276,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
 
   const clock = el('div', 'il-clock', '0.0s');
   clock.dataset.testid = 'il-clock';
-  const kindBadge = el('div', 'il-kind', options.kind);
+  const kindBadge = el('div', 'il-kind', KIND_LABEL[options.kind]);
   kindBadge.dataset.testid = 'il-kind';
   kindBadge.dataset.kind = options.kind;
   head.append(clock, kindBadge);
@@ -393,7 +415,14 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const fightCount = el('span', 'count');
   fight.append(fightLabel, fightCount);
   actions.append(skip, fight);
-  foot.append(banner, status, actions);
+  // The provenance badge lives in the footer rather than the header because the
+  // recorded label is a whole sentence (`RECORDED RUN . <model> . <date>`) and the
+  // header's badge slot is a 9px chip. In a demo video the footer is also where the
+  // eye already is, next to FIGHT.
+  const provenance = el('div', 'il-provenance', state.provenance);
+  provenance.dataset.testid = 'il-provenance';
+  provenance.dataset.kind = options.kind;
+  foot.append(banner, status, provenance, actions);
   root.append(foot);
 
   options.host.append(root);
@@ -496,7 +525,18 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     tab: HTMLButtonElement;
   };
 
-  let views: CandidateView[] = [];
+  /**
+   * The candidate tabs, indexed by candidate number — and **sparse on purpose**.
+   *
+   * The K files stream concurrently and the model finishes them in whatever order it
+   * likes, so candidate 2 can arrive before candidate 1 and leave a hole at index 1.
+   * The type says `| undefined` so every read has to admit that: a `for…of` over a
+   * sparse array yields `undefined` for the holes, and iterating this one without a
+   * guard is exactly how the recorded-run e2e first failed ("Cannot read properties
+   * of undefined (reading 'tab')"). The mock never caught it because a hand-written
+   * script finishes its candidates in order.
+   */
+  let views: Array<CandidateView | undefined> = [];
   /** The player clicked a tab; stop following the newest one until the next attempt. */
   let pinned = false;
   /**
@@ -530,7 +570,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   function showCandidate(index: number): void {
     state.selectedCandidate = index;
     const view = views[index];
-    for (const other of views) paintTab(other);
+    for (const other of views) {
+      if (other !== undefined) paintTab(other);
+    }
     if (view === undefined) return;
     if (view.diff !== null) {
       renderDiff(view.diff === '' ? '(no change from the previous strategy)' : view.diff);
@@ -565,7 +607,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     // Insert in index order: the tabs are the low/middle/high aim points and their
     // order is the thing that makes the strip readable, but the files arrive in
     // whatever order the model finishes them.
-    const after = views.slice(index + 1).find((v) => v !== undefined);
+    const after = views.slice(index + 1).find((v): v is CandidateView => v !== undefined);
     if (after === undefined) candStrip.append(tab);
     else candStrip.insertBefore(tab, after.tab);
     candStrip.hidden = total <= 1;
@@ -1040,9 +1082,22 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     finish,
     setKind(kind: SourceKind, why?: string): void {
       state.kind = kind;
-      kindBadge.textContent = kind;
+      kindBadge.textContent = KIND_LABEL[kind];
       kindBadge.dataset.kind = kind;
-      if (why !== undefined) kindBadge.title = why;
+      // The footer follows the header unless something more specific has been set:
+      // a mid-run switch to the mock must not leave `LIVE` standing in the footer.
+      state.provenance = KIND_LABEL[kind];
+      provenance.textContent = state.provenance;
+      provenance.dataset.kind = kind;
+      if (why !== undefined) {
+        kindBadge.title = why;
+        provenance.title = why;
+      }
+    },
+
+    setProvenance(text: string): void {
+      state.provenance = text;
+      provenance.textContent = text;
     },
     state(): InterludeState {
       return { ...state, gates: [...state.gates], rejections: [...state.rejections] };

@@ -28,12 +28,25 @@ import type { RoundWonContext, RoundWonHandler } from '../app.ts';
 import { bundledSource } from '../game/strategy.ts';
 
 import { serverFallbackPick, type RewriteEvent } from './events.ts';
+import { provenanceLabel } from './recorded.ts';
 import { resolveSource, type InterludeSource, type ResolveOptions, type SourceKind } from './source.ts';
 import { createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
 
 export { fallbackText, SKIP_AFTER_MS, createInterludeUi, meterView, type InterludeState, type InterludeUi, type MeterView } from './ui.ts';
 export { createSseParser, readEventStream, type SseFrame, type SseParser } from './sse.ts';
 export { mockSource, buildMockScript, scriptDuration, APPROVED_META, type MockOptions, type MockScript, type MockStep } from './mock.ts';
+export {
+  RECORDED_PATH,
+  delaysOf,
+  loadRecordedIndex,
+  provenanceLabel,
+  recordedSource,
+  type RecordedFile,
+  type RecordedHeader,
+  type RecordedIndex,
+  type RecordedIndexEntry,
+  type RecordedOptions,
+} from './recorded.ts';
 export { resolveSource, sseSource, withFallbackSource, SourceUnavailableError, type InterludeSource, type RewriteRequest, type SourceKind } from './source.ts';
 export { unifiedDiff } from './diff.ts';
 export * from './events.ts';
@@ -107,10 +120,25 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
     // frame; `onSwitch` fires later only for the "no server, fall back to mock" path.
     const resolved =
       options.source === undefined
-        ? resolveSource(options.resolve, (kind, why) => {
-            ui?.setKind(kind, why);
-            publish();
-          })
+        ? resolveSource(
+            {
+              ...options.resolve,
+              // A recorded run only learns its model and date when the file lands, so
+              // the badge is completed out of band rather than from an event. See
+              // `recorded.ts`: the claim on screen has to name the run it is playing.
+              recorded: {
+                ...options.resolve?.recorded,
+                onHeader: (header) => {
+                  ui?.setProvenance(provenanceLabel(header));
+                  publish();
+                },
+              },
+            },
+            (kind, why) => {
+              ui?.setKind(kind, why);
+              publish();
+            },
+          )
         : { source: options.source, kind: 'mock' as SourceKind, speed: options.resolve?.mock?.speed ?? 1 };
 
     // `?autofight=0` holds the finished interlude open. It is a test and demo

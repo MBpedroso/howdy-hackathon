@@ -3,7 +3,8 @@
  *
  * ```
  * POST /api/rewrite            text/event-stream — the interlude (spec §2.2)
- * GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds }
+ * GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds,
+ *                                rewritesToday, dailyCap, spendGuard }
  * GET  /api/fallback/:round    { name, source } — one pre-approved strategy
  * OPTIONS *                    CORS preflight
  * ```
@@ -43,6 +44,7 @@ import {
 import { activeModel, activeVendor, hasApiKey } from './providers.ts';
 import { createRateLimiter, type RateLimiter, type RateLimitOptions } from './rateLimit.ts';
 import { parseRewriteRequest } from './request.ts';
+import { createSpendGuard, resolveDailyCap, type SpendGuard } from './spendGuard.ts';
 import { startSse } from './sse.ts';
 
 /** 512 KB. A `ReplaySummary` is ~8 KB and `prevSource` is capped at 64 K chars. */
@@ -135,6 +137,28 @@ export function createRequestListener(opts: ServerOptions = {}): RequestListener
   const bodyLimit = opts.bodyLimitBytes ?? MAX_BODY_BYTES;
   const write = opts.log ?? ((text: string): void => console.log(text));
   const artifactDir = opts.artifactDir === undefined ? resolveArtifactDir(env) : opts.artifactDir;
+  /**
+   * The daily spend cap, built once per listener rather than per request.
+   *
+   * `/api/health` and `POST /api/rewrite` must read the *same* counter — a health
+   * check that reports a different number from the one the endpoint enforces is worse
+   * than no health check — so it is created here and handed to `handleRewrite`, which
+   * would otherwise fall back to its own process singleton. `false` opts out, which is
+   * what the socket tests that need seven rewrites pass.
+   */
+  const spendGuard: SpendGuard | false =
+    opts.spendGuard === undefined
+      ? createSpendGuard({
+          cap: resolveDailyCap(env),
+          onCapped: (report) =>
+            write(
+              JSON.stringify({
+                warn: 'spend guard: daily rewrite cap reached — serving fallback-only for the rest of the UTC day',
+                ...report,
+              }),
+            ),
+        })
+      : opts.spendGuard;
 
   return (req, res) => {
     const started = performance.now();
@@ -157,6 +181,9 @@ export function createRequestListener(opts: ServerOptions = {}): RequestListener
 
     // ---------------------------------------------------------------- health
     if (req.method === 'GET' && url.pathname === '/api/health') {
+      // `spendGuard` is reported even when the cap is disabled, so a reader never has
+      // to infer the mode from a missing field: `dailyCap: null` says "no cap here".
+      const spend = spendGuard === false ? null : spendGuard.report();
       json(
         res,
         200,
@@ -167,6 +194,9 @@ export function createRequestListener(opts: ServerOptions = {}): RequestListener
           model: activeModel(env),
           fallbackRounds: BALANCE_ROUNDS,
           deadlineMs: opts.deadlineMs ?? resolveDeadlineMs(env),
+          rewritesToday: spend?.rewritesToday ?? 0,
+          dailyCap: spend?.dailyCap ?? null,
+          spendGuard: spend?.spendGuard ?? 'ok',
         },
         headers,
       );
@@ -197,7 +227,7 @@ export function createRequestListener(opts: ServerOptions = {}): RequestListener
     // --------------------------------------------------------------- rewrite
     if (req.method === 'POST' && url.pathname === '/api/rewrite') {
       void serveRewrite(req, res, {
-        opts,
+        opts: { ...opts, spendGuard },
         headers,
         route,
         started,

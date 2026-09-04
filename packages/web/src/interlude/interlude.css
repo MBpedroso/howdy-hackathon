@@ -97,6 +97,7 @@
   border-radius: 2px;
 }
 .il-kind[data-kind='mock'] { color: var(--slam); border-color: rgba(255, 209, 102, 0.5); }
+.il-kind[data-kind='recorded'] { color: var(--player); border-color: rgba(77, 226, 176, 0.5); }
 
 /* ------------------------------------------------------------------- grid */
 
@@ -456,6 +457,24 @@
 
 .il-status { flex: 1; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 .il-status b { color: var(--text); }
+
+/* The provenance badge: which of the three sources the player is watching, spelled
+   out. `recorded` is the long one (`RECORDED RUN . <model> . <date>`), which is why
+   this lives in the footer and not in the 9px header chip. `white-space: nowrap` so a
+   narrow window wraps the status line instead of breaking the claim in half. */
+.il-provenance {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.il-provenance[data-kind='mock'] { color: var(--slam); border-color: rgba(255, 209, 102, 0.5); }
+.il-provenance[data-kind='recorded'] { color: var(--player); border-color: rgba(77, 226, 176, 0.5); }
 
 .il-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 

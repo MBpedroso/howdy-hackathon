@@ -19,14 +19,65 @@ full-screen overlay plays the four beats — Replay, Analysis, Rewrite, Trial �
 stream of `RewriteEvent`s, shows at least one harness rejection and the fix that
 follows it, and then starts the next round against the strategy that was approved.
 
-The interlude is driven entirely by that event stream, so it runs today against a
-**mock source** and tomorrow against the server with a one-line swap. `pnpm dev` with
-no server, no API key and no network plays the whole thing:
+The interlude is driven entirely by that event stream, which means it has **three
+interchangeable sources** — and the badge in the footer always says which one you are
+looking at, because that is the only thing about the demo that could be dishonest:
+
+| `?agent=` | Badge | What it is | Costs |
+|---|---|---|---|
+| `sse` / *(deployed default)* | `LIVE` | the server running the Analyst → Coder → harness loop **right now** | API tokens |
+| `recorded` | `RECORDED RUN · <model> · <date>` | a **real** past run of the model, replayed from a committed JSON asset. Real prose, real candidate files, real harness verdicts | nothing |
+| `mock` / *(localhost default)* | `MOCK` | a hand-scripted run, timed from real measurements, shipping a strategy the harness really approved | nothing |
+
+`pnpm dev` with no server, no API key and no network plays any of the free two:
 
 ```
-pnpm dev                                   # localhost defaults to the mock
-open 'http://localhost:5173/?agent=mock&autostart=1'
+pnpm dev
+open 'http://localhost:5173/?agent=recorded&autostart=1'   # a real run, replayed
+open 'http://localhost:5173/?agent=mock&autostart=1'       # the scripted one
 ```
+
+### Recorded runs — the demo video's source
+
+`public/recorded/` holds three runs from `pnpm eval:agents` on 2026-09-03
+(`gpt-5.4-mini`, round 2, 200 Gate 3 matches per candidate), listed in `index.json`:
+
+| `?run=` | What happens | Approved | Wall |
+|---|---|---|---|
+| `mimic-camper` *(default)* | 3 candidates rejected by Gate 3, then approval on attempt 2 | `Warden I` | 23.5 s |
+| `dodger-a` | 8 candidates rejected across 3 attempts, then approval | `Lantern III` | 35.8 s |
+| `kiter-a` | 7 candidates rejected across 3 attempts, then approval | `Warden I` | 39.8 s |
+
+All three were picked for the same reason: each is **approved after at least one Gate 3
+rejection**, which is the shape spec AC 6 asks for. The terminal `done` carries the
+source the harness actually approved, and the next round really loads it through
+QuickJS — `e2e/recorded.spec.ts` proves that by reading the boss's name off the Round 2
+HUD, which a replay cannot fake.
+
+**What is real and what is reconstructed.** Every event is verbatim from the eval
+artifact: the Analyst's prose, the streamed candidate files, every gate result and
+rejection sentence, and the approved `meta`. The one derived thing is the **per-event
+cadence** — the artifact records no timestamp per event — so offsets come from the
+durations it *does* measure (`analysis.done.ms`, each candidate's `coder.ms`, every
+gate's `ms`) and are scaled so the replay lasts exactly as long as the real run did.
+Phase boundaries are measured; spacing inside a phase is interpolated. Each file states
+this in its own `timing.method`, and `scripts/timeline.ts` explains the arithmetic.
+
+Two things the recorder strips, and nothing else: `done.result.attempts` (up to twelve
+full strategy files whose bytes are already in the stream's `rewrite.done` events, and
+which nothing in the client reads) and the other nine runs of the eval. Prompts and
+credentials were never in the events to begin with — the recorder greps the finished
+bytes for `sk-`, bearer tokens and prompt fields and refuses to write on a hit.
+
+To record another run from an eval artifact (reads a local file; **no network, no key**):
+
+```bash
+pnpm --filter @rematch/web record:run \
+  ../../artifacts/agents/eval-2026-09-03T23-53-46-645Z.json mimic-camper dodger-a kiter-a
+```
+
+It refuses any run that was not approved, or that shows no harness rejection — a run
+without a rejection is not evidence of the loop.
 
 ### Demoing it in a hurry
 
@@ -50,8 +101,10 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 | `?round=<1-5>` | Start at a given round number. |
 | `?strategy=hound` | Load the alternate bundled strategy instead of Round 1's. `hound` is the only strategy that spends `charge`, so it is how the charge telegraph gets exercised. |
 | `?agent=mock` | Force the mock interlude source. Always works offline. |
+| `?agent=recorded` | Replay a real recorded run (`public/recorded/`). Offline, free, badge reads `RECORDED RUN`. |
+| `?run=<name>` | Which recorded run to play. Default: the first in `public/recorded/index.json`. |
 | `?agent=sse` | Force the live server source, with **no** mock safety net — so a broken server is visible instead of being papered over. |
-| `?speed=<n>` | Divide every mock delay by `n`. The mock is ~25 s at `1`; the e2e suite runs at `20`. |
+| `?speed=<n>` | Divide every mock **or recorded** delay by `n`. The mock is ~25 s at `1`, `mimic-camper` 23.5 s; the e2e suite runs at `20`. |
 | `?interlude=0` | Keep the pre-interlude "Round N cleared" screen. Used by `e2e/controls.spec.ts` to test the outcome path without a 25-second overlay in the way. |
 | `?autofight=0` | Do not auto-continue 3 s after the interlude finishes; wait for the FIGHT button. |
 | `?deadline=<ms>` | Shorten the 45 s interlude deadline, to see the spec AC 5 fallback path on a machine where everything works. |
@@ -64,11 +117,16 @@ src/interlude/
   source.ts      `InterludeSource`, `sseSource`, `mockSource` selection, the wire contract
   sse.ts         SSE frame parser (the stream is a POST, so `EventSource` is unusable)
   mock.ts        the scripted ~25 s run, including one Gate 3 rejection
+  recorded.ts    `recordedSource` — replays a real eval run from public/recorded/
   diff.ts        a small unified diff, for the mock only
   ui.ts          the four-beat overlay (`meterView` is the Gate 3 bar, DOM-free)
   replayViz.ts   beat 1's heat grid, dash rose and timeline strip
   index.ts       `createInterludeHandler` — the `onRoundWon` implementation
   fixtures/attempt1.js   mock data: the "too hard" first draft. Never executed.
+
+public/recorded/    three real eval runs + index.json (see "Recorded runs" above)
+scripts/record-run.ts   builds those assets from an eval artifact. No network.
+scripts/timeline.ts     reconstructs per-event offsets from measured durations.
 ```
 
 `events.ts` is a copy rather than an import **on purpose**: `@rematch/agents` reaches

@@ -195,6 +195,138 @@ harness CLI against real fixtures before the commit was made. No agent committed
 
 ---
 
+## 2026-09-03 (evening) — the real API eval: OpenAI, K=3 candidates, and a burnt budget
+
+**Human.** Anthropic credit was unavailable; OpenAI credit was. Decision: make the
+vendor pluggable rather than swap one hardcoded client for another, because the product
+should not care and the *demo* must never be able to claim one vendor while billing the
+other.
+
+**Orchestrator + agent.** `selectProvider()` becomes the single decision point for
+vendor, key and per-agent model, shared by the server banner, `/api/health` and
+`pnpm eval:agents` (SPEC §13 delta 11). Model: **`gpt-5.4-mini`** for both agents —
+latency is the constraint inside AC 5's 45 s, not depth, and the Coder writes ~80 lines
+against a frozen contract with a deterministic verifier behind it.
+
+**First real numbers, and they were bad.** Five evals of 10 canned replays at one
+candidate file per attempt: pass rates **0.3, 0.3, 0.3, 0.2, 0.0** against spec §7's
+0.8 target. The failures were almost all Gate 3 — the file parsed, executed in QuickJS,
+and was simply the wrong difficulty.
+
+**The fix was more samples, not a better prompt.** The round-2 band is 0.15 wide
+(0.35–0.50) and the model cannot measure its own output, so one file per attempt is
+close to a coin flip. `REMATCH_CANDIDATES` (default 3) makes an attempt write three
+files from one context, aimed at the low edge, the middle and the high edge, and lets
+the harness keep the best. Cost: 3x the tokens and *the same wall clock*, because the
+candidates stream concurrently. Result: **0.6** at eval concurrency 1 (SPEC §13 delta
+12).
+
+**What the eval measured about itself.** Of 54 candidate rejections, **52 were Gate 3**
+and 2 were Gate 1 — the verifier is doing the job it exists for. And the binding
+constraint is the Coder: **p50 7.7 s, p90 12.3 s** over 65 candidate calls, against a
+40 s deadline. Three of the four unapproved runs ended on `deadline`, not on
+`max-attempts`. Details and the excerpt: [`SYSTEM.md`](SYSTEM.md) §6.
+
+**AC 6 and AC 7 are closed by this evening's work.** Replay `mimic-camper`: three
+candidates rejected by Gate 3 (0.04 too easy, 0.62 and 0.77 too hard), then "Warden I"
+approved on attempt 2 at panel 0.39 ∈ [0.35, 0.50] with **Mimic 0.99 ≥ 0.70**, in
+23.5 s with no human message anywhere. Committed whole at
+[`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
+
+### What went wrong: eleven eval runs exhausted the account's credit
+
+**Orchestrator failure, and worth naming precisely.** Tuning the candidate count took
+eleven `pnpm eval:agents` invocations in one evening. Each is up to 250 model calls
+(10 replays x (1 Analyst + 4 attempts x 3 candidates x 2)). Nothing in the repo was
+counting, warning, or capping — and the script's only guard was "is a credential
+present", which stops being a guard the moment a key is in `.env`, i.e. always, for
+anyone actually working on the agents.
+
+The per-IP rate limiter did not help and was never going to: it caps *one caller over
+ten minutes*, which is the right control for abuse and no control at all on the total
+bill (6 per 10 min is 864 rewrites a day).
+
+This was not a model failure or a code failure. It was **an orchestration failure: no
+spend cap, on the one thing in the repo that spends money.** The eval was treated as a
+test — something you run again when you change a parameter — when it is a purchase. The
+fix is the next entry; it should have existed before the first run.
+
+---
+
+## 2026-09-04 — local-first: spend guards, and a recorded run for the demo
+
+**Human.** New standing rule, effective immediately:
+
+> **Local-first. No LLM call of any kind without explicit authorisation.** Not the
+> eval, not the server with a real provider, not a "quick check". Credits are exhausted;
+> every call is now a decision a human makes, not a side effect of a command.
+
+**Orchestrator.** The rule is written into the repo rather than left as an instruction,
+because an instruction an agent can forget is not a control (the same argument as §7's
+deterministic controls). Three guards, all tested, none of which need configuring:
+
+1. **`REMATCH_MAX_REWRITES_PER_DAY`** (default 50) — a *global* per-UTC-day counter in
+   `packages/server/src/spendGuard.ts`. Past it the server serves **fallback-only** for
+   the rest of the day, logs once, and `/api/health` reports `rewritesToday`, `dailyCap`
+   and `spendGuard: "ok" | "capped"`. Not a `429`: degrading to the honest no-key path
+   keeps the demo playable, which is what that path was already built for. Deliberately
+   a different shape from the rate limiter — per-IP for abuse, global for the bill.
+2. **`REMATCH_PROVIDER=none`** — forces fallback-only *even with a valid key present*,
+   and is the value committed in the new `.env.example`. `selectProvider` treats an
+   unrecognised value as `auto`, which is right for a typo and wrong for an off switch,
+   so `none` is handled in the server. An off switch that requires deleting your
+   credential is one nobody uses under time pressure.
+3. **`REMATCH_ALLOW_SPEND=1`** — `pnpm eval:agents` refuses to run without it and prints
+   the worst-case call count for *that invocation's* flags first (~250 by default), plus
+   the free alternatives. Deliberately not in `.env`: a variable that must be typed at
+   the call site cannot be silently inherited.
+
+**And the demo needed to stop costing money too.** A video of the interlude was going to
+mean either re-running the live loop per take (spend) or filming the mock (honest, but
+it is not the model). So: a third interlude source, **recorded-run mode** —
+`?agent=recorded&run=<name>` replays a real eval run from a committed JSON asset, at
+zero cost, offline, forever.
+
+Three runs are recorded from the 2026-09-03 eval — `mimic-camper` (5 rejections then
+"Warden I", 23.5 s), `dodger-a` (8 rejections then "Lantern III"), `kiter-a` (7 then
+"Warden I") — chosen because each is *approved after at least one Gate 3 rejection*,
+which is the shape AC 6 asks for. The footer badge reads
+`RECORDED RUN · gpt-5.4-mini · 2026-09-03` for the whole interlude, and Round 2 really
+loads the recorded approved source through QuickJS — asserted in
+`e2e/recorded.spec.ts` by reading the boss's name off the HUD, which a replay cannot
+fake.
+
+**One thing about it is reconstructed, and is labelled as such.** The eval artifact
+records **no timestamp per event** — `runOne` collects the stream with
+`(event) => void events.push(event)` and nothing more — so the replay's cadence is
+derived from the durations the artifact *does* measure (the Analyst's beat, each
+candidate's Coder call, every gate) and scaled so the total equals the run's real wall
+clock. Phase boundaries are measured; spacing within a phase is interpolated. Each
+recorded file says so in its own `timing.method`, and `packages/web/scripts/timeline.ts`
+explains the arithmetic. The alternative — a plausible invented cadence with no note —
+would have made the recorded mode a second mock wearing a real badge.
+
+**A real bug fell out of it**, which is the argument for recording real runs rather than
+trusting hand-written ones. The candidate tab strip kept its views in a *sparse* array
+indexed by candidate number, and iterated it with `for…of`. The mock always finishes its
+three candidates in order 0, 1, 2, so there was never a hole. `gpt-5.4-mini` finished
+candidate 2 before candidate 1, and the interlude died mid-run on
+`Cannot read properties of undefined (reading 'tab')`. The type now says
+`Array<CandidateView | undefined>` so every read has to admit the holes exist.
+
+**Also fixed while measuring:** the first recorded replay was *slower than the
+recording* — 1 223 of 6 338 events in six seconds at `?speed=20`. One `setTimeout` per
+event hits the browser's ~4 ms nested-timer clamp, so 6 000 of them take ~25 s whatever
+number they are given. The replay is now scheduled against a wall clock and emits
+anything already due in the current tick, which also removes accumulated drift.
+
+**Docs.** [`SYSTEM.md`](SYSTEM.md) §6 now carries the real run and a measured pass-rate
+paragraph in place of the mock-provider excerpt (the
+`<!-- TODO: replace with real run -->` marker is gone); SPEC §13 gains deltas 11–14.
+Remaining open: AC 4 (playtest) and AC 9 (deploy) — both below, both needing a human.
+
+---
+
 ## What went wrong
 
 Kept because the failures are the interesting part of a parallel-agent build.
@@ -226,7 +358,8 @@ Kept because the failures are the interesting part of a parallel-agent build.
 
 ## Open — dated placeholders
 
-These are not done. They are listed with what would close them, so the gap is legible.
+Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck
+through, rather than deleted: what closed it and what it cost is the interesting part.
 
 ### `[ ] 2026-09-0? — human playtest (AC 4)`
 
@@ -239,17 +372,22 @@ un-telegraphed bullets, so a first-time player may find the fight unreadable eve
 both telegraphs are honest. Spec §11's mitigation applies — *if not fun, simplify
 primitives, don't add.*
 
-### `[ ] 2026-09-0? — real API eval + AC 6 evidence (blocked: no API key)`
+### `[x] 2026-09-03 — real API eval + AC 6 evidence` — **closed**
 
-*At least one recorded real run showing a strategy rejected by Gate 3 and then approved on a
-subsequent attempt with no human input.* Blocked on an `ANTHROPIC_API_KEY` being available.
-To close: set the key, run `pnpm eval:agents` (10 canned replays, round 2, spec §7's ≥80%
-target; writes every event of every run to `artifacts/agents/eval-<ts>.json`), pick a run
-that shows a Gate 3 rejection followed by an approval, copy it into `docs/`, and replace
-[`SYSTEM.md`](SYSTEM.md) §6 — the section carries a
-`<!-- TODO: replace with real run -->` marker and is labelled *"mock provider run"* until
-then. Also record the AC 7 number for that run (Round 2 boss vs `Mimic` ≥ 0.70) and the
-observed pass rate against the 80% target.
+*At least one recorded real run showing a strategy rejected by Gate 3 and then approved
+on a subsequent attempt with no human input.* Done, on OpenAI `gpt-5.4-mini` rather than
+Anthropic (credits). Replay `mimic-camper`: three candidates rejected by Gate 3, then
+"Warden I" approved on attempt 2 — panel 0.39 ∈ [0.35, 0.50], **AC 7's Mimic number
+0.99 ≥ 0.70** — in 23.5 s, 7 model calls, no human message anywhere.
+
+- Excerpt and analysis: [`SYSTEM.md`](SYSTEM.md) §6.
+- Full event log, all ten runs: [`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
+- Watchable: `pnpm dev`, then `/?agent=recorded&run=mimic-camper&autostart=1` — no key.
+- Observed pass rate **0.6** against the 0.8 target, so §7's threshold is **not** met.
+  That is recorded rather than smoothed over: the cause is measured (Coder p50 7.7 s /
+  p90 12.3 s against a 40 s deadline, so the fourth attempt is usually unreachable) and
+  the fallback pool covers the rest visibly. Closing the gap means a faster Coder or a
+  longer budget, not a better prompt.
 
 ### `[ ] 2026-09-0? — deploy (AC 9, blocked: human decision)`
 

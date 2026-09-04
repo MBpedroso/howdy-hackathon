@@ -1,0 +1,45 @@
+{
+  "note": "Recorded real eval runs, replayed by ?agent=recorded&run=<name>. Real model output and real harness verdicts; per-event timing is reconstructed (see each file's timing.method). The first entry is the default.",
+  "source": "eval-2026-09-03T23-53-46-645Z.json",
+  "runs": [
+    {
+      "name": "mimic-camper",
+      "model": "gpt-5.4-mini",
+      "recordedAt": "2026-09-03T23:53:46.645Z",
+      "round": 2,
+      "archetype": "camper",
+      "approved": true,
+      "attempts": 2,
+      "strategy": "Warden I",
+      "rejections": 5,
+      "totalMs": 23542,
+      "label": "mimic-camper — 5 candidate(s) rejected by the harness, then \"Warden I\" approved on attempt 2 (23.5s)"
+    },
+    {
+      "name": "dodger-a",
+      "model": "gpt-5.4-mini",
+      "recordedAt": "2026-09-03T23:53:46.645Z",
+      "round": 2,
+      "archetype": "camper",
+      "approved": true,
+      "attempts": 3,
+      "strategy": "Lantern III",
+      "rejections": 8,
+      "totalMs": 35778,
+      "label": "dodger-a — 8 candidate(s) rejected by the harness, then \"Lantern III\" approved on attempt 3 (35.8s)"
+    },
+    {
+      "name": "kiter-a",
+      "model": "gpt-5.4-mini",
+      "recordedAt": "2026-09-03T23:53:46.645Z",
+      "round": 2,
+      "archetype": "camper",
+      "approved": true,
+      "attempts": 3,
+      "strategy": "Warden I",
+      "rejections": 6,
+      "totalMs": 39751,
+      "label": "kiter-a — 6 candidate(s) rejected by the harness, then \"Warden I\" approved on attempt 3 (39.8s)"
+    }
+  ]
+}

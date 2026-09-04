@@ -24,6 +24,7 @@
 
 // The endpoint core — no `req`, no `res`.
 export {
+  CAPPED_MESSAGE,
   DEADLINE_ENV,
   DEFAULT_DEADLINE_MS,
   DEFAULT_GRACE_MS,
@@ -32,10 +33,25 @@ export {
   WORKERS_ENV,
   fallbackOnly,
   handleRewrite,
+  resetProcessSpendGuard,
   resolveDeadlineMs,
   resolveHarnessOpts,
   type RewriteHandlerOptions,
 } from './handleRewrite.ts';
+
+// The daily spend cap (`REMATCH_MAX_REWRITES_PER_DAY`). Global, unlike the per-IP
+// rate limiter — see `spendGuard.ts` for why both exist.
+export {
+  DAILY_CAP_ENV,
+  DEFAULT_DAILY_CAP,
+  createSpendGuard,
+  resolveDailyCap,
+  utcDay,
+  type SpendGuard,
+  type SpendGuardOptions,
+  type SpendGuardReport,
+  type SpendState,
+} from './spendGuard.ts';
 
 export {
   BadRequestError,
@@ -78,10 +94,12 @@ export { LOCAL_ORIGINS, ORIGIN_ENV, allowedOrigins, corsFor, type CorsDecision }
 
 export {
   KEY_ENV,
+  PROVIDER_NONE,
   activeModel,
   activeVendor,
   bothFrom,
   hasApiKey,
+  providerDisabled,
   resolveProviders,
   selection,
 } from './providers.ts';

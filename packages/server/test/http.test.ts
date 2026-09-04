@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE_ROUNDS } from '@rematch/harness';
 import { MAX_BODY_BYTES } from '../src/http.ts';
+import { DEFAULT_DAILY_CAP } from '../src/spendGuard.ts';
 import { asCoderReply, postRewrite, readHarnessFixture, requestBody, scriptedProvider, startServer } from './helpers.ts';
 
 describe('GET /api/health', () => {
@@ -25,6 +26,36 @@ describe('GET /api/health', () => {
       expect(body['provider']).toBeNull();
       expect(body['model']).toBeNull();
       expect(body['fallbackRounds']).toEqual([...BALANCE_ROUNDS]);
+      // The spend guard's state, so an operator can see it before a jury does.
+      expect(body['rewritesToday']).toBe(0);
+      expect(body['dailyCap']).toBe(DEFAULT_DAILY_CAP);
+      expect(body['spendGuard']).toBe('ok');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('reports the daily spend cap, and reports it as capped once it is spent', async () => {
+    // `/api/health` and the endpoint must read the *same* counter — a health check
+    // that disagrees with what the endpoint enforces is worse than none.
+    const server = await startServer({ env: { REMATCH_MAX_REWRITES_PER_DAY: '0' } });
+    try {
+      const body = (await (await fetch(`${server.url}/api/health`)).json()) as Record<string, unknown>;
+      expect(body['dailyCap']).toBe(0);
+      // Cap 0 is the never-spend setting, so the guard is capped from the first look.
+      expect(body['spendGuard']).toBe('capped');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('reports REMATCH_PROVIDER=none as fallback-only even with a key set', async () => {
+    const server = await startServer({ env: { OPENAI_API_KEY: 'sk-test', REMATCH_PROVIDER: 'none' } });
+    try {
+      const body = (await (await fetch(`${server.url}/api/health`)).json()) as Record<string, unknown>;
+      expect(body['hasApiKey']).toBe(false);
+      expect(body['provider']).toBeNull();
+      expect(body['model']).toBeNull();
     } finally {
       await server.close();
     }

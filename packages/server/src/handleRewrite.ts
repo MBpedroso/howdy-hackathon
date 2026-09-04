@@ -30,6 +30,11 @@
  *    A response the client is waiting on cannot overshoot indefinitely, so there is
  *    a second timer at `deadline + grace` that aborts and ends the stream itself.
  *    It should never fire; if it does, the player still gets a boss.
+ * 4. **The daily spend cap.** One global counter (`spendGuard.ts`) decides whether
+ *    this request is allowed to cost money at all. Past the cap the handler takes the
+ *    same fallback-only path as a missing key — which is why the cap lives here, next
+ *    to that decision, rather than in the HTTP layer: a serverless wrapper gets it
+ *    for free, and there is exactly one place where "will this spend?" is answered.
  */
 import {
   resolveCandidates,
@@ -45,6 +50,7 @@ import type { ServerEmit, ServerRewriteResult } from './events.ts';
 import { pickFallback, type FallbackStrategy } from './fallback.ts';
 import { bothFrom, resolveProviders } from './providers.ts';
 import { requireRewriteRequest, type RewriteRequestBody } from './request.ts';
+import { createSpendGuard, resolveDailyCap, type SpendGuard } from './spendGuard.ts';
 
 /**
  * Server-side hard timeout for the loop. Spec AC 5 gives the interlude 45 s
@@ -62,6 +68,44 @@ export const WORKERS_ENV = 'REMATCH_WORKERS';
 
 /** The honest sentence the player is shown when there is no key. Spec AC 5's copy. */
 export const NO_KEY_MESSAGE = 'No API key configured — using a pre-approved strategy';
+
+/**
+ * The sentence shown once the daily cap is spent.
+ *
+ * Says what actually happened rather than blaming a missing key: the difference
+ * between "this deployment has no model" and "this deployment has stopped paying for
+ * one today" matters to anyone watching, and the second one resolves at midnight UTC.
+ */
+export const CAPPED_MESSAGE =
+  'Daily rewrite budget reached — using a pre-approved strategy';
+
+/**
+ * The process-wide guard, shared by every request this server serves.
+ *
+ * A module singleton because the cap is global by definition — a per-request guard
+ * would count to one and never reach the limit. Tests inject their own through
+ * `opts.spendGuard`.
+ */
+let processGuard: SpendGuard | undefined;
+
+function defaultGuard(env: Record<string, string | undefined>): SpendGuard {
+  processGuard ??= createSpendGuard({
+    cap: resolveDailyCap(env),
+    onCapped: (report) =>
+      console.warn(
+        JSON.stringify({
+          warn: 'spend guard: daily rewrite cap reached — serving fallback-only for the rest of the UTC day',
+          ...report,
+        }),
+      ),
+  });
+  return processGuard;
+}
+
+/** Visible for tests: drop the singleton so a fresh cap can be installed. */
+export function resetProcessSpendGuard(): void {
+  processGuard = undefined;
+}
 
 export type RewriteHandlerOptions = {
   /** One provider for both agents. How a test injects a mock. */
@@ -82,6 +126,12 @@ export type RewriteHandlerOptions = {
   harnessOpts?: RunGatesOptions;
   /** Read instead of `process.env`. */
   env?: Record<string, string | undefined>;
+  /**
+   * The daily spend cap. Defaults to a process-wide guard built from
+   * `REMATCH_MAX_REWRITES_PER_DAY`; `false` disables the cap entirely, which is what
+   * the tests that need many rewrites in one process pass.
+   */
+  spendGuard?: SpendGuard | false;
   /** Fallback picker. Injected only by tests; production is `pickFallback`. */
   pick?: (round: RewriteRequestBody['round'], seed: number) => FallbackStrategy;
 };
@@ -134,11 +184,17 @@ export function fallbackOnly(
   req: RewriteRequestBody,
   emit: ServerEmit,
   fallback: FallbackStrategy,
+  /**
+   * Why no model ran. Defaults to the no-key sentence; the spend guard passes
+   * `CAPPED_MESSAGE` instead, so the two reasons are distinguishable on screen
+   * without a second copy of this whole function.
+   */
+  why: string = NO_KEY_MESSAGE,
 ): ServerRewriteResult {
   emit({ type: 'replay', summary: req.summary, round: req.round });
 
   const analysis: Analysis = {
-    observations: [NO_KEY_MESSAGE, `Round ${req.round} ships "${fallback.name}" from the pre-approved pool.`],
+    observations: [why, `Round ${req.round} ships "${fallback.name}" from the pre-approved pool.`],
     // Nothing was analysed, so nothing may be claimed about the player. `mixed` is
     // the archetype that asserts the least.
     playerArchetype: 'mixed',
@@ -158,15 +214,16 @@ export function fallbackOnly(
     ms: 0,
   });
 
+  const message = why === NO_KEY_MESSAGE ? 'no api key' : 'daily rewrite budget reached';
   const result: ServerRewriteResult = {
     approved: false,
     attempts: [],
     reason: 'error',
-    message: 'no api key',
+    message,
     analysis,
     fallback,
   };
-  emit({ type: 'fallback', reason: 'error', message: 'no api key' });
+  emit({ type: 'fallback', reason: 'error', message });
   emit({ type: 'done', result });
   return result;
 }
@@ -194,6 +251,15 @@ export async function handleRewrite(
     opts.providers ?? (opts.provider === undefined ? resolveProviders(env) : bothFrom(opts.provider));
   if (providers === undefined) {
     fallbackOnly(req, emit, fallback());
+    return;
+  }
+
+  // Claimed here and nowhere else: after validation (a `400` must not cost a slot)
+  // and after the no-key check (a request that was never going to spend must not
+  // count against the budget), but before a single token is bought.
+  const guard = opts.spendGuard === undefined ? defaultGuard(env) : opts.spendGuard;
+  if (guard !== false && !guard.claim()) {
+    fallbackOnly(req, emit, fallback(), CAPPED_MESSAGE);
     return;
   }
 

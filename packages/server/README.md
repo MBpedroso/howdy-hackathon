@@ -6,7 +6,8 @@ boss when the loop misses.
 
 ```
 POST /api/rewrite            text/event-stream — the interlude (spec §2.2)
-GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds, deadlineMs }
+GET  /api/health             { ok, hasApiKey, provider, model, fallbackRounds, deadlineMs,
+                               rewritesToday, dailyCap, spendGuard }
 GET  /api/fallback/:round    { name, source } — one pre-approved strategy
 ```
 
@@ -26,11 +27,19 @@ different models. `auto` prefers Anthropic when both keys are set; an *explicit*
 `REMATCH_PROVIDER` whose key is missing selects fallback-only rather than quietly billing
 the other vendor, and `/api/health` says which happened.
 
+**For local development, set `REMATCH_PROVIDER=none`** — it is what `.env.example` ships
+with. `none` forces fallback-only *even when a valid key is present*, so the off switch
+does not require deleting your credential (`src/providers.ts` explains why it is handled
+here rather than in `selectProvider`, which treats an unrecognised value as `auto`). The
+game stays fully playable, and the demo has a free source that is real model output — see
+`?agent=recorded` in [`packages/web/README.md`](../web/README.md).
+
 | Variable | Effect |
 |---|---|
 | `OPENAI_API_KEY` | present → the real loop runs on OpenAI |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | present → the real loop runs on Anthropic |
-| `REMATCH_PROVIDER` | `anthropic` \| `openai` \| `auto` (default). No usable credential → fallback-only |
+| `REMATCH_PROVIDER` | **`none`** (recommended locally) \| `anthropic` \| `openai` \| `auto` (default). `none`, or no usable credential → fallback-only |
+| `REMATCH_MAX_REWRITES_PER_DAY` | global cap on rewrites this server pays for, per UTC day. Default 50; `0` = never spend |
 | `REMATCH_MODEL`, `REMATCH_ANALYST_MODEL`, `REMATCH_CODER_MODEL` | model per agent (`@rematch/agents`) |
 | `REMATCH_REASONING_EFFORT` | OpenAI only: `low` (default), `minimal`, `medium`, `high`, or `none` to omit the block |
 | `REMATCH_DEADLINE_MS` | loop deadline, default 40 000 |
@@ -138,12 +147,15 @@ fabricated — a fake analysis would be the one dishonest thing in the product.
 
 ## What protects the endpoint
 
-One request is one Analyst call, up to four Coder calls and up to 800 simulated matches. So:
+One request is one Analyst call, up to twelve Coder calls (4 attempts x 3 candidates) and
+up to 2 400 simulated matches. So:
 
 | Control | Value | Why |
 |---|---|---|
 | Deadline | 40 s, then a 5 s grace | Spec AC 5's 45 s budget includes the network. The loop's own deadline aborts model calls but deliberately does not interrupt a running gate, so a second timer ends the response if a gate overruns |
-| Rate limit | 6 rewrites / 10 min per IP, token bucket | Four rewrites is a whole game (rounds 2-5), so it never bites on honest play. Charged before the body is read, refunded on a `400` |
+| Rate limit | 6 rewrites / 10 min **per IP**, token bucket | Four rewrites is a whole game (rounds 2-5), so it never bites on honest play. Charged before the body is read, refunded on a `400` |
+| **Daily spend cap** | **50 rewrites / UTC day, global** (`REMATCH_MAX_REWRITES_PER_DAY`) | The rate limit caps *one caller over ten minutes* and is no control on the total bill — 6 per 10 min is 864 rewrites a day. Past the cap the server serves **fallback-only** for the rest of the day (not a `429`: degrading to the honest no-key path keeps the demo playable) and logs once. Added after eleven eval runs in one evening exhausted the project's credit — see `docs/AI-DEV-LOG.md`, 2026-09-04 |
+| Provider off switch | `REMATCH_PROVIDER=none` | Fallback-only with the key left in place. The documented local-dev setting |
 | Body cap | 512 KB | A `ReplaySummary` is ~8 KB and `prevSource` is capped at 64 K chars |
 | CORS | allow-list: the Vite dev/preview ports, `VERCEL_URL`, `REMATCH_ORIGIN` | `POST /api/rewrite` spends money; any page on the internet must not be able to fire it from a visitor's browser |
 | Abort | client disconnect → `AbortSignal` → the provider stream | A closed tab must stop burning tokens |
@@ -172,7 +184,8 @@ pnpm --filter @rematch/server test      # ~7 s, no network, no API key
 |---|---|
 | `rewrite.test.ts` | the endpoint over a socket: the four beats in order, `done` last, all four gates as separate events, a Gate 1 rejection reaching the client verbatim then approving, the max-attempts fallback, fallback-only mode, seeded pick stability, and a client disconnect aborting the provider's signal |
 | `providers.test.ts` | which vendor and model the server resolves from the environment, including fallback-only on a fresh clone |
-| `http.test.ts` | health (`provider` and `model` for both vendors), the fallback route, eight `400` shapes, `413`, `429` with `Retry-After`, CORS preflight and refusal, keep-alive comments, `404` |
+| `spendGuard.test.ts` | the daily cap against an injected clock (the UTC roll-over, the log-once rule), `REMATCH_PROVIDER=none` beating a present key, and the capped request producing a complete fallback-only stream rather than an error |
+| `http.test.ts` | health (`provider` and `model` for both vendors, plus `rewritesToday` / `dailyCap` / `spendGuard`), the fallback route, eight `400` shapes, `413`, `429` with `Retry-After`, CORS preflight and refusal, keep-alive comments, `404` |
 | `units.test.ts` | the token bucket against an injected clock (including the drip-back a socket test cannot show), the validator, the frame format, the log line |
 | `fallback.test.ts` | balance regression: every pooled strategy still lands in its round's band (spec §7) |
 

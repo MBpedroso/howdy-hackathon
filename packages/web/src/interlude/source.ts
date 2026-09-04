@@ -69,6 +69,7 @@ import type { ReplaySummary } from '@rematch/engine';
 
 import { isRewriteEvent, type RewriteEvent } from './events.ts';
 import { mockSource, type MockOptions } from './mock.ts';
+import { recordedSource, type RecordedOptions } from './recorded.ts';
 import { readEventStream } from './sse.ts';
 
 /** The body of `POST /api/rewrite`. */
@@ -91,8 +92,20 @@ export type InterludeSource = (
   signal: AbortSignal,
 ) => Promise<void>;
 
-/** Which implementation is talking. Rendered as a badge, asserted in the e2e suite. */
-export type SourceKind = 'mock' | 'sse';
+/**
+ * Which implementation is talking. Rendered as a badge, asserted in the e2e suite.
+ *
+ * | Kind | Badge | What the player is watching |
+ * |---|---|---|
+ * | `sse` | `LIVE` | the server, running the loop right now |
+ * | `recorded` | `RECORDED RUN · <model> · <date>` | a real eval run, replayed from disk |
+ * | `mock` | `MOCK` | the hand-scripted offline run |
+ *
+ * Three kinds rather than two because the demo has three honest answers and the badge
+ * must give the right one. `recorded` is real model output that is not happening now;
+ * conflating it with either neighbour would be a lie in one direction or the other.
+ */
+export type SourceKind = 'mock' | 'sse' | 'recorded';
 
 /**
  * Thrown by `sseSource` when the request failed **before the first event**.
@@ -205,6 +218,8 @@ export type ResolveOptions = {
   apiBase?: string | undefined;
   /** Extra mock options; `speed` is overridden by `?speed=`. */
   mock?: MockOptions;
+  /** Extra recorded options; `speed` is overridden by `?speed=`, `run` by `?run=`. */
+  recorded?: RecordedOptions;
 };
 
 export type ResolvedSource = {
@@ -221,6 +236,7 @@ export type ResolvedSource = {
  * | Condition | Source |
  * |---|---|
  * | `?agent=mock` | mock, always |
+ * | `?agent=recorded` | a recorded real run, `?run=<name>` or `index.json`'s first |
  * | `?agent=sse` / `?agent=server` | SSE, no mock safety net |
  * | `VITE_API_BASE` is set | SSE at that base |
  * | hostname is not local | SSE at the same origin (the Vercel deploy) |
@@ -230,6 +246,11 @@ export type ResolvedSource = {
  * failure *before the first event* silently continues on the mock. That is what
  * makes `pnpm dev` with no server a working demo, and it is the one case where the
  * badge changes from `sse` to `mock` mid-run.
+ *
+ * `recorded` gets **no** such safety net, deliberately: its asset is committed to this
+ * repo, so a failure to load it is a broken build rather than a missing service, and
+ * quietly playing the mock behind a badge that says `RECORDED RUN` would be the one
+ * dishonest thing on screen.
  */
 export function resolveSource(options: ResolveOptions = {}, onSwitch?: (kind: SourceKind, why: string) => void): ResolvedSource {
   const search = options.search ?? (typeof location === 'undefined' ? '' : location.search);
@@ -240,6 +261,17 @@ export function resolveSource(options: ResolveOptions = {}, onSwitch?: (kind: So
   const mock = mockSource({ ...options.mock, speed });
 
   if (agent === 'mock') return { source: mock, kind: 'mock', speed };
+
+  if (agent === 'recorded') {
+    // `?run=` names a file in `public/recorded/`; absent, the source reads
+    // `index.json` and takes the first entry, so the demo URL stays short.
+    const run = params.get('run');
+    return {
+      source: recordedSource(run, { ...options.recorded, speed }),
+      kind: 'recorded',
+      speed,
+    };
+  }
 
   const hostname = options.hostname ?? (typeof location === 'undefined' ? 'localhost' : location.hostname);
   // `import.meta.env` is typed as an index signature, hence the cast.

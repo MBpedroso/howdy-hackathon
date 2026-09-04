@@ -4,6 +4,7 @@
  * The rules being pinned here are the ones that decide whether a demo works at all:
  *
  * - `?agent=mock` always plays the mock, so the demo has a switch that cannot fail.
+ * - `?agent=recorded` plays a recorded real run, and `?run=` picks which.
  * - A local dev server with no API server behind it plays the mock by default.
  * - A deployed build talks to the server.
  * - A *mid-stream* failure ends visibly (`fallback` + `done`, spec AC 5) rather than
@@ -69,6 +70,41 @@ afterEach(() => {
 describe('resolveSource', () => {
   it('forces the mock on ?agent=mock, whatever the host says', () => {
     expect(resolveSource({ search: '?agent=mock', hostname: 'rematch.vercel.app', apiBase: 'https://api' }).kind).toBe('mock');
+  });
+
+  it('forces a recorded run on ?agent=recorded, whatever the host says', () => {
+    // The demo URL must not depend on where it is opened, and it must never be
+    // silently upgraded to a live run — `recorded` is the mode that costs nothing.
+    for (const hostname of ['localhost', 'rematch.vercel.app']) {
+      expect(resolveSource({ search: '?agent=recorded', hostname, apiBase: 'https://api' }).kind).toBe('recorded');
+    }
+  });
+
+  it('passes ?run= through to the recorded source, and ?speed= with it', async () => {
+    // Asserted through the fetch the source makes, because which file it asks for is
+    // the only externally visible consequence of `?run=`.
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 404 }));
+    const { source, kind, speed } = resolveSource({
+      search: '?agent=recorded&run=kiter-a&speed=20',
+      hostname: 'localhost',
+      recorded: { baseUrl: '/', fetchImpl: fetchMock as unknown as typeof fetch },
+    });
+    expect(kind).toBe('recorded');
+    expect(speed).toBe(20);
+
+    await expect(source(request, () => {}, new AbortController().signal)).rejects.toThrow(/HTTP 404/);
+    expect(String((fetchMock.mock.calls[0] as [string])[0])).toBe('/recorded/kiter-a.json');
+  });
+
+  it('asks index.json for the default run when ?run= is absent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ runs: [] }), { status: 200 }));
+    const { source } = resolveSource({
+      search: '?agent=recorded',
+      hostname: 'localhost',
+      recorded: { baseUrl: '/', fetchImpl: fetchMock as unknown as typeof fetch },
+    });
+    await expect(source(request, () => {}, new AbortController().signal)).rejects.toThrow(/lists no runs/);
+    expect(String((fetchMock.mock.calls[0] as [string])[0])).toBe('/recorded/index.json');
   });
 
   it('defaults to the mock on localhost with no configured API base', () => {

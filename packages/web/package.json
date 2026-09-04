@@ -17,7 +17,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
-    "gen:inputlog": "node scripts/gen-inputlog.ts"
+    "gen:inputlog": "node scripts/gen-inputlog.ts",
+    "record:run": "node --experimental-strip-types scripts/record-run.ts"
   },
   "dependencies": {
     "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",

@@ -378,105 +378,168 @@ actually changed.
 
 ## 6. Autonomous Loop Evidence
 
-> **Mock provider run — real API run to be inserted (AC 6).** No `ANTHROPIC_API_KEY` has
-> been available in the build environment, so the *model* below is
-> `mockProvider`, scripted to fail twice and then succeed. **Everything else is real**:
-> the gates are the shipping gates, Gate 1 really parses the file, Gate 2 and Gate 4
-> really execute it in QuickJS, and Gate 3 really simulates 62 matches across a worker
-> pool and really rates the second attempt above the round 2 band. The rejection
-> sentences below were produced by the harness, not written by hand. Spec AC 6 asks for a
-> *recorded real run*, and that is still outstanding.
->
-> <!-- TODO: replace with real run -->
+**A real run. OpenAI `gpt-5.4-mini`, 2026-09-03, round 2, 200 Gate 3 matches per
+candidate.** Replay `mimic-camper` from `pnpm eval:agents`; the complete event log of
+this and the nine other runs in the same eval is committed at
+[`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
 
-Reproduced by the loop test (`packages/agents/test/loop.test.ts`, *"gets rejected by
-Gate 1, then by Gate 3, then ships on attempt 3"*) — 60 matches instead of the spec's 200
-to keep it inside `pnpm verify`. **Wall clock: 1 052 ms, headless. 144 events. No human
-message anywhere.**
+**Wall clock: 23.5 s. 6 338 events. 7 model calls (1 Analyst + 6 Coder). 32 996 input /
+8 576 output / 19 712 cached tokens. No human message anywhere.** Six candidate files
+were written; the harness rejected five of them and approved the sixth.
+
+You can watch this exact run in the browser, with no API key and no server:
+
+```bash
+pnpm dev
+open 'http://localhost:5173/?agent=recorded&run=mimic-camper&autostart=1'
+```
+
+The interlude badge reads `RECORDED RUN · gpt-5.4-mini · 2026-09-03` throughout, and
+Round 2 really loads the approved source through QuickJS — see "Recorded runs" in
+[`packages/web/README.md`](../packages/web/README.md).
 
 ```
-event: replay              round 2, summary of the round the player just won (canned: camper-a)
+event: replay              round 2, summary of the round the player just won (canned: mimic-camper)
 
-event: analysis.delta      "Lived in cell 63 (x=750, y=750) for 93% of the round."
-event: analysis.delta      "Never dashed in 1301 ticks."
-event: analysis.delta      "Fired 163 shots and took no damage."
+event: analysis.delta      "Player lived almost entirely in the bottom-left corner: cell 57
+                            (x≈150, y≈750) for 33.4% and cell 56 (x≈50, y≈750) for 33.2%."
+event: analysis.delta      "They also held the adjacent lower band, with cell 49 at 14.0%
+                            and cell 50 at 13.8%."
+event: analysis.delta      "They never dashed at all, so there's no evasive movement to read."
+event: analysis.delta      "They opened damage early, landing the first hit on tick 36, then
+                            kept firing steadily for 146 total shots while taking 0 damage."
 event: analysis.done       playerArchetype: "camper"
-                           counterPlan: "Put every slam on the bottom-right corner and hold
-                                         mid range so the corner stops being safe."
-                           calls 1 · promptChars 5128 · 1282 in / 111 out tokens
+                           counterPlan: "Put pressure directly into the bottom-left pocket,
+                                         especially the x≈0–250, y≈650–800 band where they
+                                         spent 94.4% of their time across four cells. …"
+                           calls 1 · promptChars 5133 · 1638 in / 468 out / 1280 cached · 2966 ms
 
-──────────────────────────────────────────────────────────────────── ATTEMPT 1
-event: rewrite.delta  ×N
-event: rewrite.done        attempt 1 · meta.name "Clockwork" · 398 bytes
-                           (coder.calls 2 — one staticCheck self-retry, still invalid,
-                            submitted anyway: staticInvalid true)
-event: trial.gate          ✗ Gate 1 static — line 9: forbidden identifier 'Date';
-                                             line 13: forbidden identifier 'Date'
+───────────────────────── ATTEMPT 1 — three candidate files, one context, three aim points
+event: rewrite.delta  ×N   (c0, c1 and c2 stream concurrently and interleave)
+event: rewrite.done        a1 c0 · conservative · meta.name "Warden I"        · 2269 bytes
+event: rewrite.done        a1 c2 · aggressive   · meta.name "Warden III"      · 3179 bytes
+event: rewrite.done        a1 c1 · balanced     · meta.name "Pocket Warden II" · 3148 bytes
+
+event: trial.gate          a1 c0  ✓ Gate 1 static 0ms   ✓ Gate 2 fuzz 44ms
+event: trial.progress      a1 c0  0/200 → 5 → 30 → 65 → 100 → 105 → 145 → 190 → 200/200
+event: trial.gate          a1 c0  ✗ Gate 3 balance 909ms
+                           — 0.04 vs panel — too easy (band 0.35–0.50 for round 2;
+                             Camper 0.16, Kiter 0.00, Rusher 0.00, Dodger 0.00);
+                             0.00 vs Mimic — didn't adapt (need >= 0.70)
+event: verdict             a1 c0, approved false
+
+event: trial.gate          a1 c1  ✓ Gate 1 static 0ms   ✓ Gate 2 fuzz 49ms
+event: trial.gate          a1 c1  ✗ Gate 3 balance 760ms
+                           — 0.62 vs panel — too hard (band 0.35–0.50 for round 2;
+                             Camper 1.00, Kiter 0.04, Rusher 0.88, Dodger 0.56)
+event: verdict             a1 c1, approved false
+
+event: trial.gate          a1 c2  ✓ Gate 1 static 0ms   ✓ Gate 2 fuzz 26ms
+event: trial.gate          a1 c2  ✗ Gate 3 balance 906ms
+                           — 0.77 vs panel — too hard (band 0.35–0.50 for round 2;
+                             Camper 0.64, Kiter 0.60, Rusher 1.00, Dodger 0.84)
+event: verdict             a1 c2, approved false
+
 event: verdict             attempt 1, approved false
-                           → reason travels verbatim into the attempt-2 Coder prompt
-                             under "# ATTEMPT 1 WAS REJECTED BY GATE 1 (static)"
-                           attempt total: 6 ms — no QuickJS runtime was ever booted (AC 8)
+                           → all three reasons AND the per-bot tables go into the
+                             attempt-2 Coder prompt as a comparison table, under
+                             "# ATTEMPT 1 WAS REJECTED BY GATE 3 (balance)"
 
-──────────────────────────────────────────────────────────────────── ATTEMPT 2
+───────────────────────── ATTEMPT 2 — the same three dials, aimed by what attempt 1 measured
 event: rewrite.delta  ×N
-event: rewrite.done        attempt 2 · meta.name "Hound" · 1554 bytes · unified diff vs attempt 1
-event: trial.gate          ✓ Gate 1 static 0ms
-event: trial.gate          ✓ Gate 2 fuzz 54ms          (500 states + 60 ticks, in QuickJS)
-event: trial.progress      attempt 2 · 0/62 · gate balance     ← meter on screen, total known
-event: trial.progress      attempt 2 · 2/62
-event: trial.progress      attempt 2 · 26/62
-event: trial.progress      attempt 2 · 34/62
-event: trial.progress      attempt 2 · 62/62
-event: trial.gate          ✗ Gate 3 balance — 0.78 vs panel — too hard (band 0.35–0.50 for
-                             round 2; Camper 1.00, Kiter 0.88, Rusher 1.00, Dodger 0.25)
-                           detail: panel 0.78125 over 32 matches · Mimic 1.00 over 30
-                                   · 11 workers · 3387 contract violations
-event: verdict             attempt 2, approved false
-                           → the sentence AND the per-bot table go into the attempt-3
-                             prompt under "# ATTEMPT 2 WAS REJECTED BY GATE 3 (balance)"
-                           attempt total: 488 ms
+event: rewrite.done        a2 c0 · conservative · meta.name "Warden I" · 3446 bytes · 8106 ms
+event: trial.gate          a2 c0  ✓ Gate 1 static 0ms
+event: trial.gate          a2 c0  ✓ Gate 2 fuzz 43ms      (500 states + 60 ticks, in QuickJS)
+event: trial.progress      a2 c0  0/200 → 5 → 30 → 65 → 90 → 105 → 150 → 200/200
+event: trial.gate          a2 c0  ✓ Gate 3 balance 840ms
+                           FAIR    panel 0.39  ∈ [0.35, 0.50]   ✓
+                                   Camper 0.96 · Kiter 0.16 · Rusher 0.00 · Dodger 0.44
+                           ADAPTED Mimic 0.99  ≥ 0.70           ✓   ← spec AC 7
+                           30 contract violations over 200 matches, 0 strategies killed
+event: trial.gate          a2 c0  ✓ Gate 4 perf 56ms
+event: verdict             a2 c0, approved TRUE
 
-──────────────────────────────────────────────────────────────────── ATTEMPT 3
-event: rewrite.delta  ×N
-event: rewrite.done        attempt 3 · meta.name "Warden" · 4822 bytes · unified diff vs attempt 2
-event: trial.gate          ✓ Gate 1 static 1ms
-event: trial.gate          ✓ Gate 2 fuzz 28ms
-event: trial.progress      attempt 3 · 0/62 → 2/62 → 26/62 → 34/62 → 62/62
-event: trial.gate          ✓ Gate 3 balance 465ms
-                           FAIR    panel 0.375  ∈ [0.35, 0.50]   ✓
-                                   Camper 0.875 · Kiter 0.00 · Rusher 0.00 · Dodger 0.625
-                           ADAPTED Mimic 0.867  ≥ 0.70           ✓   (spec AC 7)
-                           1 contract violation over 62 matches
-event: trial.gate          ✓ Gate 4 perf 58ms
-event: verdict             attempt 3, approved TRUE
-event: done                approved · meta { name: "Warden", rationale: "I hold the middle
-                           and put everything where you live, not where you are.", version: 1 }
+                           (the loop keeps measuring the rest of the band, and both
+                            siblings miss it — which is the evidence that the approval
+                            was a *choice* between measured files, not the first hit)
+event: trial.gate          a2 c1  ✗ Gate 3 balance 670ms — 0.75 vs panel — too hard
+event: trial.gate          a2 c2  ✗ Gate 3 balance 758ms — 0.51 vs panel — too hard
+
+event: verdict             attempt 2, approved TRUE
+event: done                approved · meta { name: "Warden I", version: 2, rationale:
+                           "You hide in the bottom-left pocket, so I press that corner with
+                            a little more force, then I still give you quiet beats to
+                            answer it." }
 ```
+
+**Spec AC 7, for this run: the approved candidate beats the `Mimic` bot 0.99, against
+the ≥ 0.70 threshold** — a bot built from the player's own replay, so the boss adapted
+to *this* player rather than getting generically harder. It is simultaneously inside the
+fairness band at 0.39, which is the pair of numbers the whole verifier exists to
+produce: hard enough to have learned something, fair enough to still be a game.
 
 What this excerpt is evidence of, precisely:
 
-1. **A rejection changed the model's next output with no human in the loop.** The
-   attempt-3 prompt contains attempt 2's rejection sentence *verbatim* — asserted, not
-   assumed: `expect(coder.promptOf(3)).toContain(secondReason)`.
-2. **The verifier really said no to a strategy that ran.** Attempt 2 (`chaser`) passed
-   Gates 1 and 2 and was rejected on measured win rates, not on a lint.
+1. **A rejection changed the model's next output with no human in the loop.** Attempt
+   2's prompt contains attempt 1's three rejection sentences and their per-bot tables
+   verbatim. The conservative dial went from 0.04 (too easy) to 0.39 (in band) — it
+   moved *toward* the band it was told it had missed, and the aggressive dial, told it
+   was at 0.77, came down to 0.51.
+2. **The verifier really said no to strategies that ran.** All five rejected candidates
+   passed Gate 1 and Gate 2 — they parse, and they execute in QuickJS for 60 ticks
+   across 500 fuzzed states. They were rejected on *measured win rates*, not on a lint.
 3. **Rejection is legible.** Every reason above is one sentence with the numbers in it,
    and it is the same string the player reads on the Trial beat.
-4. **The gates are cheap enough to be honest.** Four gates and 124 simulated matches in
-   ~1.05 s of wall clock on a laptop with 11 workers. At the spec's 200 matches Gate 3 is
-   seconds, which is why `trial.progress` exists.
+4. **The gates are cheap enough to be honest.** Six candidates, 1 200 simulated matches,
+   5.1 s of total gate time on 11 workers. The model, not the verifier, is the slow
+   half — which is the point of §6's next paragraph.
 5. **The window is bounded.** `MAX_ATTEMPTS = 4`, `DEADLINE_MS = 40_000` (inside AC 5's
    45 s, with room for one overshooting gate), and every other outcome ends in a visible
    `fallback` + `done` pair rather than a hang.
+
+### Measured pass rate
+
+Across the same evening's evals, all `gpt-5.4-mini`, round 2, 200 matches:
+
+| Configuration | Runs approved | Pass rate |
+|---|---|---|
+| K=1 candidate per attempt, 5 evals of 10 replays | 3, 3, 3, 2, 0 | **0.2–0.3** (one outlier at 0.0) |
+| K=3 candidates, eval concurrency 1 | 6 / 10 | **0.6** |
+| K=3 candidates, eval concurrency 3 | 1 / 10 | 0.1 |
+
+Writing three files per attempt and keeping the best is the single change that moved
+the number, and it moved it from ~0.25 to 0.6 — the band is narrow (0.15 wide at round
+2) and one sample from a model that cannot measure its own output is close to a coin
+flip, so the fix was more samples per attempt rather than a better prompt.
+
+**Of the 54 candidate rejections in the K=3 concurrency-1 eval, 52 were Gate 3** — the
+balance gate — and the other two were Gate 1 static. So the verifier is almost entirely
+doing the job it exists for: not catching malformed code, but catching code that is the
+wrong *difficulty*, which is the judgement no linter can make and the reason Gate 3 has
+to simulate.
+
+**The binding constraint is Coder latency, not model quality.** Over 65 candidate calls:
+**p50 7.7 s, p90 12.3 s** (min 5.2 s, max 15.7 s), against the loop's 40 s deadline. At
+p90, three candidates plus their gates is most of one attempt's budget, and four
+attempts is not reachable — which is exactly what the failures look like: **3 of the 4
+runs that did not approve ended on `deadline`** (at 2 or 3 attempts used), and only one
+got as far as `max-attempts`. The
+concurrency-3 row above is the same effect from the other side: sharing the cores makes
+Gate 3 ~2x slower per run and the deadline starts eating attempts, which is why the
+honest-latency measurement is at concurrency 1.
+
+That is also why the fallback pool is not a formality. At a 0.6 pass rate roughly two
+players in five see it, so it ships a *balance-tested* strategy for that round and the
+interlude says so on screen (spec AC 5's banner) rather than hiding the miss.
 
 Also on disk: [`artifacts/server/`](../artifacts/server/) holds two real
 `POST /api/rewrite` event logs written by the server's own `log.ts` — but they are
 **fallback-only mode** runs (no API key: `replay → analysis.delta… → analysis.done →
 fallback → done`, 9 events, no gates). They are evidence that the no-key path produces a
 well-formed four-beat stream and nothing fabricated, not evidence of the loop.
-[`artifacts/web/`](../artifacts/web/) holds 11 Playwright screenshots, including
-`interlude-5-rejected.png` and `interlude-approved.png` — the rejection and the approval
-as the player sees them.
+[`artifacts/web/`](../artifacts/web/) holds 14 Playwright screenshots, including
+`recorded-approved.png` and `recorded-round2-boss.png` — this run's approval and the
+Round 2 boss it produced, as the player sees them.
 
 ---
 
@@ -531,7 +594,7 @@ any bundler), **release**.
 
 | # | Control | File | Stops |
 |---|---|---|---|
-| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 749 tests |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 852 tests |
 | 2 | Determinism lint rule | [`eslint.config.mjs`](../eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` |
 | 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry |
 
@@ -561,10 +624,17 @@ Three design details are what make these controls rather than suggestions:
   *is* the work: a change to `BossView`, `BossAction`, `validateAction` or the static check
   changes what every generated strategy and every pre-approved fallback is allowed to do.
 
-`pnpm verify` at `069be8d`: `✓ verify passed (41s — typecheck lint test)`, **749 tests**
-across 7 packages — contract 206, agents 118, harness 102, web 100, sandbox 98, engine 89,
-server 36. No test in the repo makes a network call; the only thing that spends money is
-`pnpm eval:agents`, which is opt-in and exits 0 with a message when no key is set.
+`pnpm verify` as of 2026-09-04: `✓ verify passed (50s — typecheck lint test)`, **852
+tests** across 7 packages — contract 206, agents 172, web 120, harness 102, sandbox 98,
+engine 89, server 65 — plus **14 Playwright e2e** in `pnpm test:e2e`.
+
+**No test in the repo makes a network call.** The only thing that spends money is
+`pnpm eval:agents`, and since 2026-09-04 it refuses to run without
+`REMATCH_ALLOW_SPEND=1`, printing the worst-case model-call count first — being merely
+"opt-in on the presence of a key" was how the project's credit got exhausted (see
+[`AI-DEV-LOG.md`](AI-DEV-LOG.md)). The server has a matching global cap,
+`REMATCH_MAX_REWRITES_PER_DAY` (default 50), and `REMATCH_PROVIDER=none` forces
+fallback-only with a key left in place.
 
 ---
 
