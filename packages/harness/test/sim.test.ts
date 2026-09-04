@@ -11,7 +11,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { hashValue } from '@rematch/engine';
 import { createSandbox, type SandboxFactory } from '@rematch/sandbox';
 import { camper, kiter } from '../src/bots/index.ts';
-import { resolveWorkers, simulate, type SimulateResult } from '../src/sim/simulate.ts';
+import { progressBatch, resolveWorkers, simulate, type SimulateResult } from '../src/sim/simulate.ts';
 import { runMatch, runMatchWith } from '../src/sim/runMatch.ts';
 import type { BotSpec } from '../src/sim/protocol.ts';
 import { seedsFor } from '../src/gates/balanceConfig.ts';
@@ -32,10 +32,24 @@ function verdict(result: SimulateResult): unknown {
 }
 
 describe('simulate', () => {
-  it('gives byte-identical results at 1 worker and at 4', async () => {
+  it('gives byte-identical results at 1 worker and at 4, whatever progress reported', async () => {
     const source = readGood('chaser');
-    const one = await simulate({ source, bots: PANEL_SPECS, seeds: SEEDS, workers: 1 });
-    const four = await simulate({ source, bots: PANEL_SPECS, seeds: SEEDS, workers: 4 });
+    const oneProgress: Array<[number, number]> = [];
+    const fourProgress: Array<[number, number]> = [];
+    const one = await simulate({
+      source,
+      bots: PANEL_SPECS,
+      seeds: SEEDS,
+      workers: 1,
+      onProgress: (done, total) => void oneProgress.push([done, total]),
+    });
+    const four = await simulate({
+      source,
+      bots: PANEL_SPECS,
+      seeds: SEEDS,
+      workers: 4,
+      onProgress: (done, total) => void fourProgress.push([done, total]),
+    });
 
     expect(one.workers).toBe(1);
     expect(four.workers).toBe(4);
@@ -43,6 +57,57 @@ describe('simulate', () => {
     // Not vacuously equal: the strategy has to actually win some and lose some.
     expect(one.bossWins).toBeGreaterThan(0);
     expect(one.bossWins).toBeLessThan(one.matches);
+
+    // The progress *cadence* is allowed to differ — it is reported from the order
+    // results arrive in, which is what the pool schedules. Only the cadence: both
+    // runs end on the same total, and the verdict above is byte-identical.
+    for (const reported of [oneProgress, fourProgress]) {
+      expect(reported.at(-1)).toEqual([one.matches, one.matches]);
+      expect(reported.every(([, total]) => total === one.matches)).toBe(true);
+    }
+  }, 60_000);
+
+  it('reports batched, monotonic progress and closes on the total', async () => {
+    const reported: Array<[number, number]> = [];
+    const result = await simulate({
+      source: readGood('chaser'),
+      bots: PANEL_SPECS,
+      seeds: SEEDS,
+      workers: 2,
+      onProgress: (done, total) => void reported.push([done, total]),
+    });
+
+    const batch = progressBatch(result.matches);
+    expect(reported.length).toBeGreaterThan(1);
+    // ~20 events per simulation, plus the closing one. Never one per match: on the
+    // wire that is 200 SSE frames for a four-second gate.
+    expect(reported.length).toBeLessThanOrEqual(Math.ceil(result.matches / batch) + 1);
+
+    let previous = 0;
+    for (const [done, total] of reported) {
+      expect(total).toBe(result.matches);
+      expect(done).toBeGreaterThan(previous);
+      expect(done).toBeLessThanOrEqual(total);
+      previous = done;
+    }
+    // Exactly one final callback, and it is the last thing reported.
+    expect(reported.filter(([done]) => done === result.matches)).toHaveLength(1);
+    expect(reported.at(-1)?.[0]).toBe(result.matches);
+  }, 60_000);
+
+  it('reports the same progress contract inline as in the pool', async () => {
+    const reported: Array<[number, number]> = [];
+    const result = await simulate({
+      source: readGood('idle'),
+      bots: [{ kind: 'kiter' }],
+      seeds: SEEDS,
+      workers: 1,
+      onProgress: (done, total) => void reported.push([done, total]),
+    });
+    // The inline path is the reference implementation; a meter must not go blank
+    // just because the caller asked for one thread.
+    expect(reported.length).toBeGreaterThan(0);
+    expect(reported.at(-1)).toEqual([result.matches, result.matches]);
   }, 60_000);
 
   it('runs every bot on every seed, and reports them in the requested order', async () => {
@@ -79,6 +144,18 @@ describe('simulate', () => {
     expect(result.violations).toBeGreaterThan(100);
     expect(result.killed).toBe(0);
   }, 60_000);
+});
+
+describe('progressBatch', () => {
+  it('aims at ~20 callbacks, with a floor of 1 and a cap of 20 matches', () => {
+    expect(progressBatch(200)).toBe(10);
+    expect(progressBatch(60)).toBe(3);
+    expect(progressBatch(20)).toBe(1);
+    expect(progressBatch(1)).toBe(1);
+    expect(progressBatch(0)).toBe(1);
+    // A very large probe must not report every 200th match... nor every match.
+    expect(progressBatch(10_000)).toBe(20);
+  });
 });
 
 describe('resolveWorkers', () => {

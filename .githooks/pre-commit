@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#
+# Deterministic control #1 (spec §7): "`pnpm verify` runs on every commit via hook.
+# Agents cannot skip it."
+#
+# Installed by the root `prepare` script (`git config core.hooksPath .githooks`), which
+# pnpm runs automatically on `pnpm install`. No husky, no generated files, no dependency:
+# the hook is a normal committed file, so it is reviewable in a diff and it cannot drift
+# from what CI runs — both call `scripts/verify.sh`.
+#
+# ── The escape hatch ───────────────────────────────────────────────────────────────
+# `git commit --no-verify` skips this hook. That is deliberate and it is the *human's*
+# hatch: a WIP commit on a scratch branch, a commit made while offline, a rebase in
+# progress. It is not an agent's hatch. An agent that reaches for `--no-verify` is
+# working around the one control that keeps `main` green, and the reviewer should treat
+# it that way. CI re-runs the same script on every push and PR, so a `--no-verify`
+# commit buys minutes, never a merge.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Nothing staged (e.g. `git commit --allow-empty`) — no code changed, nothing to verify.
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+# A commit created by `git merge`, `git revert` or a conflict resolution mid-rebase is
+# not a place to discover a pre-existing failure; the sequencer state files say so.
+GITDIR="$(git rev-parse --absolute-git-dir)"
+for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+  if [ -e "$GITDIR/$marker" ]; then
+    printf 'pre-commit: %s in progress — skipping verify (CI still runs it).\n' "$marker"
+    exit 0
+  fi
+done
+
+# Hooks do not inherit an interactive shell's PATH. A commit from a GUI client can land
+# here with no pnpm, and "command not found" is a worse message than saying so.
+if ! command -v pnpm >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+pre-commit: pnpm is not on PATH, so the §7 gate-all cannot run.
+
+  Commit from a terminal, or make pnpm visible to your git client. Do NOT reach for
+  --no-verify to get around this: CI runs the same script and will fail instead.
+MSG
+  exit 1
+fi
+
+printf '\npre-commit: running the §7 gate-all. `--no-verify` skips it (humans only).\n\n'
+
+# `verify.sh` streams live, tees to a log, and prints the tail of the failing step
+# itself, so there is nothing to add here but the exit status and a pointer.
+#
+# Note it verifies the *working tree*, not the staged index. Verifying the index would
+# mean checking out a temp copy on every commit, which is slower and surprising; the
+# tradeoff is that a partial `git add -p` is not exactly what gets tested. CI closes
+# that gap by verifying the committed tree.
+#
+# Captured explicitly rather than with `if ...; then`: an `if` whose condition fails and
+# which has no `else` leaves `$?` at 0, which would turn every failure into a pass.
+status=0
+"$ROOT/scripts/verify.sh" || status=$?
+
+if [ "$status" -eq 0 ]; then
+  printf '\npre-commit: verify passed — committing.\n'
+  exit 0
+fi
+
+cat >&2 <<'MSG'
+
+pre-commit: COMMIT REJECTED — pnpm verify failed.
+
+  Fix the failure above, then commit again. To see it on its own:
+
+    pnpm verify
+
+  If you are a human and you know what you are doing (WIP commit, offline, rebase):
+
+    git commit --no-verify
+
+  If you are an agent: do not use --no-verify. Fix the failure.
+
+MSG
+exit "$status"

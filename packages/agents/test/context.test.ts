@@ -9,8 +9,10 @@ import {
   cellCentre,
   coderPrompt,
   contractDoc,
+  harnessHints,
   harnessRules,
   promptSize,
+  renderBotRates,
   renderDashRose,
   renderHeatGrid,
   renderShotsDuring,
@@ -106,8 +108,22 @@ describe('the Analyst is denied all code', () => {
     expect(text).not.toContain(contractDoc().slice(0, 200));
   });
 
-  it('does not contain a code fence', () => {
-    expect(text).not.toContain('```');
+  it('asks for a JSON block and nothing that could be code', () => {
+    // The Analyst's reply is prose first, then one fenced JSON block (spec §2.2's
+    // typewriter, then the data the Coder reads), so a fence is expected — a
+    // *language* fence is not. The denial is code, not markdown.
+    expect(text).toContain('```json');
+    // `js`, not `json`: the one fence it may ask for is data.
+    expect(text).not.toMatch(/```js(?!on)/);
+    for (const lang of ['```javascript', '```ts']) expect(text).not.toContain(lang);
+  });
+
+  it('asks for the prose first, so the player sees sentences and not JSON', () => {
+    expect(text).toMatch(/PART 1[\s\S]*plain prose/);
+    expect(text).toMatch(/PART 1[\s\S]*PART 2/);
+    // The example in the prompt is spec §2.2's example, near enough to be checked.
+    expect(text).toContain('Player camped the bottom-left corner.');
+    expect(text).toContain('3 to 6 short sentences');
   });
 
   it('mentions no engine export name', () => {
@@ -135,7 +151,7 @@ describe('prompt sizes', () => {
     expect(promptSize(prompt)).toBeLessThan(12_000);
   });
 
-  it('keeps the Coder prompt inside 12k per part, first attempt and retry', () => {
+  it('keeps the Coder prompt inside 13k per part, first attempt and retry', () => {
     const first = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('orbiter'), round: 2 });
     const retry = coderPrompt({
       analysis: ANALYSIS,
@@ -144,8 +160,10 @@ describe('prompt sizes', () => {
       rejection: { gate: 'balance', gateNumber: 3, reason: '0.91 vs panel — too hard', attempt: 1 },
     });
     for (const prompt of [first, retry]) {
-      expect(prompt.system.length).toBeLessThan(12_000);
-      expect(prompt.messages[0]!.content.length).toBeLessThan(12_000);
+      // 13k, not 12k: the harness-hints section (~0.9k) bought a measurable win
+      // rate for a fixed, cacheable cost. Anything past this is a budget review.
+      expect(prompt.system.length).toBeLessThan(13_000);
+      expect(prompt.messages[0]!.content.length).toBeLessThan(13_000);
     }
     // The retry only adds the rejection block; it must not balloon the context.
     expect(promptSize(retry) - promptSize(first)).toBeLessThan(600);
@@ -196,6 +214,101 @@ describe('harnessRules', () => {
     for (const gate of ['Gate 1 — static', 'Gate 2 — contract fuzz', 'Gate 3 — balance', 'Gate 4 — perf']) {
       expect(rules).toContain(gate);
     }
+  });
+});
+
+describe('harnessHints', () => {
+  const hints = harnessHints(3);
+
+  it('stays inside its 900-character budget', () => {
+    // It rides in the cached system prompt ahead of the analysis; a page of tactics
+    // would start competing with the contract for attention.
+    for (const round of [2, 3, 4, 5] as const) {
+      expect(harnessHints(round).length).toBeLessThanOrEqual(900);
+    }
+  });
+
+  it('names the five levers the harness actually measured', () => {
+    expect(hints).toContain('`spawn` cadence is the strongest single lever');
+    expect(hints).toContain('`count: 8`');
+    expect(hints).toContain("`slam` on the boss's own position");
+    expect(hints).toContain('cone bursts beat a kiting player');
+    expect(hints).toContain('`charge` alone does not');
+    expect(hints).toContain('`rand()`');
+    expect(hints).toContain('`history.playerPosHeat`');
+  });
+
+  it('gives the round its own band and the middle of it as the target', () => {
+    expect(harnessHints(3)).toContain('0.45–0.60');
+    expect(harnessHints(3)).toContain('middle, 0.53');
+    expect(harnessHints(5)).toContain('0.55–0.70');
+    expect(harnessHints(5)).toContain('middle, 0.63');
+  });
+
+  it('is tactics, not engine internals', () => {
+    // The same denial as the whole Coder prompt, asserted on the section alone so a
+    // future hint cannot hide behind the size of the contract doc.
+    const leaked = engineExportNames()
+      .filter((name) => !GENERIC_WORDS.has(name))
+      .filter((name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(hints));
+    expect(leaked).toEqual([]);
+    for (const needle of ['tick(', 'step(', 'cloneState', 'ENGINE_CONSTANTS', 'projectiles[', 'GameState']) {
+      expect(hints).not.toContain(needle);
+    }
+  });
+});
+
+describe('renderBotRates', () => {
+  const rates = {
+    perBot: [
+      { name: 'Camper', winRate: 1 },
+      { name: 'Kiter', winRate: 0.96 },
+      { name: 'Rusher', winRate: 0 },
+      { name: 'Dodger', winRate: 0.76 },
+    ],
+    mimic: 0.41,
+  };
+
+  it('marks the bots at 1.00 and 0.00 — the two ends the Coder has to fix', () => {
+    const table = renderBotRates(rates);
+    expect(table).toMatch(/Camper\s+1\.00\s+<- unwinnable/);
+    expect(table).toMatch(/Rusher\s+0\.00\s+<- that bot wins every match/);
+    // A rate inside the band is stated and left alone.
+    expect(table).toMatch(/Kiter\s+0\.96$/m);
+    expect(table).toMatch(/Dodger\s+0\.76$/m);
+    expect(table).toMatch(/Mimic\s+0\.41\s+<- ADAPTED needs >= 0\.70/);
+  });
+
+  it('leaves the Mimic unmarked once ADAPTED passes, and omits it when unmeasured', () => {
+    expect(renderBotRates({ ...rates, mimic: 0.82 })).toMatch(/Mimic\s+0\.82$/m);
+    expect(renderBotRates({ perBot: rates.perBot })).not.toContain('Mimic');
+  });
+
+  it('reaches the retry prompt above the verbatim reason, which stays last', () => {
+    const reason = "0.91 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kiter 0.96, Rusher 0.00, Dodger 0.76); 0.41 vs Mimic — didn't adapt (need >= 0.70)";
+    const content = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('chaser'),
+      round: 2,
+      rejection: { gate: 'balance', gateNumber: 3, reason, attempt: 1, rates },
+    }).messages[0]!.content;
+
+    expect(content).toContain('Your win rate against each opponent');
+    expect(content).toContain(renderBotRates(rates));
+    // Spec §6.3: the harness's sentence is the last thing the Coder reads. The
+    // table is a lookup for it, so it goes above.
+    expect(content.indexOf(renderBotRates(rates))).toBeLessThan(content.indexOf(reason));
+    expect(content.indexOf(reason)).toBeGreaterThan(content.length - 400);
+  });
+
+  it('is absent when the rejecting gate had no rates to report', () => {
+    const content = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('chaser'),
+      round: 2,
+      rejection: { gate: 'fuzz', gateNumber: 2, reason: 'decide() threw', attempt: 1 },
+    }).messages[0]!.content;
+    expect(content).not.toContain('Your win rate against each opponent');
   });
 });
 

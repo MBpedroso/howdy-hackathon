@@ -67,6 +67,23 @@ export const APPROVED_META = {
   version: 1,
 } as const;
 
+/** `meta` of the rejected first draft. Matches `fixtures/attempt1.js` exactly. */
+export const ATTEMPT1_META = {
+  name: 'Warden',
+  rationale: 'I close the distance and keep you under fire until you stop shooting.',
+  version: 1,
+} as const;
+
+/**
+ * Matches per `trial.progress` event.
+ *
+ * The real simulator batches its callbacks at `progressBatch(total)` — 10 for the
+ * 200 matches of spec §6.2 — and the loop throttles them to one per 100 ms. 10 here
+ * reproduces that cadence, so the meter is exercised by the mock the way the live
+ * server will drive it rather than by two events at the ends.
+ */
+export const MATCH_BATCH = 10;
+
 // ------------------------------------------------------------------ the script
 
 function chunkText(text: string, size: number): string[] {
@@ -140,6 +157,23 @@ export function mockAnalysis(req: RewriteRequest): Analysis {
   };
 }
 
+/**
+ * The prose half of the Analyst's reply — what the player actually watches.
+ *
+ * The real Analyst is asked for 3-6 sentences and then a fenced JSON block, and the
+ * agents package withholds the block from the stream (`analysisGate`). The mock has
+ * to stream the same thing the server will, or the typewriter is tested against a
+ * format that no longer arrives.
+ */
+export function mockAnalysisProse(analysis: Analysis): string {
+  return analysis.observations.join(' ');
+}
+
+/** The reply in full: prose, then the block. Carried on `analysis.done.raw`. */
+export function mockAnalysisRaw(analysis: Analysis): string {
+  return `${mockAnalysisProse(analysis)}\n\n\`\`\`json\n${JSON.stringify(analysis, null, 2)}\n\`\`\`\n`;
+}
+
 function gateOk(gate: 1 | 2 | 3 | 4, name: GateResult['name'], ms: number, detail?: unknown): GateResult {
   return { gate, name, ok: true, ms, ...(detail === undefined ? {} : { detail }) };
 }
@@ -180,6 +214,34 @@ const G3_DETAIL_OK = {
 };
 
 /**
+ * Gate 3's progress for one attempt: the opening event, then one per batch of
+ * matches, spread evenly over `ms` — the shape `simulate()`'s `onProgress`
+ * produces once the worker pool is running.
+ *
+ * The first event is what puts the meter on screen and carries the total, so it is
+ * always emitted, and the last always lands exactly on the total.
+ */
+function pushBalanceProgress(
+  push: (delay: number, event: RewriteEvent) => void,
+  attempt: number,
+  total: number,
+  ms: number,
+): void {
+  push(250, { type: 'trial.progress', attempt, matchesDone: 0, matchesTotal: total, gate: 'balance' });
+  const batches = Math.max(1, Math.ceil(total / MATCH_BATCH));
+  const per = ms / batches;
+  for (let i = 1; i <= batches; i += 1) {
+    push(Math.round(per), {
+      type: 'trial.progress',
+      attempt,
+      matchesDone: Math.min(i * MATCH_BATCH, total),
+      matchesTotal: total,
+      gate: 'balance',
+    });
+  }
+}
+
+/**
  * Build the canned run for one request.
  *
  * The shape is spec §6.3's loop with exactly one rejection: Coder → Gates 1,2 pass →
@@ -197,18 +259,18 @@ export function buildMockScript(req: RewriteRequest): MockScript {
   push(0, { type: 'replay', summary: req.summary, round });
 
   // ------------------------------------------------------------- beat 2
-  // The real Analyst streams the JSON it was asked for, so the mock streams JSON
-  // too: the raw pane must be tested against what actually arrives, not a tidier
-  // fiction. `analysis.done` is what the panel renders as bullets.
-  const analysisText = `${JSON.stringify(analysis, null, 2)}\n`;
+  // Prose only, exactly like the live stream: the Analyst writes its sentences
+  // first and its JSON block second, and the block never reaches the player (see
+  // `analysisGate` in `@rematch/agents`). `raw` carries both for the run log.
   let first = true;
-  for (const delta of chunkText(analysisText, TEXT_CHARS_PER_CHUNK)) {
+  for (const delta of chunkText(mockAnalysisProse(analysis), TEXT_CHARS_PER_CHUNK)) {
     push(first ? 700 : TEXT_CHUNK_MS, { type: 'analysis.delta', delta });
     first = false;
   }
   push(400, {
     type: 'analysis.done',
     analysis,
+    raw: mockAnalysisRaw(analysis),
     calls: 1,
     promptChars: 4180,
     usage: { inputTokens: 1246, outputTokens: 331, cacheReadTokens: 0 },
@@ -226,7 +288,7 @@ export function buildMockScript(req: RewriteRequest): MockScript {
     fromFile: 'strategy.js (previous)',
     toFile: 'strategy.js (attempt 1)',
   });
-  push(350, { type: 'rewrite.done', attempt: 1, source: attempt1Source, diff: diff1 });
+  push(350, { type: 'rewrite.done', attempt: 1, source: attempt1Source, diff: diff1, meta: { ...ATTEMPT1_META } });
 
   const g1a = gateOk(1, 'static', 12, { identifiers: 0, exports: ['meta', 'init', 'decide'] });
   push(500, { type: 'trial.gate', attempt: 1, gate: g1a });
@@ -236,8 +298,7 @@ export function buildMockScript(req: RewriteRequest): MockScript {
   push(1050, { type: 'trial.gate', attempt: 1, gate: g2a });
   a1Gates.push(g2a);
 
-  push(250, { type: 'trial.progress', attempt: 1, matchesDone: 0, matchesTotal: 200, gate: 'balance' });
-  push(3950, { type: 'trial.progress', attempt: 1, matchesDone: 200, matchesTotal: 200, gate: 'balance' });
+  pushBalanceProgress(push, 1, 200, 3950);
   const g3a = gateFail(3, 'balance', 4118, rejectionReason(round), G3_DETAIL_FAIL);
   push(60, { type: 'trial.gate', attempt: 1, gate: g3a });
   a1Gates.push(g3a);
@@ -255,7 +316,7 @@ export function buildMockScript(req: RewriteRequest): MockScript {
     fromFile: 'strategy.js (previous)',
     toFile: 'strategy.js (attempt 2)',
   });
-  push(350, { type: 'rewrite.done', attempt: 2, source: approvedSource, diff: diff2 });
+  push(350, { type: 'rewrite.done', attempt: 2, source: approvedSource, diff: diff2, meta: { ...APPROVED_META } });
 
   const g1b = gateOk(1, 'static', 11, { identifiers: 0, exports: ['meta', 'init', 'decide'] });
   push(450, { type: 'trial.gate', attempt: 2, gate: g1b });
@@ -265,8 +326,7 @@ export function buildMockScript(req: RewriteRequest): MockScript {
   push(900, { type: 'trial.gate', attempt: 2, gate: g2b });
   a2Gates.push(g2b);
 
-  push(250, { type: 'trial.progress', attempt: 2, matchesDone: 0, matchesTotal: 200, gate: 'balance' });
-  push(3850, { type: 'trial.progress', attempt: 2, matchesDone: 200, matchesTotal: 200, gate: 'balance' });
+  pushBalanceProgress(push, 2, 200, 3850);
   const g3b = gateOk(3, 'balance', 4032, G3_DETAIL_OK);
   push(60, { type: 'trial.gate', attempt: 2, gate: g3b });
   a2Gates.push(g3b);

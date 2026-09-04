@@ -23,6 +23,12 @@
  * evidence. Seeds come from a fixed set (`seedsFor`), so the verdict is identical
  * on every machine, and the two assertions never share a match.
  *
+ * ## Progress
+ * The gate is the slow one — 200 matches is seconds, not milliseconds — so it
+ * reports `onProgress(done, total)` across both halves of the budget. The
+ * simulator batches the callbacks; `gate3Plan` is the same arithmetic run up front,
+ * so a caller can label its meter before the first match starts.
+ *
  * ## The reason string
  * Quantitative and directive, per spec §6.3 — it is the only feedback the Coder
  * agent gets:
@@ -65,8 +71,45 @@ export type Gate3Options = {
   accuracy?: number;
   /** Inline path only (workers = 1): reuse an existing sandbox. */
   sandbox?: SandboxFactory;
+  /**
+   * Progress across **both** halves of the budget: `done` runs from 0 to
+   * `gate3Plan(opts).total`, the panel's matches first and the Mimic's after, so a
+   * caller sees one bar for the gate rather than two. Batched by the simulator
+   * (`progressBatch`) and closed with a final `(total, total)`.
+   */
+  onProgress?: (done: number, total: number) => void;
   now?: () => number;
 };
+
+/** How the match budget is spent, computed before anything runs. */
+export type Gate3Plan = {
+  /** Seeds per panel bot. */
+  perBotSeeds: number;
+  /** Seeds against the Mimic. 0 when no summary was supplied. */
+  mimicSeeds: number;
+  /** `perBotSeeds x 4`. */
+  panelMatches: number;
+  mimicMatches: number;
+  /** What `detail.matches` will report, and the denominator of `onProgress`. */
+  total: number;
+};
+
+/**
+ * The match plan for a set of options.
+ *
+ * Exported because a progress meter needs the denominator *before* the gate runs,
+ * and because rounding (`matches / 2 / 4`) means the total is rarely exactly
+ * `matches`: at 60 requested the gate really runs 62. A meter that started at 60
+ * and finished at 62 would be the only dishonest number on the Trial beat.
+ */
+export function gate3Plan(opts: Gate3Options = {}): Gate3Plan {
+  const matches = Math.max(8, Math.trunc(opts.matches ?? DEFAULT_MATCHES));
+  const perBotSeeds = Math.max(1, Math.round(matches / 2 / BOT_KINDS.length));
+  const mimicSeeds = opts.mimicSummary === undefined ? 0 : Math.max(1, Math.round(matches / 2));
+  const panelMatches = perBotSeeds * BOT_KINDS.length;
+  const mimicMatches = mimicSeeds;
+  return { perBotSeeds, mimicSeeds, panelMatches, mimicMatches, total: panelMatches + mimicMatches };
+}
 
 const pct = (v: number): string => v.toFixed(2);
 
@@ -86,8 +129,9 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
   const accuracy = opts.accuracy;
 
   // N/2 across the four panel bots, N/2 against the Mimic.
-  const perBotSeeds = Math.max(1, Math.round(matches / 2 / BOT_KINDS.length));
-  const mimicSeeds = Math.max(1, Math.round(matches / 2));
+  const plan = gate3Plan(opts);
+  const { perBotSeeds } = plan;
+  const mimicSeeds = Math.max(1, plan.mimicSeeds);
 
   const panelSpecs: BotSpec[] = BOT_KINDS.map((kind) =>
     accuracy === undefined ? { kind } : { kind, accuracy },
@@ -99,16 +143,41 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
     ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
   };
 
+  // One bar over two simulations: the panel's matches occupy [0, panelMatches) and
+  // the Mimic's continue from there, so `done` never restarts.
+  const onProgress = opts.onProgress;
+  const relay =
+    onProgress === undefined
+      ? {}
+      : { onProgress: (done: number): void => onProgress(Math.min(done, plan.total), plan.total) };
+  const relayMimic =
+    onProgress === undefined
+      ? {}
+      : {
+          onProgress: (done: number): void =>
+            onProgress(Math.min(plan.panelMatches + done, plan.total), plan.total),
+        };
+
   let panel: SimulateResult;
   let mimic: SimulateResult | undefined;
   try {
-    panel = await simulate({ ...shared, bots: panelSpecs, seeds: seedsFor(perBotSeeds, SEED_OFFSET.panel) });
+    panel = await simulate({
+      ...shared,
+      ...relay,
+      bots: panelSpecs,
+      seeds: seedsFor(perBotSeeds, SEED_OFFSET.panel),
+    });
     if (opts.mimicSummary !== undefined) {
       const spec: BotSpec =
         accuracy === undefined
           ? { kind: 'mimic', summary: opts.mimicSummary }
           : { kind: 'mimic', summary: opts.mimicSummary, accuracy };
-      mimic = await simulate({ ...shared, bots: [spec], seeds: seedsFor(mimicSeeds, SEED_OFFSET.mimic) });
+      mimic = await simulate({
+        ...shared,
+        ...relayMimic,
+        bots: [spec],
+        seeds: seedsFor(mimicSeeds, SEED_OFFSET.mimic),
+      });
     }
   } catch (err) {
     // A load failure here means Gate 2 was skipped or the sandbox itself broke;

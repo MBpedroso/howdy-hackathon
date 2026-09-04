@@ -1,13 +1,30 @@
 /**
- * The Analyst agent (spec §8): compressed replay in, structured observations out.
+ * The Analyst agent (spec §8): compressed replay in, prose and structured
+ * observations out.
  *
- * It is asked for JSON and the reply is parsed **defensively**, because the one
- * thing the interlude cannot do is stall on a stray "Here's the analysis:". A
- * model that wraps its JSON in a fence, prefixes a sentence, or appends a summary
+ * ## Prose first, JSON second
+ *
+ * The reply has two parts (see `ANALYST_SYSTEM`): 3-6 plain sentences, then a
+ * fenced JSON block. That order is a product decision, not a formatting one. Spec
+ * §2.2's Analysis beat is a typewriter — *"Player camped the bottom-left corner.
+ * Attacked only during my slam cooldown. Dashed 11 times, always left."* — and a
+ * player watching JSON scroll past learns nothing from the one beat that is meant
+ * to be about *them*. So the prose is what streams (`onDelta`), the JSON is what
+ * the Coder is handed, and `analysisGate` stops the deltas at the opening fence so
+ * the player never sees the machine-readable half.
+ *
+ * The raw reply — both halves — is kept and reported on `analysis.done`: the
+ * player gets the prose, a judge reading the log gets the bytes.
+ *
+ * ## Parsed defensively
+ *
+ * The one thing the interlude cannot do is stall on a stray "Here's the analysis:".
+ * A model that wraps its JSON in a fence, prefixes a sentence, or appends a summary
  * has still done the work; discarding that and burning 4 s on a retry would be a
- * worse product than tolerating the wrapper. So: strip fences, find the outermost
- * balanced object, validate the shape, and only retry when there is genuinely
- * nothing usable — once, with the parse error appended.
+ * worse product than tolerating the wrapper. So: prefer the fenced block, fall back
+ * to the outermost balanced object, fall back to the *prose* for `observations` if
+ * the block omits them, and only retry when there is genuinely nothing usable —
+ * once, with the parse error appended.
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
@@ -21,6 +38,8 @@ export type AnalystInput = {
 };
 
 export type AnalystResult = Analysis & {
+  /** The reply in full: the streamed prose and the JSON block that was withheld. */
+  raw: string;
   /** How many provider calls it took (2 means the first reply was unparseable). */
   calls: number;
   usage: LLMUsage;
@@ -34,7 +53,11 @@ export type AnalystOptions = {
   maxTokens?: number;
   model?: string;
   signal?: AbortSignal;
-  /** Called with each text delta — the interlude's Analysis beat. */
+  /**
+   * Called with each text delta of the **prose**, and nothing after the opening
+   * fence of the JSON block — the interlude's Analysis beat is a typewriter for a
+   * human, not a JSON viewer. The full reply is on the result's `raw`.
+   */
   onDelta?: (delta: string) => void;
   now?: () => number;
 };
@@ -79,7 +102,7 @@ export async function runAnalyst(
         ...(opts.model === undefined ? {} : { model: opts.model }),
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       },
-      opts.onDelta,
+      opts.onDelta === undefined ? undefined : analysisGate(opts.onDelta),
     );
     calls += 1;
     usage.inputTokens += done.usage.inputTokens;
@@ -92,6 +115,7 @@ export async function runAnalyst(
     if (parsed.ok) {
       return {
         ...parsed.analysis,
+        raw: done.text,
         calls,
         usage,
         promptChars,
@@ -105,9 +129,90 @@ export async function runAnalyst(
   throw new Error(`the Analyst returned nothing usable after 2 attempts: ${firstError ?? 'unknown'}`);
 }
 
+// ------------------------------------------------------------------ streaming
+
+/** The fence that opens the JSON half of a reply. */
+const FENCE = '```';
+
+/**
+ * Wrap an `onDelta` so it forwards the prose and stops at the JSON block.
+ *
+ * Two details make it correct rather than approximately correct:
+ *
+ *  - **The fence can arrive split across deltas.** A provider is free to send
+ *    `` "…left.\n\n`" `` and then `` "``json\n{" ``, so up to two trailing
+ *    backticks are held back until the next delta proves what they were. Without
+ *    that, a stray `` ` `` reaches the screen a moment before the gate closes.
+ *  - **It closes permanently.** Everything after the opening fence is dropped,
+ *    including a trailing sentence after the block — the beat is finished being
+ *    typed, and re-opening it would look like a glitch.
+ *
+ * A reply with no fence at all (a model that answers with bare JSON) streams
+ * unchanged. That is the honest failure mode: the prose is what is missing, and
+ * `parseAnalysis` still gets its object.
+ */
+export function analysisGate(onDelta: (delta: string) => void): (delta: string) => void {
+  let held = '';
+  let closed = false;
+
+  return (delta: string): void => {
+    if (closed) return;
+    const text = held + delta;
+    const fence = text.indexOf(FENCE);
+    if (fence >= 0) {
+      closed = true;
+      held = '';
+      const head = text.slice(0, fence);
+      if (head !== '') onDelta(head);
+      return;
+    }
+    // Hold back a partial fence (one or two backticks at the very end).
+    let keep = 0;
+    while (keep < 2 && text.length - keep > 0 && text[text.length - 1 - keep] === '`') keep += 1;
+    held = keep === 0 ? '' : text.slice(text.length - keep);
+    const emit = keep === 0 ? text : text.slice(0, text.length - keep);
+    if (emit !== '') onDelta(emit);
+  };
+}
+
 // -------------------------------------------------------------------- parsing
 
 export type ParseResult = { ok: true; analysis: Analysis } | { ok: false; error: string };
+
+/**
+ * The fenced JSON block of a reply, if there is one.
+ *
+ * Preferred over `extractJsonObject` because the prose half is now allowed to
+ * contain anything a sentence can contain, braces included ("lived in cell {56}"
+ * is a thing a model writes). The fence is an explicit boundary; scanning for a
+ * balanced object is the fallback for a reply that skipped it.
+ */
+export function extractFencedJson(text: string): string | undefined {
+  const match = /```(?:json|JSON)?\s*\r?\n([\s\S]*?)```/.exec(text);
+  const body = match?.[1]?.trim();
+  return body === undefined || body.length === 0 ? undefined : body;
+}
+
+/**
+ * The prose half: everything before the first fence.
+ *
+ * This is what the player was shown, so it is also the right fallback for
+ * `observations` — if the JSON block omits them, the sentences on screen and the
+ * sentences the Coder reads are then the same sentences, which is the property that
+ * makes the beat honest.
+ */
+export function proseSentences(text: string): string[] {
+  const fence = text.indexOf(FENCE);
+  const prose = (fence < 0 ? text : text.slice(0, fence)).trim();
+  if (prose.length === 0) return [];
+  return prose
+    .split(/\n\s*\n/)
+    .flatMap((paragraph) => paragraph.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/))
+    .map((sentence) => sentence.trim().replace(/^[-*\u2022]\s*/, ''))
+    // A bare `{` or a fragment of a JSON key is not an observation.
+    .filter((sentence) => sentence.length > 2 && !sentence.startsWith('{') && !sentence.startsWith('"'))
+    .slice(0, 6);
+}
 
 /**
  * Find the outermost balanced `{…}` in a blob of text, ignoring braces inside
@@ -163,7 +268,9 @@ function isArchetype(value: unknown): value is PlayerArchetype {
  * which a generic validator's path-based errors are not.
  */
 export function parseAnalysis(text: string): ParseResult {
-  const json = extractJsonObject(text);
+  // The fenced block first — the prose half may legitimately contain braces.
+  const fenced = extractFencedJson(text);
+  const json = extractJsonObject(fenced ?? text);
   if (json === undefined) {
     return { ok: false, error: 'no JSON object was found in the reply' };
   }
@@ -180,12 +287,22 @@ export function parseAnalysis(text: string): ParseResult {
 
   const raw = value as Record<string, unknown>;
   const observations = raw['observations'];
-  if (!Array.isArray(observations) || observations.some((o) => typeof o !== 'string')) {
-    return { ok: false, error: 'observations must be an array of strings' };
-  }
-  const clean = (observations as string[]).map((o) => o.trim()).filter((o) => o.length > 0);
+  const listed =
+    Array.isArray(observations) && observations.every((o) => typeof o === 'string')
+      ? (observations as string[]).map((o) => o.trim()).filter((o) => o.length > 0)
+      : [];
+  // The prose the player watched is the fallback, so a block that forgot
+  // `observations` costs a retry only when there was no prose either. What the
+  // Coder reads is then exactly what was on screen.
+  const clean = listed.length > 0 ? listed : proseSentences(text);
   if (clean.length === 0) {
-    return { ok: false, error: 'observations was empty; give 3 to 6 observations' };
+    return {
+      ok: false,
+      error:
+        Array.isArray(observations) && observations.some((o) => typeof o !== 'string')
+          ? 'observations must be an array of strings'
+          : 'no observations: give 3 to 6 prose sentences before the JSON block, or an observations array inside it',
+    };
   }
 
   const archetype = raw['playerArchetype'];

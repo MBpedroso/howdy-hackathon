@@ -120,19 +120,38 @@ all of them are JSON-serializable.
 |---|---|---|
 | `replay` | `summary`, `round` | 1 |
 | `analysis.delta` | `delta` | 2 |
-| `analysis.done` | `analysis`, `calls`, `promptChars`, `usage`, `ms` | 2 |
+| `analysis.done` | `analysis`, `raw?` (the whole reply), `calls`, `promptChars`, `usage`, `ms` | 2 |
 | `rewrite.delta` | `attempt`, `delta` | 3 |
-| `rewrite.done` | `attempt`, `source`, `diff` (unified) | 3 |
+| `rewrite.done` | `attempt`, `source`, `diff` (unified), `meta?` | 3 |
 | `trial.progress` | `attempt`, `matchesDone`, `matchesTotal`, `gate` | 4 |
 | `trial.gate` | `attempt`, `gate: GateResult` | 4 |
 | `verdict` | `attempt`, `approved`, `reason?` | 4 |
 | `fallback` | `reason: 'max-attempts' \| 'deadline' \| 'error'`, `message?` | — |
 | `done` | `result: RewriteResult` | — |
 
-`trial.progress` fires exactly **twice** per attempt that reaches Gate 3 — `matchesDone: 0`
-when the matches start, `matchesDone === matchesTotal` when they finish. `simulate()` has no
-per-match progress hook, so there is nothing finer to report; it is enough for the meter to
-animate over a known duration rather than tick per match.
+Three of those payloads are worth a note.
+
+**`analysis.delta` streams prose only.** The Analyst is asked for 3-6 plain sentences and
+*then* a fenced JSON block (spec §2.2: *"Player camped the bottom-left corner. Attacked
+only during my slam cooldown. Dashed 11 times, always left."*), and `analysisGate` stops the
+deltas at the opening fence — the player watches sentences, never `{"observations": [`. The
+reply in full, both halves, is on `analysis.done.raw` for the run log.
+
+**`rewrite.done` carries the file's own `meta`.** Read from the source with `extractMeta`
+(acorn, the same parser Gate 1 uses) rather than from the sandbox: the attempt may be one
+Gate 1 is about to reject and may never be loaded at all, so the Rewrite beat can still label
+the diff "Warden". Absent only when `meta` is not a statically readable literal — which is a
+Gate 1 rejection. The *authoritative* `meta` on an approved `done` still comes from the
+sandbox (`readMeta`), because that is the value the game will see.
+
+**`trial.progress` is measured, not estimated.** The first event of an attempt is
+`matchesDone: 0` (it carries the total and puts the meter on screen) and the last is
+`matchesDone === matchesTotal`; in between, one event per batch of match results arriving
+from the worker pool — `simulate()`'s `onProgress`, batched at `progressBatch(total)` (~20
+per gate) and throttled here to one per `PROGRESS_MIN_GAP_MS` (100 ms). `matchesTotal` is
+`gate3Plan(...).total`, identical in every event of the attempt, and not always the
+`matches` the caller asked for: the gate's `matches / 2 / 4` split rounds (60 requested is 62
+run). The cadence depends on the worker count and the machine; the verdict does not.
 
 ## Providers
 

@@ -72,15 +72,29 @@ Rules:
 - If the evidence is thin (a very short round, few dashes), say so rather than
   inventing a pattern.
 
-Reply with a single JSON object and nothing else:
+Reply in two parts, in this order, and in nothing else.
 
+PART 1 — what you saw, as plain prose. 3 to 6 short sentences, one observation
+each. No bullets, no headings, no labels, no JSON. This part is shown to the
+player as it arrives, a few characters at a time, so it is the only thing you
+write that a human reads directly:
+
+    Player camped the bottom-left corner. Attacked only during my slam
+    cooldown. Dashed 11 times, always left.
+
+PART 2 — the same reading as data, for the agent that writes the counter. One
+fenced JSON block, immediately after the prose, with nothing following it:
+
+\`\`\`json
 {
-  "observations": ["...", "..."],       // 3 to 6 strings, each citing a number
+  "observations": ["...", "..."],       // part 1's sentences, 3 to 6 of them
   "playerArchetype": "camper" | "kiter" | "rusher" | "dodger" | "mixed",
   "counterPlan": "..."
 }
+\`\`\`
 
-No prose before or after. No markdown fences.`;
+The prose comes first and the block comes last. Do not write anything before the
+prose, between the two parts, or after the closing fence.`;
 
 export type AnalystContext = {
   summary: ReplaySummary;
@@ -113,7 +127,7 @@ export function analystPrompt(ctx: AnalystContext, retryError?: string): Prompt 
     // showing a model its own malformed output tends to anchor the retry on it.
     messages.push({
       role: 'user',
-      content: `Your previous reply could not be parsed: ${retryError}\n\nReply again with only the JSON object described in the instructions.`,
+      content: `Your previous reply could not be parsed: ${retryError}\n\nReply again in the two parts described in the instructions: the prose sentences first, then the fenced JSON block.`,
     });
   }
   return { system: ANALYST_SYSTEM, messages };
@@ -182,6 +196,63 @@ What this means for how you write:
 - Keep your memory object small and JSON-serializable (numbers and short arrays).`;
 }
 
+/**
+ * What the harness has measured, handed to the Coder as tactics rather than as
+ * engine documentation.
+ *
+ * Every line here is a *result*, not a mechanism: it comes from the win rates the
+ * pre-approved pool was measured at (the pre-approved pool in `packages/server/fallback`, each
+ * one 200 matches through Gate 3), so it tells the Coder which dial moves the
+ * number it is being judged on. None of it describes how the engine works, and the
+ * denial test in `test/context.test.ts` holds it to that — a hint that leaked an
+ * engine identifier would fail the build.
+ *
+ * Kept under 900 characters on purpose. It sits in the cached system prompt in
+ * front of the analysis, and a page of tactics would start to compete with the
+ * contract for the model's attention.
+ */
+export function harnessHints(round: BalanceRound): string {
+  const [lo, hi] = bandFor(round);
+  return `# WHAT THE HARNESS HAS LEARNED ABOUT THIS ENGINE
+
+Measured on strategies that passed Gate 3:
+
+- \`spawn\` cadence is the strongest single lever on the panel win rate. Minions
+  decide fights against a player who keeps distance or dodges everything.
+- A player who rushes into contact is only punished by a \`burst\` with
+  \`count: 8\` (the full ring) or a \`slam\` on the boss's own position; a cone
+  at contact is a free dodge.
+- Long-range cone bursts beat a kiting player. \`charge\` alone does not: closing
+  the distance and winning once there are different problems.
+- Roll the injected \`rand()\` per phase ("press, or reset") to tune the rate
+  continuously. Fixed duty cycles give binary outcomes: 0.00 or 1.00 per bot.
+- \`history.playerPosHeat\` says where the player *lives*. Aim the pressure
+  there, not only where they stand this tick.
+- Round ${round}'s band is ${formatBand(round)}; aim at its middle, ${((lo + hi) / 2).toFixed(2)}.`;
+}
+
+/** `Camper 1.00` per line, with the two rates that are failures marked. */
+export function renderBotRates(rates: BotRates): string {
+  const rows = [...rates.perBot.map((b) => ({ ...b, mimic: false }))];
+  if (rates.mimic !== undefined) rows.push({ name: 'Mimic', winRate: rates.mimic, mimic: true });
+  const width = Math.max(...rows.map((r) => r.name.length), 6);
+  return rows
+    .map((row) => {
+      const rate = row.winRate.toFixed(2);
+      const note = row.mimic
+        ? row.winRate < ADAPTED_MIN
+          ? `  <- ADAPTED needs >= ${ADAPTED_MIN.toFixed(2)}`
+          : ''
+        : row.winRate >= 1
+          ? '  <- unwinnable for that bot; this is what makes you too hard'
+          : row.winRate <= 0
+            ? '  <- that bot wins every match; this is what makes you too easy'
+            : '';
+      return `    ${row.name.padEnd(width)}  ${rate}${note}`;
+    })
+    .join('\n');
+}
+
 const CODER_OUTPUT_RULES = `# YOUR OUTPUT
 
 Reply with exactly one fenced code block, tagged \`js\`, containing the complete
@@ -206,19 +277,53 @@ then a deterministic harness decides whether it ships. You do not see the game
 engine, the renderer or the server, and you do not need to: everything you can
 affect is in the contract below.`;
 
+/**
+ * The per-bot breakdown of a Gate 3 rejection, pulled out of `GateResult.detail`.
+ *
+ * The reason sentence names the aggregate ("0.91 vs panel — too hard") and lists
+ * the panel bots inline, but it cannot say which of them is the *problem*. A boss
+ * at 0.91 with Rusher at 0.00 and Camper at 1.00 has two different bugs, and only
+ * one file to fix; the table names them.
+ */
+export type BotRates = {
+  /** Panel bots, in the order the simulation reported them. */
+  perBot: readonly { name: string; winRate: number }[];
+  /** The Mimic's rate, when ADAPTED was measured. */
+  mimic?: number;
+};
+
+export type CoderRejection = {
+  gate: GateName;
+  gateNumber: number;
+  reason: string;
+  attempt: number;
+  /** Gate 3 only. Rendered as a table above the verbatim reason. */
+  rates?: BotRates;
+};
+
 export type CoderContext = {
   analysis: Analysis;
   /** The strategy that just lost. The starting point, not a template to preserve. */
   prevSource: string;
   round: BalanceRound;
   /** Verbatim `GateResult.reason` from the attempt that was just rejected. */
-  rejection?: { gate: GateName; gateNumber: number; reason: string; attempt: number };
+  rejection?: CoderRejection;
   /** Static-check violations from this same attempt, before the harness ran. */
   selfRetry?: { violations: string };
 };
 
 export function coderPrompt(ctx: CoderContext): Prompt {
-  const system = [CODER_SYSTEM_HEAD, '', contractDoc(), '', harnessRules(ctx.round), '', CODER_OUTPUT_RULES].join('\n');
+  const system = [
+    CODER_SYSTEM_HEAD,
+    '',
+    contractDoc(),
+    '',
+    harnessRules(ctx.round),
+    '',
+    harnessHints(ctx.round),
+    '',
+    CODER_OUTPUT_RULES,
+  ].join('\n');
 
   const parts = [
     `# ROUND ${ctx.round}`,
@@ -263,6 +368,18 @@ export function coderPrompt(ctx: CoderContext): Prompt {
       '',
       `# ATTEMPT ${ctx.rejection.attempt} WAS REJECTED BY GATE ${ctx.rejection.gateNumber} (${ctx.rejection.gate})`,
       '',
+    );
+    if (ctx.rejection.rates !== undefined && ctx.rejection.rates.perBot.length > 0) {
+      // Above the reason, not below it: the sentence stays the last thing in the
+      // context (spec §6.3), and this is the lookup table for reading it.
+      parts.push(
+        'Your win rate against each opponent in that simulation:',
+        '',
+        renderBotRates(ctx.rejection.rates),
+        '',
+      );
+    }
+    parts.push(
       'The harness said, verbatim:',
       '',
       `    ${ctx.rejection.reason}`,

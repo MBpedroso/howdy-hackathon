@@ -29,9 +29,9 @@ import { bundledSource } from '../game/strategy.ts';
 
 import { serverFallbackPick, type RewriteEvent } from './events.ts';
 import { resolveSource, type InterludeSource, type ResolveOptions, type SourceKind } from './source.ts';
-import { createInterludeUi, GATE3_ESTIMATE_MS, type InterludeState, type InterludeUi } from './ui.ts';
+import { createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
 
-export { fallbackText, GATE3_ESTIMATE_MS, SKIP_AFTER_MS, createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
+export { fallbackText, SKIP_AFTER_MS, createInterludeUi, meterView, type InterludeState, type InterludeUi, type MeterView } from './ui.ts';
 export { createSseParser, readEventStream, type SseFrame, type SseParser } from './sse.ts';
 export { mockSource, buildMockScript, scriptDuration, APPROVED_META, type MockOptions, type MockScript, type MockStep } from './mock.ts';
 export { resolveSource, sseSource, withFallbackSource, SourceUnavailableError, type InterludeSource, type RewriteRequest, type SourceKind } from './source.ts';
@@ -155,9 +155,6 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
       host,
       round: context.round,
       kind: resolved.kind,
-      // At 20× the mock's Gate 3 takes 200 ms, so the meter's estimate has to move
-      // 20× faster too or it would still be creeping when the gate has landed.
-      meterEstimateMs: GATE3_ESTIMATE_MS / Math.max(1, resolved.speed),
       ...(autoFightMs === undefined || Number.isNaN(autoFightMs) ? {} : { autoFightMs }),
       onFight: () => goToNextRound(nextSource),
       onSkip: () => {

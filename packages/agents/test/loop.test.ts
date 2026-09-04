@@ -13,14 +13,16 @@
  * mocked, because the model is the part that is not deterministic.
  */
 import { describe, expect, it } from 'vitest';
+import { gate3Plan } from '@rematch/harness';
 import {
+  PROGRESS_MIN_GAP_MS,
   mockProvider,
   recorder,
   rewrite,
   type Analysis,
   type RewriteEvent,
 } from '../src/index.ts';
-import { asCoderReply, cannedSummary, readGood, readHarnessFixture } from './helpers.ts';
+import { asAnalystReply, asCoderReply, cannedSummary, readGood, readHarnessFixture } from './helpers.ts';
 
 const ANALYSIS: Analysis = {
   observations: [
@@ -49,7 +51,9 @@ function eventsOf<T extends RewriteEvent['type']>(
 describe('the autonomous rewrite loop', () => {
   it('gets rejected by Gate 1, then by Gate 3, then ships on attempt 3', async () => {
     const summary = cannedSummary('camper-a');
-    const analyst = mockProvider([JSON.stringify(ANALYSIS)]);
+    // Prose first, then the fenced JSON block — the shape the Analyst prompt asks
+    // for, so the streaming assertions below are about what really arrives.
+    const analyst = mockProvider([asAnalystReply(ANALYSIS)]);
     // The Coder pre-checks its own file against `staticCheck` and gets one free
     // self-retry, so a Gate 1 rejection only reaches the harness when the model
     // makes the same mistake twice — hence `uses-date` scripted twice.
@@ -66,6 +70,12 @@ describe('the autonomous rewrite loop', () => {
     ]);
 
     const { emit, events } = recorder();
+    // When each `trial.progress` was emitted, for the throttle assertion below.
+    const progressTimes: number[] = [];
+    const timed: typeof emit = (event) => {
+      if (event.type === 'trial.progress') progressTimes.push(Date.now());
+      emit(event);
+    };
     const started = Date.now();
     const result = await rewrite(
       {
@@ -75,7 +85,7 @@ describe('the autonomous rewrite loop', () => {
         providers: { analyst, coder },
         harnessOpts: { gate3: { matches: MATCHES } },
       },
-      emit,
+      timed,
     );
     const wall = Date.now() - started;
 
@@ -163,14 +173,65 @@ describe('the autonomous rewrite loop', () => {
     expect(eventsOf(events, 'analysis.done')).toHaveLength(1);
     expect(eventsOf(events, 'rewrite.delta').length).toBeGreaterThan(2);
     expect(eventsOf(events, 'rewrite.done').map((e) => e.attempt)).toEqual([1, 2, 3]);
+
+    // Beat 2 streams the prose and withholds the JSON block (spec §2.2's
+    // typewriter); the whole reply survives on `analysis.done.raw` for the log.
+    const streamed = eventsOf(events, 'analysis.delta').map((e) => e.delta).join('');
+    expect(streamed).toContain(ANALYSIS.observations[0]!);
+    expect(streamed).not.toContain('```');
+    expect(streamed).not.toContain('"playerArchetype"');
+    const analysisDone = eventsOf(events, 'analysis.done')[0]!;
+    expect(analysisDone.raw).toContain('```json');
+    expect(analysisDone.raw).toContain('"playerArchetype"');
+
+    // Beat 3 names each attempt with the `meta` parsed out of its own source — the
+    // rejected files included, which is why it is parsed and not loaded.
+    expect(eventsOf(events, 'rewrite.done').map((e) => e.meta?.name)).toEqual([
+      'Clockwork',
+      'Hound',
+      'Warden',
+    ]);
     expect(eventsOf(events, 'fallback')).toHaveLength(0);
     expect(eventsOf(events, 'done')).toHaveLength(1);
 
-    // Gate 3 has no per-match progress hook, so exactly two progress events per
-    // attempt that reaches it: start and finish.
+    // Gate 3 reports real progress: the opening event, then a batch at a time as
+    // results arrive, then the total. Attempt 1 never reached Gate 3 (Gate 1
+    // rejected it), so only attempts 2 and 3 have a series.
     const progress = eventsOf(events, 'trial.progress');
-    expect(progress.filter((p) => p.attempt === 2)).toHaveLength(2);
-    expect(progress[0]).toMatchObject({ matchesDone: 0, matchesTotal: MATCHES, gate: 'balance' });
+    expect(progress.filter((p) => p.attempt === 1)).toHaveLength(0);
+    // The total is `gate3Plan`'s, not the requested `matches`: 60 requested is 62
+    // run (8 seeds x 4 bots, plus 30 vs the Mimic), and the meter is labelled with
+    // the number that will actually arrive.
+    const total = gate3Plan({ matches: MATCHES, mimicSummary: summary }).total;
+    expect(total).toBeGreaterThanOrEqual(MATCHES);
+
+    for (const attempt of [2, 3]) {
+      const series = progress.filter((p) => p.attempt === attempt);
+      expect(series.length).toBeGreaterThan(2);
+      expect(series[0]).toMatchObject({ matchesDone: 0, matchesTotal: total, gate: 'balance' });
+      expect(series.at(-1)).toMatchObject({ matchesDone: total, matchesTotal: total });
+
+      let previous = -1;
+      for (const step of series) {
+        expect(step.matchesTotal).toBe(total);
+        expect(step.matchesDone).toBeGreaterThan(previous);
+        previous = step.matchesDone;
+      }
+    }
+
+    // Throttled to PROGRESS_MIN_GAP_MS apart, so a 200-match gate cannot put 200
+    // frames on the SSE connection. The last event of a series is exempt: it is
+    // what closes the meter, and it always fires.
+    for (let i = 1; i < progress.length; i += 1) {
+      const step = progress[i]!;
+      const previous = progress[i - 1]!;
+      const sameSeries = step.attempt === previous.attempt;
+      const isFinal = step.matchesDone >= step.matchesTotal;
+      if (!sameSeries || isFinal) continue;
+      // -5 ms of slack: the timestamps are taken in the emit callback, one hop
+      // after the throttle read the clock.
+      expect(progressTimes[i]! - progressTimes[i - 1]!).toBeGreaterThanOrEqual(PROGRESS_MIN_GAP_MS - 5);
+    }
 
     // The events arrive in beat order: replay, analysis, then per-attempt.
     const order = events.map((e) => e.type);

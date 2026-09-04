@@ -74,8 +74,24 @@ describe('POST /api/rewrite — the approved path', () => {
       expect(gates.map((g) => g.gate)).toEqual([1, 2, 3, 4]);
       expect(gates.map((g) => g.name)).toEqual(['static', 'fuzz', 'balance', 'perf']);
       expect(gates.every((g) => g.ok)).toBe(true);
-      // Gate 3's meter: one event when the matches start, one when they finish.
-      expect(eventsOf(res.events, 'trial.progress')).toHaveLength(2);
+      // Gate 3's meter: `matchesDone: 0` when the matches start, a batch at a time
+      // while they run (throttled in the loop), and the total when they finish. The
+      // count depends on how fast the pool got through 24 matches, so the assertion
+      // is on the ends and on the monotonicity, not on the number of frames.
+      const progress = eventsOf(res.events, 'trial.progress') as unknown as Array<{
+        matchesDone: number;
+        matchesTotal: number;
+        gate: string;
+      }>;
+      expect(progress.length).toBeGreaterThanOrEqual(2);
+      expect(progress[0]).toMatchObject({ matchesDone: 0, gate: 'balance' });
+      expect(progress.at(-1)?.matchesDone).toBe(progress[0]?.matchesTotal);
+      let seen = -1;
+      for (const step of progress) {
+        expect(step.matchesTotal).toBe(progress[0]?.matchesTotal);
+        expect(step.matchesDone).toBeGreaterThan(seen);
+        seen = step.matchesDone;
+      }
 
       const result = doneOf(res);
       expect(result.approved).toBe(true);

@@ -87,8 +87,12 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(analysis.locator('.il-obs li')).not.toHaveCount(0);
   await expect(analysis.locator('.il-tag')).toContainText('archetype');
   await expect(analysis.locator('.il-plan')).toContainText('counter-plan');
-  // The raw model stream is still there, not replaced by the tidy version.
-  expect((await page.getByTestId('il-analysis-stream').textContent())?.length ?? 0).toBeGreaterThan(200);
+  // The streamed prose is still there, not replaced by the tidy version — and it is
+  // prose: the Analyst's JSON block never reaches the stream (`analysisGate`).
+  const streamed = (await page.getByTestId('il-analysis-stream').textContent()) ?? '';
+  expect(streamed.length).toBeGreaterThan(200);
+  expect(streamed).not.toContain('```');
+  expect(streamed).not.toContain('"playerArchetype"');
 
   // ---------------------------------------------------------------- beat 3
   const diff = page.getByTestId('il-diff');
@@ -119,7 +123,7 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(page.getByTestId('il-verdict')).toContainText('APPROVED');
   await expect(page.getByTestId('il-verdict')).toContainText('52%');
   await expect(page.getByTestId('il-verdict')).toHaveAttribute('data-kind', 'approved');
-  // The Gate 3 meter finished, rather than being left mid-estimate.
+  // The Gate 3 meter finished on the harness's own count, rather than on a timer.
   await expect(page.getByTestId('il-meter')).toHaveClass(/done/);
   // No AC 5 fallback on the happy path.
   await expect(page.getByTestId('il-banner')).toBeHidden();
@@ -132,6 +136,10 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   expect(state?.phase).toBe('done');
   expect(state?.analysisChars ?? 0).toBeGreaterThan(200);
   expect(state?.codeChars ?? 0).toBeGreaterThan(1000);
+  // Every simulated match was accounted for: the meter is a readout of
+  // `trial.progress`, so this is the harness's count reaching the screen.
+  expect(state?.matchesTotal ?? 0).toBeGreaterThan(0);
+  expect(state?.matchesDone).toBe(state?.matchesTotal);
   expect(state?.elapsedMs ?? 1e9).toBeLessThan(45_000);
 
   await root.screenshot({ path: `${ARTIFACTS}interlude-approved.png` });
@@ -170,8 +178,8 @@ test('each beat is legible on its own — the demo screenshots', async ({ page }
   await waitForEvent(page, 'rewrite.done');
   await root.screenshot({ path: `${ARTIFACTS}interlude-3-rewrite.png` });
 
-  // Mid-Gate 3 of attempt 1: the meter is moving on the estimate and no verdict
-  // exists yet. This is the frame that shows "waiting is content".
+  // Mid-Gate 3 of attempt 1: the meter is moving on real batched progress and no
+  // verdict exists yet. This is the frame that shows "waiting is content".
   await page.waitForFunction(
     () => (window.__rematch?.interlude?.events ?? []).some((e) => e.type === 'trial.progress'),
     undefined,

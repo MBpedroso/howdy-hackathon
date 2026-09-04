@@ -16,6 +16,20 @@
  *  3. The reduction walks that array in order, so even the floating-point
  *     summation order is fixed.
  * Scheduling therefore affects only *when* a match runs, never the verdict.
+ *
+ * ## Why progress is batched
+ * `onProgress` is the one thing here that *does* depend on scheduling: it reports
+ * how many results have arrived, and results arrive in whatever order the pool
+ * finishes them. That is deliberate and it is safe — the callback cannot reach
+ * `out[]`, the reduction or the verdict, so `test/sim.test.ts`' worker-count
+ * invariance still holds byte-for-byte and only the *cadence* of the callback
+ * differs between 1 worker and 4.
+ *
+ * It fires in batches (`progressBatch`) rather than per match because the consumer
+ * is an SSE frame on the other end of the interlude: 200 frames for a 4-second gate
+ * is noise on the wire and a re-layout per match in the browser, while ~20 is a
+ * meter that visibly moves. The final callback always lands on `(total, total)`,
+ * so a UI can trust the last one to close the bar.
  */
 import { availableParallelism } from 'node:os';
 import { Worker } from 'node:worker_threads';
@@ -34,6 +48,12 @@ export type SimulateOptions = {
   workers?: number;
   /** Inline path only: reuse an existing sandbox instead of the process-wide one. */
   sandbox?: SandboxFactory;
+  /**
+   * Called as match results arrive, in batches of `progressBatch(total)`, and once
+   * more at `(total, total)` when the last one lands. Never called with a `done`
+   * that goes backwards. Purely observational: it cannot affect the result.
+   */
+  onProgress?: (done: number, total: number) => void;
 };
 
 export type BotRate = {
@@ -70,6 +90,34 @@ export function resolveWorkers(requested: number | undefined, jobs: number): num
   return Math.max(1, Math.min(wanted, Math.max(1, jobs)));
 }
 
+/** Never more than one callback per this many matches. */
+export const PROGRESS_MAX_BATCH = 20;
+/** ~20 callbacks per simulation, floor 1, cap `PROGRESS_MAX_BATCH`. */
+export function progressBatch(total: number): number {
+  return Math.max(1, Math.min(PROGRESS_MAX_BATCH, Math.ceil(total / 20)));
+}
+
+type Reporter = { tick(done: number): void; finish(): void };
+
+/** Batches `onProgress`, and guarantees exactly one final `(total, total)` call. */
+function reporter(total: number, onProgress?: (done: number, total: number) => void): Reporter {
+  if (onProgress === undefined) return { tick: (): void => {}, finish: (): void => {} };
+  const batch = progressBatch(total);
+  let last = 0;
+  return {
+    tick(done: number): void {
+      if (done - last < batch || done >= total) return;
+      last = done;
+      onProgress(done, total);
+    },
+    finish(): void {
+      if (last >= total) return;
+      last = total;
+      onProgress(total, total);
+    },
+  };
+}
+
 function buildJobs(bots: number, seeds: readonly number[]): Job[] {
   const jobs: Job[] = [];
   for (let bot = 0; bot < bots; bot += 1) {
@@ -86,25 +134,36 @@ export async function simulate(opts: SimulateOptions): Promise<SimulateResult> {
     return { matches: 0, bossWins: 0, winRate: 0, perBot: [], violations: 0, killed: 0, ms: 0, workers };
   }
 
+  const progress = reporter(jobs.length, opts.onProgress);
   const results =
     workers === 1
-      ? await runInline(opts, jobs)
-      : await runInWorkers(opts, jobs, workers);
+      ? await runInline(opts, jobs, progress)
+      : await runInWorkers(opts, jobs, workers, progress);
+  // Only once every result is in: a consumer must be able to read the closing
+  // callback as "the matches are done", not as "the last batch is done".
+  progress.finish();
 
   return reduce(opts, jobs, results, performance.now() - started, workers);
 }
 
 /** One sandbox, one thread, jobs in order. The reference implementation. */
-async function runInline(opts: SimulateOptions, jobs: readonly Job[]): Promise<MatchResult[]> {
+async function runInline(
+  opts: SimulateOptions,
+  jobs: readonly Job[],
+  progress: Reporter,
+): Promise<MatchResult[]> {
   const sandbox = opts.sandbox ?? (await getSandbox());
   const bots = opts.bots.map(botFromSpec);
   const runner = sandbox.load(opts.source);
   try {
     const out: MatchResult[] = new Array<MatchResult>(jobs.length);
+    let done = 0;
     for (const job of jobs) {
       const bot = bots[job.bot];
       if (bot === undefined) throw new Error(`no bot at index ${job.bot}`);
       out[job.index] = runMatchWith(runner, bot, job.seed);
+      done += 1;
+      progress.tick(done);
     }
     return out;
   } finally {
@@ -122,6 +181,7 @@ async function runInWorkers(
   opts: SimulateOptions,
   jobs: readonly Job[],
   workers: number,
+  progress: Reporter,
 ): Promise<MatchResult[]> {
   const specs = [...opts.bots];
   const out = new Array<MatchResult | undefined>(jobs.length);
@@ -160,6 +220,10 @@ async function runInWorkers(
           case 'done':
             out[message.index] = message.result;
             done += 1;
+            // Reported from the arrival order, which is the only thing in this
+            // file that depends on the schedule — and it reaches nothing but the
+            // caller's meter.
+            progress.tick(done);
             if (done === jobs.length) finish();
             else dispatch(worker);
             return;

@@ -11,9 +11,12 @@
  *  - **JSON-serializable.** No class instances, no functions, no `undefined` in a
  *    required position. An event that cannot survive `JSON.stringify` cannot reach
  *    the player.
- *  - **Emitted as it happens, never batched.** The 45 s interlude budget (spec
- *    AC 5) is mostly waiting, and waiting is only content while something moves.
- *    That is why gates arrive one at a time and why the Coder streams deltas.
+ *  - **Emitted as it happens.** The 45 s interlude budget (spec AC 5) is mostly
+ *    waiting, and waiting is only content while something moves. That is why gates
+ *    arrive one at a time, why the Coder streams deltas, and why Gate 3's 200
+ *    matches report progress while they run. The one place batching is deliberate
+ *    is `trial.progress`, which is coalesced to a readable rate rather than one
+ *    frame per simulated match.
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
@@ -76,6 +79,15 @@ export type RewriteEvent =
   | {
       type: 'analysis.done';
       analysis: Analysis;
+      /**
+       * The Analyst's reply in full — the prose the player saw *and* the JSON block
+       * that was withheld from the stream. Kept because a judge reading the run log
+       * should see the model's actual bytes, not only the parsed conclusion.
+       *
+       * Absent only where no model produced the analysis: the server's no-key path
+       * writes the `Analysis` itself, so there is no reply to keep.
+       */
+      raw?: string;
       calls: number;
       promptChars: number;
       usage: LLMUsage;
@@ -83,17 +95,32 @@ export type RewriteEvent =
     }
   /** Beat 3, streaming. `attempt` is 1-based. */
   | { type: 'rewrite.delta'; attempt: number; delta: string }
-  | { type: 'rewrite.done'; attempt: number; source: string; diff: string }
+  /**
+   * `meta` is read out of the source with `extractMeta` — the same literal Gate 1
+   * validated — so the Rewrite beat can label the diff with the boss's *name*
+   * ("Warden") instead of an attempt number. Absent only if the file's `meta` is
+   * not a statically readable literal, which Gate 1 is about to reject anyway.
+   */
+  | { type: 'rewrite.done'; attempt: number; source: string; diff: string; meta?: StrategyMeta }
   /**
    * Beat 4. One event per gate, as it finishes — the harness stops at the first
    * failure, so a rejected attempt emits fewer of these than an approved one.
    */
   | { type: 'trial.gate'; attempt: number; gate: GateResult }
   /**
-   * Gate 3's simulation, coarse. `simulate()` has no per-match progress hook, so
-   * this fires exactly twice per attempt — `matchesDone: 0` when the matches start
-   * and `matchesDone === matchesTotal` when they finish. It is enough for the
-   * meter to animate over a known duration rather than tick per match.
+   * Gate 3's simulation, as it happens.
+   *
+   * The first event of an attempt is always `matchesDone: 0` — it is what tells the
+   * UI the total and puts the meter on screen — and the last is always
+   * `matchesDone === matchesTotal`. In between, one event per batch of results from
+   * the worker pool (`progressBatch`, ~20 per gate), throttled here to at most one
+   * per `PROGRESS_MIN_GAP_MS`. So the meter shows *measured* progress and needs no
+   * duration estimate; the cadence depends on the worker count and the machine, the
+   * verdict does not.
+   *
+   * `matchesTotal` is `gate3Plan(...).total` and is the same in every event of an
+   * attempt, including the first — the gate's rounding (`matches / 2 / 4`) means it
+   * is not always the `matches` the caller asked for.
    */
   | { type: 'trial.progress'; attempt: number; matchesDone: number; matchesTotal: number; gate: GateName }
   | { type: 'verdict'; attempt: number; approved: boolean; reason?: string }

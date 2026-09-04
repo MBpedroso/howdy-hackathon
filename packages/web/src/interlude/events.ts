@@ -126,6 +126,11 @@ export type RewriteEvent =
   | {
       type: 'analysis.done';
       analysis: Analysis;
+      /**
+       * The Analyst's reply in full, including the JSON block that was withheld
+       * from the stream. The panel streams prose; this is here for the run log.
+       */
+      raw?: string;
       calls: number;
       promptChars: number;
       usage: LLMUsage;
@@ -133,10 +138,15 @@ export type RewriteEvent =
     }
   /** Beat 3, streaming. `attempt` is 1-based. */
   | { type: 'rewrite.delta'; attempt: number; delta: string }
-  | { type: 'rewrite.done'; attempt: number; source: string; diff: string }
+  /** `meta` is the file's own, parsed from its source by the loop. */
+  | { type: 'rewrite.done'; attempt: number; source: string; diff: string; meta?: StrategyMeta }
   /** Beat 4. One event per gate, as it finishes; stops at the first failure. */
   | { type: 'trial.gate'; attempt: number; gate: GateResult }
-  /** Gate 3's simulation, coarse: fires at `matchesDone: 0` and again at the total. */
+  /**
+   * Gate 3's simulation, as it happens: `matchesDone: 0` first, then one event per
+   * batch of finished matches, then `matchesDone === matchesTotal`. Real measured
+   * progress — the meter needs no duration estimate.
+   */
   | { type: 'trial.progress'; attempt: number; matchesDone: number; matchesTotal: number; gate: GateName }
   | { type: 'verdict'; attempt: number; approved: boolean; reason?: string }
   /** Attempts or the deadline are exhausted; a pre-approved strategy ships. */

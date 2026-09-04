@@ -20,8 +20,11 @@ import { isRewriteEvent, type RewriteEvent } from '../src/interlude/events.ts';
 import {
   APPROVED_META,
   APPROVED_SOURCE,
+  ATTEMPT1_META,
+  MATCH_BATCH,
   buildMockScript,
   mockAnalysis,
+  mockAnalysisProse,
   mockSource,
   scriptDuration,
 } from '../src/interlude/mock.ts';
@@ -161,18 +164,65 @@ describe('buildMockScript', () => {
     expect(failing[0]?.gate.name).toBe('balance');
   });
 
-  it('fires trial.progress exactly twice per attempt, at 0 and at the total', async () => {
+  it('reports Gate 3 in batches: 0, then every batch, then the total', async () => {
     const progress = (await run()).filter(
       (e): e is Extract<RewriteEvent, { type: 'trial.progress' }> => e.type === 'trial.progress',
     );
-    expect(progress).toHaveLength(4);
+
     for (const attempt of [1, 2]) {
-      const pair = progress.filter((p) => p.attempt === attempt);
-      expect(pair).toHaveLength(2);
-      expect(pair[0]?.matchesDone).toBe(0);
-      expect(pair[0]?.matchesTotal).toBe(200);
-      expect(pair[1]?.matchesDone).toBe(pair[1]?.matchesTotal);
-      expect(pair[0]?.gate).toBe('balance');
+      const series = progress.filter((p) => p.attempt === attempt);
+      // The live simulator batches ~20 callbacks per gate; two events at the ends
+      // would leave the meter with nothing to show for four seconds of work.
+      expect(series.length).toBe(200 / MATCH_BATCH + 1);
+      expect(series[0]).toMatchObject({ matchesDone: 0, matchesTotal: 200, gate: 'balance' });
+      expect(series.at(-1)).toMatchObject({ matchesDone: 200, matchesTotal: 200 });
+
+      // Monotonic, one total throughout, and never past the end.
+      let previous = -1;
+      for (const step of series) {
+        expect(step.matchesTotal).toBe(200);
+        expect(step.matchesDone).toBeGreaterThan(previous);
+        expect(step.matchesDone).toBeLessThanOrEqual(step.matchesTotal);
+        previous = step.matchesDone;
+      }
+    }
+  });
+
+  it('streams prose, not JSON — and keeps the whole reply on `analysis.done`', async () => {
+    const events = await run();
+    const streamed = events
+      .filter((e): e is Extract<RewriteEvent, { type: 'analysis.delta' }> => e.type === 'analysis.delta')
+      .map((e) => e.delta)
+      .join('');
+    const done = events.find(
+      (e): e is Extract<RewriteEvent, { type: 'analysis.done' }> => e.type === 'analysis.done',
+    );
+
+    // Spec §2.2's Analysis beat is a typewriter for a human. The player must never
+    // watch `{"observations": [` scroll past.
+    expect(streamed).not.toContain('```');
+    expect(streamed).not.toContain('"observations"');
+    expect(streamed).toBe(mockAnalysisProse(done!.analysis));
+    // The JSON half is kept for the run log, not thrown away.
+    expect(done?.raw).toContain('```json');
+    expect(done?.raw).toContain('"playerArchetype"');
+    expect(done?.raw?.startsWith(streamed)).toBe(true);
+  });
+
+  it('names each attempt with the `meta` of the file it just streamed', async () => {
+    const events = await run();
+    const dones = events.filter(
+      (e): e is Extract<RewriteEvent, { type: 'rewrite.done' }> => e.type === 'rewrite.done',
+    );
+
+    expect(dones).toHaveLength(2);
+    // Parsed from the source by the loop in a real run; hard-coded here, and pinned
+    // against the fixtures so the two cannot drift.
+    expect(dones[0]?.meta).toEqual({ ...ATTEMPT1_META });
+    expect(dones[1]?.meta).toEqual({ ...APPROVED_META });
+    for (const done of dones) {
+      expect(done.source).toContain(`name: '${done.meta?.name ?? ''}'`);
+      expect(done.source).toContain(done.meta?.rationale ?? '');
     }
   });
 

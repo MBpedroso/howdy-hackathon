@@ -24,6 +24,19 @@ export function asCoderReply(source: string, preamble = ''): string {
   return `${preamble}\`\`\`js\n${source}\n\`\`\`\n`;
 }
 
-export function asAnalystReply(analysis: unknown): string {
-  return JSON.stringify(analysis);
+/**
+ * Wrap an `Analysis` the way the Analyst is asked to reply: the prose sentences
+ * first — that is what streams to the player (spec §2.2) — then the fenced JSON
+ * block the Coder is handed.
+ *
+ * Tests that pass a bare `JSON.stringify(analysis)` are still valid input and are
+ * kept where the point is the parser's tolerance; this is the shape the *prompt*
+ * asks for, so it is what the loop-level tests use.
+ */
+export function asAnalystReply(analysis: {
+  observations: readonly string[];
+  playerArchetype: string;
+  counterPlan: string;
+}): string {
+  return `${analysis.observations.join(' ')}\n\n\`\`\`json\n${JSON.stringify(analysis, null, 2)}\n\`\`\`\n`;
 }

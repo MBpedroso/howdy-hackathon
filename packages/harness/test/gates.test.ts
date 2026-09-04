@@ -10,7 +10,17 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CONSTANTS } from '@rematch/contract';
-import { ADAPTED_MIN, BAND, DEFAULT_MATCHES, MEASURE_SLACK, gate1Static, gate2Fuzz, gate3Balance, gate4Perf } from '../src/index.ts';
+import {
+  ADAPTED_MIN,
+  BAND,
+  DEFAULT_MATCHES,
+  MEASURE_SLACK,
+  gate1Static,
+  gate2Fuzz,
+  gate3Balance,
+  gate3Plan,
+  gate4Perf,
+} from '../src/index.ts';
 import { GOOD_FIXTURES, readBad, readCandidate, readGood, readSummary } from './helpers.ts';
 
 describe('Gate 1 — static', () => {
@@ -280,6 +290,42 @@ describe('Gate 3 — balance', () => {
     expect(round5.ok).toBe(false);
     if (!round5.ok) expect(round5.reason).toMatch(/too easy \(band 0\.55–0\.70 for round 5/);
   }, 60_000);
+
+  it('reports one progress bar across both halves of the budget', async () => {
+    const summary = readSummary('camper');
+    const opts = { round: 2, matches: 40, mimicSummary: summary } as const;
+    const plan = gate3Plan(opts);
+    const reported: Array<[number, number]> = [];
+
+    const result = await gate3Balance(readCandidate(), {
+      ...opts,
+      onProgress: (done, total) => void reported.push([done, total]),
+    });
+
+    // The plan is the same arithmetic the gate ran, so a meter can be labelled
+    // before the first match: 20 panel matches (5 seeds x 4 bots) plus 20 Mimic.
+    expect(plan).toMatchObject({ perBotSeeds: 5, mimicSeeds: 20, panelMatches: 20, total: 40 });
+    expect((result.detail as { matches: number }).matches).toBe(plan.total);
+
+    expect(reported.length).toBeGreaterThan(1);
+    // One bar, not two: the Mimic's matches continue the panel's count instead of
+    // restarting it, and the total never changes underneath the meter.
+    let previous = 0;
+    for (const [done, total] of reported) {
+      expect(total).toBe(plan.total);
+      expect(done).toBeGreaterThan(previous);
+      previous = done;
+    }
+    expect(reported.at(-1)).toEqual([plan.total, plan.total]);
+    // The panel's own final callback lands mid-bar, not at 100%.
+    expect(reported.some(([done]) => done === plan.panelMatches)).toBe(true);
+  }, 60_000);
+
+  it('plans no Mimic matches when there is no replay to mimic', () => {
+    expect(gate3Plan({ matches: 40 })).toMatchObject({ mimicSeeds: 0, mimicMatches: 0, total: 20 });
+    // The panel's half is spent identically either way, so FAIR stays comparable.
+    expect(gate3Plan({ matches: 40 }).panelMatches).toBe(gate3Plan({ matches: 40, mimicSummary: readSummary('camper') }).panelMatches);
+  });
 
   it('is deterministic, and independent of the worker count', async () => {
     const opts = { round: 2, matches: 40, mimicSummary: readSummary('kiter') } as const;

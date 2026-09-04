@@ -1,0 +1,159 @@
+# Deterministic controls #1 and #3 from spec §7, on the server side.
+#
+# This workflow is the backstop for the pre-commit hook: the hook can be skipped with
+# `git commit --no-verify` (the human escape hatch), CI cannot. It runs the *same*
+# `scripts/verify.sh` the hook runs, so "green locally" and "green in CI" mean the same
+# thing rather than two similar things.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to a PR makes the previous run's answer irrelevant. Don't cancel `main`
+# runs, though — those are the record of whether the branch is green.
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ── The gate-all (spec §7, last row) ───────────────────────────────────────────────
+  verify:
+    name: verify + e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm before setup-node: `cache: pnpm` needs the pnpm binary to locate the store.
+      # No `version:` input — action-setup reads the root `packageManager` field
+      # (pnpm@11.3.0), so the lockfile and CI can never disagree about the pnpm major.
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches local development (spec: Node 25). `engines.node` allows >=22, so a
+          # bump here is the only place the CI version is decided.
+          node-version: 25
+          cache: pnpm
+
+      # `--frozen-lockfile` is the CI half of reproducibility (AC 1): a PR that changes
+      # a dependency without committing the lockfile fails here rather than resolving to
+      # something nobody tested. This also runs the root `prepare` script, which is
+      # harmless in CI (it just sets core.hooksPath on a throwaway checkout).
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # typecheck + lint + every package's tests, via scripts/verify.sh.
+      - name: pnpm verify
+        run: pnpm verify
+
+      # Browser layer (spec §7): chromium only, matching playwright.config.ts.
+      # `--with-deps` installs the system libraries the runner image lacks.
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: packages/web
+
+      # playwright.config.ts owns its own web server (vite build + preview), so there is
+      # nothing to start here. CI=true is set by Actions, which turns on `forbidOnly`
+      # and disables `reuseExistingServer`.
+      - name: pnpm test:e2e
+        run: pnpm test:e2e
+
+      # Screenshots and traces. Spec §7: "Screenshots saved to artifacts/" — they double
+      # as demo evidence, so they are uploaded whether or not the run passed. `artifacts/`
+      # is gitignored, which is exactly why it has to leave the runner this way.
+      - name: Upload artifacts/
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ── Deterministic control #3 (spec §7) ─────────────────────────────────────────────
+  # "CI rejects any PR touching contract/ without an updated CHANGELOG entry in that
+  # package — the contract is the API the boss agent depends on, so its changes are
+  # human-gated."
+  #
+  # Deliberately a separate job: it is seconds long, needs no install, and its verdict
+  # should be readable on the PR without scrolling past a test suite. It also means a
+  # missing CHANGELOG entry does not hide behind a slow `verify` failure, or vice versa.
+  contract-changelog-gate:
+    name: contract CHANGELOG gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # fetch-depth: 0 — the three-dot diff below needs the merge base, which a shallow
+      # clone does not contain.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a CHANGELOG entry for contract changes
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # checkout fetches the PR ref, not necessarily the base branch.
+          git fetch --no-tags origin "$BASE"
+
+          # `A...B` diffs B against the merge base, so unrelated commits that landed on
+          # main after this PR branched do not show up as "changed by this PR".
+          changed="$(git diff --name-only "origin/${BASE}...HEAD")"
+
+          echo "Files changed vs origin/${BASE}:"
+          echo "$changed" | sed 's/^/  /'
+          echo
+
+          contract_changed="$(printf '%s\n' "$changed" | grep -E '^packages/contract/' | grep -v -E '^packages/contract/CHANGELOG\.md$' || true)"
+          changelog_changed="$(printf '%s\n' "$changed" | grep -E '^packages/contract/CHANGELOG\.md$' || true)"
+
+          if [ -z "$contract_changed" ]; then
+            echo "✓ No changes under packages/contract/ — gate not applicable."
+            exit 0
+          fi
+
+          if [ -n "$changelog_changed" ]; then
+            echo "✓ packages/contract/ changed and packages/contract/CHANGELOG.md was updated."
+            exit 0
+          fi
+
+          # `::error::` renders as an annotation on the PR, so the reason is visible
+          # without opening the log.
+          echo "::error file=packages/contract/CHANGELOG.md::This PR changes packages/contract/ but does not update packages/contract/CHANGELOG.md."
+          cat >&2 <<MSG
+
+          ✗ CONTRACT CHANGELOG GATE FAILED
+
+          This PR changes the Boss Contract:
+
+          $(printf '%s\n' "$contract_changed" | sed 's/^/  - /')
+
+          …but packages/contract/CHANGELOG.md is unchanged.
+
+          The contract is the API the boss agent writes against (spec §4). A silent
+          change to it silently changes what every generated strategy — and every
+          pre-approved fallback — is allowed to do. So contract changes are human-gated:
+          add an entry describing the change and who it affects.
+
+            1. Edit packages/contract/CHANGELOG.md — new version heading, what changed,
+               and whether existing strategies still validate.
+            2. Commit it on this branch.
+
+          Editing only the CHANGELOG (docs, a typo) does not trip this gate.
+
+          MSG
+          exit 1

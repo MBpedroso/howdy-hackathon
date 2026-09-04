@@ -11,9 +11,10 @@
  *
  * 1. **Waiting is content.** Every beat shows partial output while it is still
  *    arriving — prose types, code streams a line at a time, gates land one by one,
- *    the Gate 3 meter moves during the four seconds of simulation. Spec §11's
- *    mitigation for LLM latency is exactly this, so a blank panel with a spinner
- *    would be the bug.
+ *    and the Gate 3 meter moves on *measured* progress: `trial.progress` carries
+ *    the matches the harness has actually finished, so the bar is a readout, not an
+ *    animation over a guessed duration. Spec §11's mitigation for LLM latency is
+ *    exactly this, so a blank panel with a spinner would be the bug.
  * 2. **Nothing clears.** Above all the rejection log: "the player must be able to
  *    read every rejection. Rejections are the proof." An attempt-2 approval must not
  *    erase attempt 1's reason, so the log is append-only for the life of the screen.
@@ -48,8 +49,6 @@ export const BEATS = ['replay', 'analysis', 'rewrite', 'trial'] as const;
 export type Beat = (typeof BEATS)[number];
 export type Phase = Beat | 'done';
 
-/** How long the Gate 3 meter animates before it waits for the closing event. */
-export const GATE3_ESTIMATE_MS = 4200;
 /** Spec AC 5's outer bound: the safety-valve skip appears at 50 s, not before. */
 export const SKIP_AFTER_MS = 50_000;
 /** After `done`, the next round starts on its own this long later. */
@@ -97,6 +96,9 @@ export type InterludeState = {
   elapsedMs: number;
   /** `meta.name` of the approved strategy, once `done` carried one. */
   strategyName: string | null;
+  /** Gate 3's simulation progress for the current attempt: matches done / total. */
+  matchesDone: number;
+  matchesTotal: number;
   /** Gate 3's panel win rate for the current attempt, when it reported one. */
   panelRate: number | null;
   mimicRate: number | null;
@@ -117,8 +119,6 @@ export type InterludeUiOptions = {
   onFight: () => void;
   /** The 50 s safety valve. Ships a bundled strategy (see `app.ts`). */
   onSkip: () => void;
-  /** Gate 3 meter duration. Divide by the mock's speed so 20× does not crawl. */
-  meterEstimateMs?: number;
   /** 0 disables the auto-continue (the e2e suite does, so it can assert first). */
   autoFightMs?: number;
   /** Injectable for tests. */
@@ -147,22 +147,45 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-/** `meta.name` out of a strategy's source, for the Rewrite panel's header.
+/**
+ * The Gate 3 meter, as a value.
  *
- * Display only, and deliberately so: the *authoritative* name is whatever the
- * QuickJS sandbox reports when the round starts (that is what the HUD shows, and
- * `readMeta` in the agents loop reads it the same way). A regex is fine for a label
- * on a diff and is the only option here, since the browser has not loaded the module
- * yet — but it must never be what the game believes. */
-export function parseMetaName(source: string): string | null {
-  const match = /name\s*:\s*(['"`])([^'"`]{1,40})\1/.exec(source);
-  return match?.[2] ?? null;
+ * Pure so it can be tested without a DOM (`test/interlude-meter.test.ts`), and
+ * because everything interesting about the meter is arithmetic: it shows the
+ * fraction of matches the harness has actually finished, and it reaches 100% when —
+ * and only when — the last one lands.
+ *
+ * The old version animated over a 4.2 s estimate and capped itself at 85% so it
+ * could not claim to be finished while the simulation ran. That cap was an apology
+ * for not knowing; `simulate()` now reports batched progress, so the honest bar is
+ * the measured one and there is nothing left to estimate.
+ */
+export type MeterView = {
+  /** 0-1. `width` on the fill element. */
+  fraction: number;
+  /** `Gate 3 · simulating 200 matches` / `Gate 3 · simulated`. */
+  label: string;
+  /** `130 / 200`. */
+  count: string;
+  /** Every match is in; the bar turns the player colour. */
+  done: boolean;
+};
+
+export function meterView(matchesDone: number, matchesTotal: number): MeterView {
+  const total = Math.max(1, Math.round(matchesTotal));
+  const done = Math.max(0, Math.min(total, Math.round(matchesDone)));
+  const complete = done >= total;
+  return {
+    fraction: done / total,
+    label: complete ? 'Gate 3 · simulated' : `Gate 3 · simulating ${total} matches`,
+    count: `${done} / ${total}`,
+    done: complete,
+  };
 }
 
 export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const now = options.now ?? ((): number => performance.now());
   const startedAt = now();
-  const meterMs = Math.max(120, options.meterEstimateMs ?? GATE3_ESTIMATE_MS);
   const autoFightMs = options.autoFightMs ?? AUTO_FIGHT_MS;
 
   const state: InterludeState = {
@@ -177,6 +200,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     done: false,
     elapsedMs: 0,
     strategyName: null,
+    matchesDone: 0,
+    matchesTotal: 0,
     panelRate: null,
     mimicRate: null,
     analysis: null,
@@ -351,11 +376,6 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   // ------------------------------------------------------------------- timers
   let disposed = false;
   let autoFightAt: number | null = null;
-  let meterFrom = 0;
-  let meterTotal = 200;
-  let meterStart = 0;
-  /** Set when the closing `trial.progress` arrived; the meter snaps and stops. */
-  let meterComplete = false;
 
   const skipTimer = window.setTimeout(() => {
     if (!state.done) skip.hidden = false;
@@ -420,16 +440,6 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       }
     }
 
-    if (!meterComplete && meterStart > 0) {
-      const t = Math.min(1, (elapsed - meterStart) / meterMs);
-      // Ease out: the last 15% is never claimed by the estimate, so the meter
-      // cannot sit at 100% while the simulation is still running. The closing
-      // `trial.progress` is what fills it.
-      const shown = meterFrom + (1 - meterFrom) * (1 - (1 - t) * (1 - t)) * 0.85;
-      meterFill.style.width = `${(shown * 100).toFixed(1)}%`;
-      meterRight.textContent = `${Math.round(shown * meterTotal)} / ${meterTotal}`;
-    }
-
     frame = requestAnimationFrame(tickClock);
   }
   let frame = requestAnimationFrame(tickClock);
@@ -445,9 +455,11 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     plan.append(el('span', 'lbl', 'counter-plan'), document.createTextNode(analysis.counterPlan));
     structured.append(tagRow, list, plan);
     structured.hidden = false;
-    // The raw stream stays in the DOM, scrolled away: the structured reading is the
-    // conclusion, but a technical judge should still be able to see the model's
-    // actual bytes. Collapsing it to a fixed strip keeps both.
+    // The streamed prose stays in the DOM, scrolled away: the structured reading is
+    // the conclusion, but the sentences the player watched being typed are what
+    // makes it credible. Collapsing it to a fixed strip keeps both. (The Analyst's
+    // JSON block was never streamed — see `analysisGate`; it is on
+    // `analysis.done.raw` for the run log.)
     stream.dataset.streaming = 'false';
     stream.style.flex = '0 0 46px';
   }
@@ -564,6 +576,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
           // A new attempt: fresh code pane, and the verdict line becomes the
           // "it is fixing itself" moment the rejection set up.
           state.attempt = event.attempt;
+          state.matchesDone = 0;
+          state.matchesTotal = 0;
           state.panelRate = null;
           state.mimicRate = null;
           code.replaceChildren();
@@ -584,7 +598,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       case 'rewrite.done': {
         advance('rewrite');
         state.attempt = event.attempt;
-        const name = parseMetaName(event.source);
+        // The file's own `meta`, parsed from its source by the loop — not guessed
+        // from the text here, and not the sandbox's (this attempt may never load).
+        const name = event.meta?.name ?? null;
         renderDiff(event.diff === '' ? '(no change from the previous strategy)' : event.diff);
         const note = noteFor.get('rewrite');
         if (note !== undefined) {
@@ -618,26 +634,17 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       case 'trial.progress': {
         advance('trial');
         meterWrap.hidden = false;
-        meterTotal = Math.max(1, event.matchesTotal);
-        if (event.matchesDone <= 0) {
-          // Gate 3 has no per-match hook (see the note on the event in
-          // `agents/src/events.ts`), so the meter animates over an estimate and is
-          // snapped by the closing event. It is honest because it never reaches
-          // 100% on the estimate alone.
-          meterComplete = false;
-          meterFrom = 0;
-          meterStart = now() - startedAt;
-          meterFill.style.width = '0%';
-          meter.classList.remove('done');
-          meterLeft.textContent = `Gate 3 · simulating ${meterTotal} matches`;
-          addPendingGateRow(3, 'simulating…');
-        } else {
-          meterComplete = true;
-          meterFill.style.width = '100%';
-          meter.classList.add('done');
-          meterRight.textContent = `${event.matchesDone} / ${meterTotal}`;
-          meterLeft.textContent = 'Gate 3 · simulated';
-        }
+        // Measured, not animated: every frame of this bar is a number of matches
+        // the harness has really finished (`simulate()`'s batched `onProgress`).
+        const view = meterView(event.matchesDone, event.matchesTotal);
+        state.matchesDone = event.matchesDone;
+        state.matchesTotal = event.matchesTotal;
+        meterFill.style.width = `${(view.fraction * 100).toFixed(1)}%`;
+        meterLeft.textContent = view.label;
+        meterRight.textContent = view.count;
+        meter.classList.toggle('done', view.done);
+        // The first event of an attempt is the one that puts the row on screen.
+        if (event.matchesDone <= 0) addPendingGateRow(3, 'simulating…');
         break;
       }
 

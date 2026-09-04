@@ -65,7 +65,7 @@ src/interlude/
   sse.ts         SSE frame parser (the stream is a POST, so `EventSource` is unusable)
   mock.ts        the scripted ~25 s run, including one Gate 3 rejection
   diff.ts        a small unified diff, for the mock only
-  ui.ts          the four-beat overlay
+  ui.ts          the four-beat overlay (`meterView` is the Gate 3 bar, DOM-free)
   replayViz.ts   beat 1's heat grid, dash rose and timeline strip
   index.ts       `createInterludeHandler` — the `onRoundWon` implementation
   fixtures/attempt1.js   mock data: the "too hard" first draft. Never executed.
@@ -110,6 +110,19 @@ data: {"type":"done","result":{"approved":true,"source":"…","meta":{…},"atte
 
 - The `event:` name must equal the payload's `type`. The client reads `type` from the
   JSON; the name is there so `curl -N` and a proxy's logs are readable.
+- `analysis.delta` carries the Analyst's **prose only** — the sentences the panel types
+  out. The JSON block it ends its reply with is withheld from the stream (see
+  `analysisGate` in `@rematch/agents`) and arrives whole on `analysis.done.raw`, which is
+  for the run log rather than the screen.
+- `rewrite.done` carries `meta` — the `{ name, rationale, version }` parsed out of that
+  attempt's own source. The Rewrite panel labels the diff with `meta.name`; it may be
+  absent (a file whose `meta` is not a literal, which Gate 1 rejects), and the panel then
+  shows the attempt number alone.
+- `trial.progress` is Gate 3's real progress: `matchesDone: 0` first, carrying the total,
+  then one event per batch of finished matches, then `matchesDone === matchesTotal`. The
+  meter is a readout of those numbers — no duration estimate, no cap — so a stream that
+  sends only the two ends leaves the bar sitting still, and one that sends a frame per
+  match is 200 frames of noise.
 - One JSON object per frame. Multi-line `data:` is parsed but not required.
 - **The stream must end with a `done` frame, and `done` must be last.** Everything
   needed to start the next round is in `result`.

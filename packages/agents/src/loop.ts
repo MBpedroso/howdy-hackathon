@@ -43,23 +43,34 @@ import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
 import {
   ALL_GATES,
-  DEFAULT_MATCHES,
   GATE_NAMES,
+  gate3Plan,
   getSandbox,
   runGates,
   type BalanceRound,
+  type Gate3Options,
   type GateNumber,
   type GateResult,
   type RunGatesOptions,
 } from '@rematch/harness';
 import { runAnalyst } from './analyst.ts';
 import { runCoder } from './coder.ts';
+import { extractMeta } from './meta.ts';
 import type { AttemptLog, Emit, FailureReason, RewriteEvent, RewriteResult } from './events.ts';
-import type { Analysis } from './context/prompts.ts';
+import type { Analysis, BotRates, CoderRejection } from './context/prompts.ts';
 import { isAbortError, type LLMProvider } from './provider.ts';
 
 /** Spec §6.3: "Max 4 attempts. Then fallback pool." */
 export const MAX_ATTEMPTS = 4;
+/**
+ * Floor on the gap between two `trial.progress` events.
+ *
+ * The simulator already batches its callbacks (~20 per gate), but `matches` is the
+ * caller's and a 2000-match probe would batch at 20 and still arrive in a burst.
+ * One frame per 100 ms is the rate a meter can actually be read at, and it bounds
+ * what the SSE connection carries for the slowest gate in the loop.
+ */
+export const PROGRESS_MIN_GAP_MS = 100;
 /** Inside the 45 s interlude budget (spec AC 5), with room for one overshooting gate. */
 export const DEADLINE_MS = 40_000;
 
@@ -164,6 +175,9 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
       emit({
         type: 'analysis.done',
         analysis,
+        // The prose was streamed; the JSON half was withheld from the stream. Both
+        // are here so the run log is the model's actual reply (spec §6.3).
+        raw: analyst.raw,
         calls: analyst.calls,
         promptChars: analyst.promptChars,
         usage: analyst.usage,
@@ -176,7 +190,7 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
 
     // ------------------------------------------------------------ the attempts
     let prevSource = input.prevSource;
-    let rejection: { gate: GateResult['name']; gateNumber: number; reason: string; attempt: number } | undefined;
+    let rejection: CoderRejection | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       // Spec §6.3's budget is attempts; AC 5's budget is seconds. Both are checked
@@ -206,7 +220,16 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
       }
 
       const diff = unifiedDiff(prevSource, coder.source, attempt);
-      emit({ type: 'rewrite.done', attempt, source: coder.source, diff });
+      // Parsed, not loaded: this attempt may be one Gate 1 is about to reject, and
+      // the interlude wants the boss's name on the diff either way.
+      const attemptMeta = extractMeta(coder.source);
+      emit({
+        type: 'rewrite.done',
+        attempt,
+        source: coder.source,
+        diff,
+        ...(attemptMeta === null ? {} : { meta: attemptMeta }),
+      });
 
       const log: AttemptLog = {
         attempt,
@@ -250,12 +273,16 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
       log.reason = trial.reason;
       emit({ type: 'verdict', attempt, approved: false, reason: trial.reason });
 
-      // The rejection, verbatim, becomes the next attempt's only feedback.
+      // The rejection, verbatim, becomes the next attempt's only feedback. For a
+      // Gate 3 rejection the per-bot rates go with it: the sentence says the boss
+      // is too hard, the table says which opponent made it so.
+      const rates = balanceRates(trial.gate);
       rejection = {
         gate: trial.gate.name,
         gateNumber: trial.gate.gate,
         reason: trial.reason,
         attempt,
+        ...(rates === undefined ? {} : { rates }),
       };
       // The rejected file is the next attempt's baseline, not the round's opening
       // strategy: an attempt that failed FAIR by 0.06 is a much better starting
@@ -290,19 +317,40 @@ async function runTrial(
   into: GateResult[],
 ): Promise<TrialOutcome> {
   const opts = input.harnessOpts ?? {};
-  const matches = opts.gate3?.matches ?? DEFAULT_MATCHES;
+  // `round` and `mimicSummary` are the loop's, not the caller's: ADAPTED is only
+  // measured if the Mimic is built from *this* player's replay (spec §6.2).
+  const gate3: Gate3Options = { ...(opts.gate3 ?? {}), round: input.round, mimicSummary: input.summary };
+  // The denominator the meter is labelled with, known before the first match.
+  const total = gate3Plan(gate3).total;
+  const now = input.now ?? ((): number => Date.now());
 
   for (const gate of ALL_GATES) {
+    let progressAt = 0;
+    let reported = 0;
+
     if (gate === 3) {
-      emit({ type: 'trial.progress', attempt, matchesDone: 0, matchesTotal: matches, gate: GATE_NAMES[3] });
+      progressAt = now();
+      emit({ type: 'trial.progress', attempt, matchesDone: 0, matchesTotal: total, gate: GATE_NAMES[3] });
     }
 
-    const result = await runOneGate(source, gate, input, opts);
+    // Throttled, but the last callback of a simulation always lands on
+    // `done === total`, so the meter is never left short of the finish.
+    const onProgress = (done: number, matchesTotal: number): void => {
+      const final = done >= matchesTotal;
+      if (!final && now() - progressAt < PROGRESS_MIN_GAP_MS) return;
+      if (done <= reported) return;
+      progressAt = now();
+      reported = done;
+      emit({ type: 'trial.progress', attempt, matchesDone: done, matchesTotal, gate: GATE_NAMES[3] });
+    };
+
+    const result = await runOneGate(source, gate, opts, gate3, gate === 3 ? onProgress : undefined);
     into.push(result);
 
-    if (gate === 3) {
-      const done = countMatches(result) ?? matches;
-      emit({ type: 'trial.progress', attempt, matchesDone: done, matchesTotal: done, gate: GATE_NAMES[3] });
+    // A gate that never simulated (the sandbox broke, the strategy would not
+    // load) reports no progress at all; close the meter rather than leave it.
+    if (gate === 3 && reported < total) {
+      emit({ type: 'trial.progress', attempt, matchesDone: total, matchesTotal: total, gate: GATE_NAMES[3] });
     }
     emit({ type: 'trial.gate', attempt, gate: result });
 
@@ -314,17 +362,16 @@ async function runTrial(
 async function runOneGate(
   source: string,
   gate: GateNumber,
-  input: RewriteInput,
   opts: RunGatesOptions,
+  gate3: Gate3Options,
+  onProgress?: (done: number, total: number) => void,
 ): Promise<GateResult> {
   const single: RunGatesOptions = {
     gates: [gate],
     ...(opts.gate1 === undefined ? {} : { gate1: opts.gate1 }),
     ...(opts.gate2 === undefined ? {} : { gate2: opts.gate2 }),
     ...(opts.gate4 === undefined ? {} : { gate4: opts.gate4 }),
-    // `round` and `mimicSummary` are the loop's, not the caller's: ADAPTED is only
-    // measured if the Mimic is built from *this* player's replay (spec §6.2).
-    gate3: { ...(opts.gate3 ?? {}), round: input.round, mimicSummary: input.summary },
+    gate3: { ...gate3, ...(onProgress === undefined ? {} : { onProgress }) },
   };
   const run = await runGates(source, single);
   const result = run.results[0];
@@ -332,12 +379,36 @@ async function runOneGate(
   return result;
 }
 
-/** Gate 3's `detail.matches`, when it is shaped as expected. */
-function countMatches(result: GateResult): number | undefined {
+/**
+ * Gate 3's per-bot rates, out of its `detail`.
+ *
+ * Read structurally rather than typed: `detail` is `unknown` on `GateResult` by
+ * design (each gate reports what it has), and a shape that drifts should cost the
+ * Coder a table, not the loop an exception. Returns `undefined` for every other
+ * gate, so the retry prompt only grows a table when there is one to show.
+ */
+export function balanceRates(result: GateResult): BotRates | undefined {
+  if (result.gate !== 3) return undefined;
   const detail = result.detail;
   if (typeof detail !== 'object' || detail === null) return undefined;
-  const matches = (detail as { matches?: unknown }).matches;
-  return typeof matches === 'number' ? matches : undefined;
+
+  const node = (key: string): Record<string, unknown> | undefined => {
+    const value = (detail as Record<string, unknown>)[key];
+    return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+  };
+
+  const raw = node('panel')?.['perBot'];
+  const perBot = (Array.isArray(raw) ? raw : [])
+    .map((entry) => {
+      if (typeof entry !== 'object' || entry === null) return undefined;
+      const { name, winRate } = entry as { name?: unknown; winRate?: unknown };
+      return typeof name === 'string' && typeof winRate === 'number' ? { name, winRate } : undefined;
+    })
+    .filter((entry): entry is { name: string; winRate: number } => entry !== undefined);
+  if (perBot.length === 0) return undefined;
+
+  const mimic = node('mimic')?.['winRate'];
+  return { perBot, ...(typeof mimic === 'number' ? { mimic } : {}) };
 }
 
 // ------------------------------------------------------------------ meta, diff

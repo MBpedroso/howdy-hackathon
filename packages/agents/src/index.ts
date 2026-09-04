@@ -56,7 +56,9 @@ export {
   cellCentre,
   coderPrompt,
   contractDoc,
+  harnessHints,
   harnessRules,
+  renderBotRates,
   markdownSection,
   promptSize,
   renderDashRose,
@@ -69,7 +71,9 @@ export {
   stripBlockComments,
   type Analysis,
   type AnalystContext,
+  type BotRates,
   type CoderContext,
+  type CoderRejection,
   type PlayerArchetype,
   type Prompt,
   type RenderSummaryOptions,
@@ -77,8 +81,11 @@ export {
 
 export {
   ANALYST_MAX_TOKENS,
+  analysisGate,
+  extractFencedJson,
   extractJsonObject,
   parseAnalysis,
+  proseSentences,
   runAnalyst,
   type AnalystInput,
   type AnalystOptions,
@@ -96,9 +103,13 @@ export {
   type CoderResult,
 } from './coder.ts';
 
+export { extractMeta } from './meta.ts';
+
 export {
   DEADLINE_MS,
   MAX_ATTEMPTS,
+  PROGRESS_MIN_GAP_MS,
+  balanceRates,
   readMeta,
   recorder,
   rewrite,

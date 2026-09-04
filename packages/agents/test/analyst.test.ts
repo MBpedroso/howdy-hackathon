@@ -3,8 +3,19 @@
  * one retry when it does not.
  */
 import { describe, expect, it } from 'vitest';
-import { extractJsonObject, mockProvider, parseAnalysis, runAnalyst } from '../src/index.ts';
-import { cannedSummary } from './helpers.ts';
+import {
+  analysisGate,
+  extractFencedJson,
+  extractJsonObject,
+  mockProvider,
+  parseAnalysis,
+  proseSentences,
+  runAnalyst,
+} from '../src/index.ts';
+import { asAnalystReply, cannedSummary } from './helpers.ts';
+
+/** The reply the prompt actually asks for: prose, then a fenced JSON block. */
+const PROSE = 'Player camped the bottom-left corner. Attacked only during my slam cooldown. Dashed 11 times, always left.';
 
 const GOOD = {
   observations: ['Lived in cell 63 for 93% of the round.', 'Never dashed.', 'Fired 163 shots.'],
@@ -80,6 +91,109 @@ describe('parseAnalysis', () => {
     const result = parseAnalysis('{"observations":["a"],"playerArchetype":');
     expect(result.ok).toBe(false);
   });
+
+  it('accepts the two-part reply the prompt asks for', () => {
+    const result = parseAnalysis(asAnalystReply(GOOD));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.analysis.observations).toEqual(GOOD.observations);
+      expect(result.analysis.playerArchetype).toBe('camper');
+    }
+  });
+
+  it('falls back to the prose when the JSON block omits observations', () => {
+    // The player already watched these sentences; the Coder should read the same
+    // ones rather than the loop spending 4 s on a retry for a missing key.
+    const reply = `${PROSE}\n\n\`\`\`json\n{"playerArchetype":"camper","counterPlan":"Slam the corner."}\n\`\`\``;
+    const result = parseAnalysis(reply);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.analysis.observations).toEqual([
+        'Player camped the bottom-left corner.',
+        'Attacked only during my slam cooldown.',
+        'Dashed 11 times, always left.',
+      ]);
+    }
+  });
+
+  it('prefers the block\'s observations over the prose when it has both', () => {
+    const reply = `Some looser prose about the round.\n\n\`\`\`json\n${JSON.stringify(GOOD)}\n\`\`\``;
+    const result = parseAnalysis(reply);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.analysis.observations).toEqual(GOOD.observations);
+  });
+
+  it('fails only when there is neither prose nor observations', () => {
+    const bare = `\`\`\`json\n{"playerArchetype":"camper","counterPlan":"x"}\n\`\`\``;
+    const result = parseAnalysis(bare);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('no observations');
+  });
+});
+
+describe('the prose half', () => {
+  it('splits the streamed prose into sentences', () => {
+    expect(proseSentences(PROSE)).toEqual([
+      'Player camped the bottom-left corner.',
+      'Attacked only during my slam cooldown.',
+      'Dashed 11 times, always left.',
+    ]);
+  });
+
+  it('stops at the fence, so the JSON never becomes an observation', () => {
+    const reply = `${PROSE}\n\n\`\`\`json\n{"playerArchetype":"camper"}\n\`\`\`\n`;
+    const sentences = proseSentences(reply);
+    expect(sentences).toHaveLength(3);
+    expect(sentences.join(' ')).not.toContain('playerArchetype');
+  });
+
+  it('caps at 6 sentences and drops fragments', () => {
+    const many = Array.from({ length: 9 }, (_, i) => `Sentence ${i}.`).join(' ');
+    expect(proseSentences(many)).toHaveLength(6);
+    expect(proseSentences('')).toEqual([]);
+    expect(proseSentences('   \n  ')).toEqual([]);
+    // A bulleted list is prose too; the marker is not part of the observation.
+    expect(proseSentences('- Camped the corner.')).toEqual(['Camped the corner.']);
+  });
+
+  it('prefers the fenced block over a brace in the prose', () => {
+    const reply = `Lived in cell {56} for 93% of the round.\n\n\`\`\`json\n{"a":1}\n\`\`\``;
+    expect(extractFencedJson(reply)).toBe('{"a":1}');
+    expect(extractFencedJson('no fence here {"a":1}')).toBeUndefined();
+  });
+});
+
+describe('analysisGate', () => {
+  const collect = (chunks: readonly string[]): string => {
+    const out: string[] = [];
+    const gate = analysisGate((delta) => void out.push(delta));
+    for (const chunk of chunks) gate(chunk);
+    return out.join('');
+  };
+
+  it('forwards the prose and drops everything from the fence on', () => {
+    expect(collect([`${PROSE}\n\n\`\`\`json\n{"a":1}\n\`\`\`\n`])).toBe(`${PROSE}\n\n`);
+  });
+
+  it('holds back a fence that arrives split across deltas', () => {
+    // The failure this prevents: a lone backtick flashing on screen a moment
+    // before the gate closes.
+    expect(collect(['Camped. ', 'Dashed.\n\n`', '``json\n{"a":1}'])).toBe('Camped. Dashed.\n\n');
+    expect(collect(['Camped.', '`', '`', '`json\n{}'])).toBe('Camped.');
+  });
+
+  it('stays closed, so a trailing sentence after the block is not typed out', () => {
+    expect(collect([`Camped.\n\`\`\`json\n{}\n\`\`\`\n`, 'Let me know if you want more.'])).toBe('Camped.\n');
+  });
+
+  it('passes a fenceless reply through unchanged', () => {
+    // A model that answers with bare JSON is a degraded case, not a broken one:
+    // the player sees the JSON, and `parseAnalysis` still gets its object.
+    const json = '{"observations":["a"],"playerArchetype":"camper","counterPlan":"x"}';
+    expect(collect([json])).toBe(json);
+    // A backtick in the prose is not a fence.
+    expect(collect(['Camped in `cell 56`. Done.'])).toBe('Camped in `cell 56`. Done.');
+  });
 });
 
 describe('runAnalyst', () => {
@@ -97,6 +211,23 @@ describe('runAnalyst', () => {
     expect(deltas.join('')).toBe(JSON.stringify(GOOD));
     expect(result.promptChars).toBeGreaterThan(1000);
     expect(result.usage.outputTokens).toBeGreaterThan(0);
+  });
+
+  it('streams the prose, withholds the JSON block, and keeps the whole reply', async () => {
+    const reply = asAnalystReply(GOOD);
+    const provider = mockProvider([reply], { chunkSize: 12 });
+    const deltas: string[] = [];
+    const result = await runAnalyst({ summary, round: 1 }, provider, { onDelta: (d) => deltas.push(d) });
+
+    const streamed = deltas.join('');
+    // What the player sees: sentences, no fence, no field names.
+    expect(streamed).toContain(GOOD.observations[0]);
+    expect(streamed).not.toContain('```');
+    expect(streamed).not.toContain('"counterPlan"');
+    // What the judges get: the reply, whole.
+    expect(result.raw).toBe(reply);
+    expect(result.raw).toContain('```json');
+    expect(result.observations).toEqual(GOOD.observations);
   });
 
   it('retries once with the parse error appended, then succeeds', async () => {

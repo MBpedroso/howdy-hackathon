@@ -9,7 +9,7 @@
  * 2×2 grid with the two *text* beats (Analysis, Rewrite) in the wider right column
  * at ~700 px / ~95 columns, and the two *picture* beats (Replay, Trial) on the left.
  *
- * Nothing here animates on a timer except the Gate 3 meter and the two-frame beat
+ * Nothing here animates on a timer except the two-frame beat
  * pulse: a screen that is constantly moving reads as decoration, and the whole claim
  * of this screen is that what moves is real work happening.
  */
@@ -341,6 +341,10 @@
   height: 100%;
   width: 0;
   background: var(--slam);
+  /* Progress arrives in batches of ~10 matches; the transition is what turns a
+     stepped readout into a bar that moves. Short enough that the width on screen
+     is never more than a fraction of a second behind the harness. */
+  transition: width 160ms linear;
 }
 .il-meter.done i { background: var(--player); }
 

@@ -24,16 +24,19 @@
  * what ships (spec §6.3).
  */
 import { staticCheck, type Violation } from '@rematch/contract';
-import type { BalanceRound, GateName } from '@rematch/harness';
-import { coderPrompt, promptSize, type Analysis } from './context/prompts.ts';
+import type { BalanceRound } from '@rematch/harness';
+import { coderPrompt, promptSize, type Analysis, type CoderRejection } from './context/prompts.ts';
 import { collect, type LLMProvider, type LLMUsage } from './provider.ts';
 
 export type CoderInput = {
   analysis: Analysis;
   prevSource: string;
   round: BalanceRound;
-  /** The harness rejection this attempt is answering, verbatim. */
-  rejection?: { gate: GateName; gateNumber: number; reason: string; attempt: number };
+  /**
+   * The harness rejection this attempt is answering, verbatim — plus, for a Gate 3
+   * rejection, the per-bot rates the loop read out of `GateResult.detail`.
+   */
+  rejection?: CoderRejection;
 };
 
 export type CoderResult = {

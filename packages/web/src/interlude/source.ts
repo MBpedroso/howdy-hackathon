@@ -37,7 +37,7 @@
  * data: {"type":"replay","summary":{...},"round":2}
  *
  * event: analysis.delta
- * data: {"type":"analysis.delta","delta":"{\n  \"observations\""}
+ * data: {"type":"analysis.delta","delta":"Player camped the bottom-left corner."}
  *
  * ...
  * event: done
@@ -47,6 +47,12 @@
  * - The `event:` name MUST equal the payload's `type`. The client reads `type` from
  *   the JSON and ignores the name; the name is there so `curl -N` is readable and so
  *   a proxy's logs mean something.
+ * - `analysis.delta` is the Analyst's **prose**; the JSON block it ends with is
+ *   withheld from the stream and arrives whole on `analysis.done.raw`.
+ * - `rewrite.done` carries the attempt's own `meta`, parsed from its source, so the
+ *   diff can be labelled with the boss's name before any gate has run.
+ * - `trial.progress` is measured: `matchesDone: 0`, then one event per batch of
+ *   finished matches, then the total. The meter renders those numbers directly.
  * - `data:` is one JSON object. Multi-line `data:` is parsed (the parser joins with
  *   `\n`) but is not required.
  * - The stream MUST end with a `done` frame, and `done` MUST be last. Everything the
