@@ -118,6 +118,12 @@ importers:
       '@rematch/agents':
         specifier: workspace:*
         version: link:../agents
+      '@rematch/contract':
+        specifier: workspace:*
+        version: link:../contract
+      '@rematch/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@rematch/harness':
         specifier: workspace:*
         version: link:../harness

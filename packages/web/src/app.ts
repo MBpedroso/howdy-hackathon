@@ -6,12 +6,18 @@
  *   won  and round = 5  ->  the win screen
  *   lost or timed out   ->  the game-over screen, naming the strategy that beat you
  *
- * `onRoundWon` is the interlude's seam (spec §2.2). The default handler shows the
- * "Round N cleared" screen and wires its button to `next()`; when the interlude ships
- * it replaces that handler, receives the same `ReplaySummary` (the only thing the
- * Analyst agent is ever shown), and calls the same `next()` when the harness has
- * approved a strategy. Round 2+ then differs in one respect only: `nextSource` comes
- * back from the server instead of from the bundle.
+ * `onRoundWon` is the interlude's seam (spec §2.2), and the interlude now sits in it:
+ * `createInterludeHandler` (see `src/interlude/`) receives the same `ReplaySummary`
+ * the Analyst agent is shown, plays the four beats from a stream of `RewriteEvent`s,
+ * and calls the same `next(source)` with whatever the harness approved. Round 2+
+ * differs from Round 1 in one respect only: `nextSource` comes from the stream
+ * instead of from the bundle.
+ *
+ * The pre-interlude "Round N cleared" screen is still here, reachable with
+ * `?interlude=0`. It is not dead code kept for sentiment: it is how the round-won
+ * *outcome path* is tested without a 25-second overlay in the way (see
+ * `e2e/controls.spec.ts`), and it is the screen to fall back to if the interlude
+ * itself ever fails to construct.
  *
  * Nothing else in the client knows a round can end.
  */
@@ -23,6 +29,7 @@ import { createLoop, logInputProvider, type Loop } from './game/loop.ts';
 import { createRound, type Round } from './game/round.ts';
 import { formatSeed, resolveSessionSeed, roundSeed } from './game/seeds.ts';
 import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy.ts';
+import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
 import { createRenderer, type Renderer } from './render/renderer.ts';
 import { createHud, type Hud } from './ui/hud.ts';
 import { createScreens, type Screens } from './ui/screens.ts';
@@ -59,7 +66,10 @@ export type AppOptions = {
   screen: HTMLElement;
   /** Defaults to `location.search`. */
   search?: string;
-  /** Replaced by the interlude. Defaults to the "Round N cleared" screen. */
+  /**
+   * Defaults to the interlude (spec §2.2), or to the "Round N cleared" screen when
+   * the URL says `?interlude=0`. Supplying one overrides both.
+   */
   onRoundWon?: RoundWonHandler;
 };
 
@@ -79,6 +89,12 @@ export type DebugApi = {
   readonly round: number;
   readonly screen: string | null;
   readonly ready: boolean;
+  /**
+   * The live interlude, or `null` when none is on screen. Spec §2.2 is the one part
+   * of the product that cannot be asserted from the game state, so the e2e suite
+   * reads the events it received and the state it derived from them.
+   */
+  readonly interlude: InterludeDebug | null;
   hash(): string | null;
   summary(): ReplaySummary | null;
   stats(): ReturnType<Loop['stats']> | null;
@@ -102,6 +118,8 @@ export function createApp(options: AppOptions): App {
   const strategyParam = params.get('strategy');
   const autostart = params.get('autostart') === '1' || params.get('autostart') === 'true';
   const startAt = Math.min(MAX_ROUNDS, Math.max(1, Number(params.get('round') ?? 1) || 1));
+  // `?interlude=0` keeps the pre-interlude round-won screen. See the header.
+  const interludeEnabled = params.get('interlude') !== '0';
 
   const renderer: Renderer = createRenderer(options.canvas);
   const hud: Hud = createHud(options.hud);
@@ -111,6 +129,8 @@ export function createApp(options: AppOptions): App {
   let round: Round | null = null;
   let loop: Loop | null = null;
   let booted = false;
+  /** Published through `debug.interlude` while an interlude is on screen. */
+  let interludeDebug: InterludeDebug | null = null;
 
   function fitStage(): void {
     const viewport = renderer.resize();
@@ -227,11 +247,10 @@ export function createApp(options: AppOptions): App {
       next: (nextSource?: string) => startRound(finished.index + 1, nextSource),
     };
 
-    const handler = options.onRoundWon ?? defaultRoundWon;
-    await handler(context);
+    await roundWon(context);
   }
 
-  /** No interlude yet: show the hash and fight the same strategy on a new seed. */
+  /** `?interlude=0`: show the hash and fight the same strategy on a new seed. */
   function defaultRoundWon(context: RoundWonContext): void {
     screens.roundWon({
       round: context.round,
@@ -243,6 +262,25 @@ export function createApp(options: AppOptions): App {
       },
     });
   }
+
+  /**
+   * The round-won handler, chosen once.
+   *
+   * `createInterludeHandler` only builds a closure: nothing is mounted, no source is
+   * resolved and `location` is not read until a round is actually won, so choosing
+   * the handler up front costs nothing and keeps the decision in one place.
+   * `onDebug` is the only wire back out — `app.ts` does not otherwise know what an
+   * interlude contains.
+   */
+  const roundWon: RoundWonHandler =
+    options.onRoundWon ??
+    (interludeEnabled
+      ? createInterludeHandler({
+          onDebug: (debug) => {
+            interludeDebug = debug;
+          },
+        })
+      : defaultRoundWon);
 
   const debug: DebugApi = {
     get state(): GameState | null {
@@ -265,6 +303,9 @@ export function createApp(options: AppOptions): App {
     },
     get ready(): boolean {
       return booted;
+    },
+    get interlude(): InterludeDebug | null {
+      return interludeDebug;
     },
     hash(): string | null {
       return round?.hash() ?? null;

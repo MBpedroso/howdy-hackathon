@@ -1,0 +1,218 @@
+/**
+ * The interlude — spec §2.2, AC 5, and the reason the whole project exists.
+ *
+ * A scripted player wins Round 1 (the same recorded input log the determinism spec
+ * uses), the interlude takes the screen, all four beats fill with real streamed
+ * content, one attempt is visibly rejected by Gate 3 and the next is approved, and
+ * Round 2 starts against the strategy that was approved — proved by the HUD naming
+ * it, which is only possible if the source really loaded through QuickJS.
+ *
+ * The source here is `?agent=mock`: a scripted, timed replay of one realistic run,
+ * whose "approved" strategy is `packages/harness/test/fixtures/round2-candidate.js`
+ * — a strategy the harness's balance suite actually measures in the round-2 band. So
+ * this test is about the interlude, not about the model: it must pass with no API
+ * key, no server and no network, which is also how the demo is expected to survive a
+ * conference wifi.
+ *
+ * `?speed=20` compresses the mock's ~25 s to ~1.3 s. `?autofight=0` holds the
+ * finished screen open so the assertions run before it hands over.
+ */
+import { expect, test, type Page } from '@playwright/test';
+
+import { armReplay, loadFixture, waitForRound } from './helpers.ts';
+
+const fixture = loadFixture();
+const ARTIFACTS = new URL('../../../artifacts/web/', import.meta.url).pathname;
+
+/** A projector, which is what the layout was designed against (see interlude.css). */
+test.use({ viewport: { width: 1280, height: 800 } });
+
+/** Win Round 1 by replaying the recorded log, then wait for the interlude to mount. */
+async function winRound1(page: Page, query: string): Promise<void> {
+  await page.goto(`/?seed=${fixture.sessionSeed}&autostart=1&${query}`);
+  await waitForRound(page);
+  await armReplay(page, fixture.log);
+  await page.evaluate(() => window.__rematch?.fastForward());
+  await expect(page.getByTestId('il-root')).toBeVisible();
+}
+
+/** Wait until the interlude has received an event satisfying `predicate`. */
+async function waitForEvent(page: Page, type: string): Promise<void> {
+  await page.waitForFunction(
+    (want) => (window.__rematch?.interlude?.events ?? []).some((e) => e.type === want),
+    type,
+    { timeout: 30_000 },
+  );
+}
+
+test('plays all four beats, shows a rejection and an approval, and starts round 2', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (err) => errors.push(err.message));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text());
+  });
+
+  await winRound1(page, 'agent=mock&speed=20&autofight=0');
+
+  const root = page.getByTestId('il-root');
+  await expect(page.getByTestId('il-kind')).toHaveText('mock');
+  await expect(page.getByTestId('il-rounds')).toContainText('Round 1 → 2');
+
+  // Wait for the run to finish. Everything below is asserted on the finished
+  // screen precisely because nothing on it is allowed to clear.
+  await page.waitForFunction(() => window.__rematch?.interlude?.state.done === true, undefined, { timeout: 30_000 });
+
+  // ---------------------------------------------------------------- beat 1
+  // The replay figures come from the summary the Analyst is given, so a caption
+  // with this round's real numbers proves the panel was fed the real thing.
+  await expect(page.getByTestId('il-replay-caption')).toContainText('shots');
+  await expect(page.getByTestId('il-replay-caption')).toContainText('dashes');
+  const drew = await page.evaluate(() => {
+    // A canvas with content: at least one pixel that is not the panel background.
+    const canvas = document.querySelector<HTMLCanvasElement>('#il-heat');
+    const ctx = canvas?.getContext('2d') ?? null;
+    if (canvas === null || ctx === null) return false;
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const first = [data[0], data[1], data[2]].join();
+    for (let i = 4; i < data.length; i += 4) {
+      if ([data[i], data[i + 1], data[i + 2]].join() !== first) return true;
+    }
+    return false;
+  });
+  expect(drew, 'the heat grid rendered nothing but one flat colour').toBe(true);
+
+  // ---------------------------------------------------------------- beat 2
+  const analysis = page.getByTestId('il-analysis-structured');
+  await expect(analysis).toBeVisible();
+  await expect(analysis.locator('.il-obs li')).not.toHaveCount(0);
+  await expect(analysis.locator('.il-tag')).toContainText('archetype');
+  await expect(analysis.locator('.il-plan')).toContainText('counter-plan');
+  // The raw model stream is still there, not replaced by the tidy version.
+  expect((await page.getByTestId('il-analysis-stream').textContent())?.length ?? 0).toBeGreaterThan(200);
+
+  // ---------------------------------------------------------------- beat 3
+  const diff = page.getByTestId('il-diff');
+  await expect(diff).toBeVisible();
+  await expect(diff).toContainText('+++ strategy.js (attempt 2)');
+  await expect(diff.locator('.add')).not.toHaveCount(0);
+  await expect(diff.locator('.del')).not.toHaveCount(0);
+  await expect(page.getByTestId('il-note-rewrite')).toContainText('attempt 2 / 4');
+  await expect(page.getByTestId('il-note-rewrite')).toContainText('Warden');
+
+  // ---------------------------------------------------------------- beat 4
+  const gates = page.getByTestId('il-gates');
+  // Attempt 1 stopped at Gate 3; attempt 2 ran all four. Seven rows, and the
+  // rejected one is still on screen after the approval.
+  await expect(gates.locator('.il-gate')).toHaveCount(7);
+  await expect(gates).toContainText('REJECTED');
+  await expect(gates.locator('[data-ok="false"]')).toHaveCount(1);
+  await expect(gates.locator('[data-ok="false"]')).toContainText('Gate 3 balance');
+
+  // Spec §2.2: "the player must be able to read every rejection."
+  const rejections = page.getByTestId('il-rejections');
+  await expect(rejections.locator('li')).toHaveCount(1);
+  await expect(rejections).toContainText('rejected by Gate 3 balance');
+  await expect(rejections).toContainText('0.91 vs panel');
+  await expect(rejections).toContainText('too hard');
+  await expect(rejections).toContainText('0.41 vs Mimic');
+
+  await expect(page.getByTestId('il-verdict')).toContainText('APPROVED');
+  await expect(page.getByTestId('il-verdict')).toContainText('52%');
+  await expect(page.getByTestId('il-verdict')).toHaveAttribute('data-kind', 'approved');
+  // The Gate 3 meter finished, rather than being left mid-estimate.
+  await expect(page.getByTestId('il-meter')).toHaveClass(/done/);
+  // No AC 5 fallback on the happy path.
+  await expect(page.getByTestId('il-banner')).toBeHidden();
+
+  // The whole run, inside AC 5's budget even before the 20× speed-up is undone.
+  const state = await page.evaluate(() => window.__rematch?.interlude?.state);
+  expect(state?.rejections).toHaveLength(1);
+  expect(state?.approved).toBe(true);
+  expect(state?.strategyName).toBe('Warden');
+  expect(state?.phase).toBe('done');
+  expect(state?.analysisChars ?? 0).toBeGreaterThan(200);
+  expect(state?.codeChars ?? 0).toBeGreaterThan(1000);
+  expect(state?.elapsedMs ?? 1e9).toBeLessThan(45_000);
+
+  await root.screenshot({ path: `${ARTIFACTS}interlude-approved.png` });
+
+  // -------------------------------------------------- and then: round 2
+  await page.getByTestId('il-fight').click();
+  await expect(page.getByTestId('il-root')).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
+
+  // The payoff, and the only assertion that cannot be faked: the HUD reads the
+  // strategy name out of the loaded QuickJS module, so Round 2 really is being
+  // driven by the source the interlude said was approved.
+  await expect(page.locator('.hud-strategy .name')).toHaveText('Warden');
+  await expect(page.locator('.hud-round')).toContainText('Round 2');
+  await expect(page.locator('.hud-strategy .rationale')).toContainText('where you live');
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.state?.tick ?? 0)).toBeGreaterThan(30);
+
+  await page.locator('#stage').screenshot({ path: `${ARTIFACTS}interlude-round2-boss.png` });
+
+  expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+});
+
+test('each beat is legible on its own — the demo screenshots', async ({ page }) => {
+  // Slower than the assertion test so each beat is caught mid-flight rather than
+  // in its finished state: these five images are the demo evidence spec §7 asks
+  // for, so they have to show the screen as a player sees it.
+  await winRound1(page, 'agent=mock&speed=3&autofight=0');
+  const root = page.getByTestId('il-root');
+
+  await waitForEvent(page, 'analysis.delta');
+  await root.screenshot({ path: `${ARTIFACTS}interlude-1-replay.png` });
+
+  await waitForEvent(page, 'analysis.done');
+  await root.screenshot({ path: `${ARTIFACTS}interlude-2-analysis.png` });
+
+  await waitForEvent(page, 'rewrite.done');
+  await root.screenshot({ path: `${ARTIFACTS}interlude-3-rewrite.png` });
+
+  // Mid-Gate 3 of attempt 1: the meter is moving on the estimate and no verdict
+  // exists yet. This is the frame that shows "waiting is content".
+  await page.waitForFunction(
+    () => (window.__rematch?.interlude?.events ?? []).some((e) => e.type === 'trial.progress'),
+    undefined,
+    { timeout: 30_000 },
+  );
+  await root.screenshot({ path: `${ARTIFACTS}interlude-4-trial.png` });
+
+  await page.waitForFunction(
+    () => (window.__rematch?.interlude?.state.rejections.length ?? 0) > 0,
+    undefined,
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId('il-verdict')).toContainText('REJECTED');
+  await root.screenshot({ path: `${ARTIFACTS}interlude-5-rejected.png` });
+
+  // The rejection is fed back with no human in the loop, and the screen says so.
+  await page.waitForFunction(
+    () => (window.__rematch?.interlude?.events ?? []).some((e) => e.type === 'rewrite.delta' && e.attempt === 2),
+    undefined,
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId('il-status')).toContainText('no human in the loop');
+  await root.screenshot({ path: `${ARTIFACTS}interlude-6-rewriting.png` });
+});
+
+test('the 45-second deadline shows the AC 5 fallback instead of hanging', async ({ page }) => {
+  // A source that never finishes: the mock at 1/50 speed will still be streaming
+  // the Analyst when the deadline fires. Nothing here stubs the UI — the banner,
+  // the verdict line and the FIGHT button are the real ones.
+  await winRound1(page, 'agent=mock&speed=0.02&deadline=1200&autofight=0');
+
+  const banner = page.getByTestId('il-banner');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  // Spec AC 5's wording.
+  await expect(banner).toContainText('Using a pre-approved strategy');
+  await expect(banner).toContainText('the coder timed out');
+  await expect(page.getByTestId('il-verdict')).toContainText('NO APPROVAL');
+
+  // The round still starts. A blank screen is the one outcome that is not allowed.
+  await expect(page.getByTestId('il-fight')).toBeVisible();
+  await page.getByTestId('il-fight').click();
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
+  await expect(page.locator('.hud-strategy .name')).toHaveText('Hound');
+});

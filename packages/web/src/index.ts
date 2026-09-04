@@ -16,3 +16,18 @@ export { createRenderer, type Renderer } from './render/renderer.ts';
 export { clientToArena, computeViewport, fitSquare, type Viewport } from './render/viewport.ts';
 export { createHud, formatClock, type Hud } from './ui/hud.ts';
 export { createScreens, type Screens } from './ui/screens.ts';
+export {
+  CLIENT_FALLBACK_STRATEGY,
+  createInterludeHandler,
+  createInterludeUi,
+  INTERLUDE_DEADLINE_MS,
+  mockSource,
+  resolveSource,
+  sseSource,
+  type InterludeDebug,
+  type InterludeSource,
+  type InterludeState,
+  type RewriteEvent,
+  type RewriteRequest,
+  type RewriteResult,
+} from './interlude/index.ts';

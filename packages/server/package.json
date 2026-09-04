@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "HTTP + SSE over the rewrite loop, the fallback pool, and the rate limit (spec §5).",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -11,10 +12,14 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "dev": "node --experimental-strip-types --env-file-if-exists=../../.env src/main.ts",
+    "start": "node --experimental-strip-types --env-file-if-exists=../../.env src/main.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@rematch/agents": "workspace:*",
+    "@rematch/contract": "workspace:*",
+    "@rematch/engine": "workspace:*",
     "@rematch/harness": "workspace:*"
   },
   "devDependencies": {

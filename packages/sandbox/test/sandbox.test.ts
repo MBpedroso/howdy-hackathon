@@ -161,7 +161,11 @@ describe('memory budget', () => {
       strategy('for (let i = 0; i < 5000; i++) mem.a.push(i); return { type: "idle" };', {
         initBody: 'return { a: [] };',
       }),
-      { memoryCheckEvery: 1 },
+      // A generous time budget, so the *memory* failure is the only one that can
+      // fire. 5000 `push`es is nowhere near an infinite loop, but it is more than
+      // 2 ms of work when the test process is descheduled — which it is, under
+      // `pnpm -r`'s parallelism — and then this asserts on `timeout` instead.
+      { memoryCheckEvery: 1, decideBudgetMs: 1000 },
     );
     try {
       runner.init(1);

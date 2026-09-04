@@ -76,7 +76,11 @@ test('WASD moves, the mouse aims, click shoots, Space dashes', async ({ page }) 
 });
 
 test('the round-won screen appears with a replay hash and starts the next round', async ({ page }) => {
-  await page.goto('/?seed=424242&autostart=1');
+  // `?interlude=0` keeps the pre-interlude round-won screen. The outcome path — win
+  // detected, summary and hash produced, `next()` starting round 2 on a fresh seed —
+  // is what this test is about, and it is the same code the interlude sits on top of.
+  // The interlude's own version of this moment is `e2e/interlude.spec.ts`.
+  await page.goto('/?seed=424242&autostart=1&interlude=0');
   await waitForRound(page);
 
   // Rather than beating the boss by hand, replay a won round: the outcome path (and

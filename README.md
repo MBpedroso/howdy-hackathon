@@ -12,9 +12,9 @@ packages resolve to TypeScript source.
 | `@rematch/contract` | **implemented** | Boss Contract types, action validator, Gate 1 static check. Zero workspace deps. |
 | `@rematch/sandbox` | **implemented** | QuickJS containment for generated strategies: no host bindings, seeded `rand`, 2 ms deadline, 64 MB heap |
 | `@rematch/engine` | in progress | Deterministic 60 Hz simulation, seeded PRNG |
-| `@rematch/harness` | **gates 1-2** | The four gates + CLI. Gates 3 (balance) and 4 (perf) are stubs |
-| `@rematch/agents` | placeholder | Analyst + Coder prompts, rewrite loop |
-| `@rematch/server` | placeholder | HTTP + SSE, fallback pool |
+| `@rematch/harness` | **implemented** | The four gates + CLI. Gate 1 static, Gate 2 fuzz, Gate 3 balance (worker-parallel sim vs bot panel + Mimic), Gate 4 perf |
+| `@rematch/agents` | **implemented** | Analyst + Coder prompts, context assembly, and the autonomous rewrite loop: four attempts under the harness's back pressure, no human message anywhere (§6.3) |
+| `@rematch/server` | **implemented** | `POST /api/rewrite` over SSE, `/api/health`, `/api/fallback/:round`, the pre-approved fallback pool, deadline + rate limit + CORS |
 | `@rematch/web` | placeholder | Vite + Canvas renderer + interlude UI |
 
 Dependency direction differs from spec §5.1 on one point, deliberately: `contract` has
@@ -34,6 +34,8 @@ keep dependency-free on its own.
 | Command | What it does |
 |---|---|
 | `pnpm install` | Install the workspace |
+| `pnpm dev` | The game (Vite, 5173) and the API server (8787) together; one Ctrl-C stops both |
+| `pnpm dev:web` / `pnpm dev:server` | One half of `pnpm dev` on its own |
 | `pnpm typecheck` | `tsc` every package |
 | `pnpm test` | Every package's tests |
 | `pnpm test:contract` | Contract validator + static-check suites |

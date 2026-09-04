@@ -1,0 +1,456 @@
+/*
+ * The interlude's chrome. CSS only — no images, no gradients that need decoding
+ * (spec §2.3) — and the same variables `src/ui/styles.css` already defines, so the
+ * interlude and the fight are one colour language.
+ *
+ * Sized for a 1280×800 projector, which is the constraint that decided the layout:
+ * four beats in one row would give the code panel ~300 px and about 45 monospace
+ * columns, which is not a diff anybody can read from the back of a room. So it is a
+ * 2×2 grid with the two *text* beats (Analysis, Rewrite) in the wider right column
+ * at ~700 px / ~95 columns, and the two *picture* beats (Replay, Trial) on the left.
+ *
+ * Nothing here animates on a timer except the Gate 3 meter and the two-frame beat
+ * pulse: a screen that is constantly moving reads as decoration, and the whole claim
+ * of this screen is that what moves is real work happening.
+ */
+
+#interlude {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  /* The interlude is the product, not an overlay on it: text must be selectable
+     (a judge copying a rejection reason) even though the fight forbids it. */
+  user-select: text;
+  -webkit-user-select: text;
+  animation: il-in 180ms ease-out;
+}
+
+@keyframes il-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ------------------------------------------------------------------ header */
+
+.il-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.il-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--boss);
+  white-space: nowrap;
+}
+
+.il-rounds {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.il-rounds b { color: var(--text); font-weight: 700; }
+
+.il-beats { display: flex; gap: 6px; margin-left: auto; }
+
+.il-chip {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.il-chip[data-state='active'] { color: var(--void); background: var(--player); border-color: var(--player); font-weight: 700; }
+.il-chip[data-state='done'] { color: var(--player); border-color: var(--player); }
+
+.il-clock {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  min-width: 74px;
+  text-align: right;
+}
+.il-clock.over { color: var(--slam); }
+
+.il-kind {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 2px;
+}
+.il-kind[data-kind='mock'] { color: var(--slam); border-color: rgba(255, 209, 102, 0.5); }
+
+/* ------------------------------------------------------------------- grid */
+
+.il-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    'replay analysis'
+    'trial  rewrite';
+  gap: 10px;
+  min-height: 0;
+}
+
+.il-panel {
+  grid-area: var(--area);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid var(--border);
+  background: #0a0c12;
+  padding: 9px 11px 10px;
+}
+.il-panel[data-beat='replay'] { --area: replay; }
+.il-panel[data-beat='analysis'] { --area: analysis; }
+.il-panel[data-beat='rewrite'] { --area: rewrite; }
+.il-panel[data-beat='trial'] { --area: trial; }
+
+/* The beat that is currently receiving events is the one with the accent edge. */
+.il-panel[data-state='idle'] { opacity: 0.5; }
+.il-panel[data-state='active'] { border-color: var(--player); box-shadow: inset 3px 0 0 var(--player); }
+.il-panel[data-state='done'] { box-shadow: inset 3px 0 0 rgba(77, 226, 176, 0.35); }
+
+.il-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(43, 52, 72, 0.6);
+  margin-bottom: 8px;
+}
+.il-panel-head .n {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text-dim);
+}
+.il-panel-head h2 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.il-panel-head .note {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.il-body { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px; }
+
+/*
+ * The Trial panel is the one that can overflow, because a Gate 3 rejection reason
+ * is four wrapped lines and there can be four of them. The verdict and the meter
+ * must never be the things that get pushed off: those are the answer. So the two
+ * lists are the only shrinkable children, and each scrolls inside itself.
+ */
+.il-panel[data-beat='trial'] .il-gates { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.il-panel[data-beat='trial'] .il-meter-wrap,
+.il-panel[data-beat='trial'] .il-verdict { flex: 0 0 auto; }
+.il-panel[data-beat='trial'] .il-rejections { flex: 0 1 auto; max-height: 44%; }
+
+/* ----------------------------------------------------------- beat 1: replay */
+
+.il-replay-figs { display: flex; gap: 12px; align-items: flex-start; }
+.il-fig { display: flex; flex-direction: column; gap: 4px; }
+.il-fig figcaption {
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.il-fig canvas { display: block; border: 1px solid rgba(43, 52, 72, 0.7); }
+#il-heat { width: 168px; height: 168px; }
+#il-rose { width: 120px; height: 120px; }
+#il-strip { width: 100%; height: 46px; }
+
+.il-strip-wrap { display: flex; flex-direction: column; gap: 4px; }
+.il-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+.il-legend span::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  background: currentColor;
+  vertical-align: middle;
+}
+.il-legend .mine { color: var(--player); }
+.il-legend .theirs { color: var(--slam); }
+.il-legend .hits { color: var(--boss); }
+
+.il-caption {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------- beat 2: analysis */
+
+.il-stream {
+  margin: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #a9b4c7;
+  /* The raw model stream is data, not prose: dim it so the structured reading
+     that replaces it is visibly the conclusion. */
+  scrollbar-width: thin;
+}
+.il-stream::after {
+  content: '▌';
+  color: var(--player);
+  animation: il-caret 900ms steps(2, end) infinite;
+}
+.il-stream[data-streaming='false']::after { content: ''; }
+@keyframes il-caret { 50% { opacity: 0; } }
+
+.il-obs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.il-obs li {
+  font-size: 12px;
+  line-height: 1.5;
+  padding-left: 14px;
+  position: relative;
+}
+.il-obs li::before { content: '▸'; position: absolute; left: 0; color: var(--player); }
+
+.il-tag {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--void);
+  background: var(--slam);
+  padding: 3px 9px;
+  border-radius: 2px;
+  font-weight: 700;
+}
+
+.il-plan {
+  font-size: 12px;
+  line-height: 1.55;
+  border-left: 3px solid var(--slam);
+  background: rgba(255, 209, 102, 0.08);
+  padding: 8px 11px;
+  margin: 0;
+}
+.il-plan .lbl {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--slam);
+  margin-bottom: 3px;
+}
+
+.il-structured { display: flex; flex-direction: column; gap: 9px; min-height: 0; overflow: auto; }
+
+/* ---------------------------------------------------------- beat 3: rewrite */
+
+.il-code, .il-diff {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-size: 10.5px;
+  line-height: 1.42;
+  white-space: pre;
+  tab-size: 2;
+}
+.il-code { color: #93a2bb; }
+.il-diff { color: var(--text-dim); }
+.il-diff .add { color: #7ee6a8; background: rgba(77, 226, 176, 0.09); display: block; }
+.il-diff .del { color: #ff8098; background: rgba(255, 77, 109, 0.09); display: block; }
+.il-diff .hunk { color: var(--slam); display: block; margin-top: 4px; }
+.il-diff .file { color: #6f7a8d; display: block; }
+
+.il-strategy-name { color: var(--boss); font-weight: 700; }
+
+/* ------------------------------------------------------------ beat 4: trial */
+
+.il-gates { display: flex; flex-direction: column; gap: 4px; }
+.il-gate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  padding: 3px 0;
+}
+.il-gate .mark { width: 12px; flex: 0 0 12px; }
+.il-gate .name { min-width: 116px; letter-spacing: 0.08em; }
+.il-gate .ms { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.il-gate .why { color: #ff8098; flex: 1; }
+.il-gate[data-ok='true'] .mark { color: var(--player); }
+.il-gate[data-ok='false'] .mark { color: var(--boss); }
+.il-gate[data-ok='pending'] { color: var(--text-dim); }
+.il-gate[data-ok='pending'] .mark { color: var(--slam); }
+
+.il-meter-wrap { display: flex; flex-direction: column; gap: 4px; }
+.il-meter-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.il-meter {
+  height: 9px;
+  border: 1px solid var(--border);
+  background: var(--floor);
+  overflow: hidden;
+}
+.il-meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--slam);
+}
+.il-meter.done i { background: var(--player); }
+
+.il-verdict {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  padding: 6px 0 2px;
+}
+.il-verdict[data-kind='rejected'] { color: var(--boss); }
+.il-verdict[data-kind='approved'] { color: var(--player); }
+.il-verdict[data-kind='working'] { color: var(--slam); font-size: 15px; font-weight: 400; letter-spacing: 0.16em; }
+.il-verdict small { display: block; font-size: 11px; font-weight: 400; letter-spacing: 0.04em; color: var(--text-dim); margin-top: 3px; }
+
+/* The rejection log NEVER clears: spec §2.2 — "the player must be able to read
+   every rejection. Rejections are the proof." */
+.il-rejections {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-top: 1px solid rgba(43, 52, 72, 0.6);
+  padding-top: 7px;
+}
+.il-rejections:empty { border-top: 0; padding-top: 0; }
+.il-rejections li {
+  font-size: 11px;
+  line-height: 1.45;
+  border-left: 3px solid var(--boss);
+  padding: 4px 0 4px 8px;
+  color: #cfd6e3;
+}
+.il-rejections li b {
+  color: var(--boss);
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  display: block;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ footer */
+
+.il-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  min-height: 46px;
+}
+
+.il-banner {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.45;
+  border-left: 3px solid var(--slam);
+  background: rgba(255, 209, 102, 0.1);
+  color: var(--slam);
+  padding: 7px 11px;
+}
+
+.il-status { flex: 1; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.il-status b { color: var(--text); }
+
+.il-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+
+.il-fight {
+  font-family: var(--font);
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--void);
+  background: var(--player);
+  border: 0;
+  border-radius: 4px;
+  padding: 12px 30px;
+  cursor: pointer;
+}
+.il-fight:hover { filter: brightness(1.12); }
+.il-fight:focus-visible { outline: 2px solid var(--slam); outline-offset: 3px; }
+.il-fight .count { font-weight: 400; letter-spacing: 0.1em; opacity: 0.7; }
+
+.il-skip {
+  font-family: var(--font);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.il-skip:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* Narrower than a projector (a laptop in portrait, a resized window): stack the
+   grid rather than let the code panel collapse to 40 columns. */
+@media (max-width: 1080px) {
+  .il-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas: 'replay' 'analysis' 'rewrite' 'trial';
+    overflow: auto;
+  }
+  .il-panel { min-height: 220px; }
+}

@@ -8,7 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @rematch/web dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "pnpm --filter @rematch/web dev",
+    "dev:server": "pnpm --filter @rematch/server dev",
     "build": "pnpm --filter @rematch/web build",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "test": "pnpm -r run test",

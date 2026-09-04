@@ -53,6 +53,18 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    /**
+     * `/api` → `@rematch/server` (`pnpm dev:server`, `PORT`, default 8787).
+     *
+     * The proxy is what keeps dev identical to production: the browser makes a
+     * **same-origin** `POST /api/rewrite`, so the dev path has no preflight and no
+     * CORS, exactly like the deployed URL where the bundle and the API share an
+     * origin. `VITE_API_BASE` overrides the base when the server is elsewhere.
+     *
+     * `127.0.0.1` rather than `localhost`: on an IPv6 machine `localhost` resolves
+     * to `::1`, and the server binds `127.0.0.1`.
+     */
+    proxy: { '/api': `http://127.0.0.1:${process.env['PORT'] ?? 8787}` },
   },
   preview: {
     port: 4173,
