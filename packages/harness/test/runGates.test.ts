@@ -6,11 +6,21 @@
  * the harness is where that is enforced. If Gate 1 failing still let Gate 2 boot
  * a QuickJS runtime, the guarantee would be a comment rather than a control.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { SandboxFactory } from '@rematch/sandbox';
-import { DEFAULT_GATES, formatGateResult, runGates } from '../src/index.ts';
+import { ALL_GATES, DEFAULT_GATES, formatGateResult, gatesFor, runGates } from '../src/index.ts';
 import { main, type CliIo } from '../src/cli.ts';
-import { badFixturePath, goodFixturePath, GOOD_FIXTURES, readBad, readGood } from './helpers.ts';
+import {
+  badFixturePath,
+  candidatePath,
+  goodFixturePath,
+  GOOD_FIXTURES,
+  readBad,
+  readCandidate,
+  readGood,
+  summaryPath,
+} from './helpers.ts';
 
 describe('runGates', () => {
   it('approves every good fixture through gates 1 and 2', async () => {
@@ -24,8 +34,17 @@ describe('runGates', () => {
     }
   });
 
-  it('defaults to gates 1 and 2 — the implemented ones', () => {
+  it('defaults to gates 1 and 2 — the cheap ones', () => {
     expect(DEFAULT_GATES).toEqual([1, 2]);
+    expect(ALL_GATES).toEqual([1, 2, 3, 4]);
+  });
+
+  it('runs all four gates when a round is given, and two when it is not', () => {
+    expect(gatesFor({})).toEqual([1, 2]);
+    expect(gatesFor({ gate3: {} })).toEqual([1, 2]);
+    expect(gatesFor({ gate3: { round: 2 } })).toEqual([1, 2, 3, 4]);
+    // An explicit list always wins: `--gates 3` must run only Gate 3.
+    expect(gatesFor({ gates: [3], gate3: { round: 2 } })).toEqual([3]);
   });
 
   it('stops at gate 1 and never loads the sandbox', async () => {
@@ -66,11 +85,33 @@ describe('runGates', () => {
     expect(result.results.map((r) => r.gate)).toEqual([1, 2]);
   });
 
-  it('reports gate 3 as the stopping point when it is requested', async () => {
-    const result = await runGates(readGood('idle'), { gates: [1, 3] });
+  it('reports gate 3 as the stopping point when the boss is too easy', async () => {
+    const result = await runGates(readGood('idle'), { gates: [1, 3], gate3: { round: 2, matches: 32 } });
     expect(result.approved).toBe(false);
     expect(result.stoppedAt).toBe(3);
-    expect(result.results.at(-1)).toMatchObject({ gate: 3, ok: false, reason: 'not implemented' });
+    expect(result.results.at(-1)).toMatchObject({ gate: 3, ok: false });
+    const last = result.results.at(-1)!;
+    if (!last.ok) expect(last.reason).toMatch(/vs panel — too easy/);
+  }, 60_000);
+
+  it('approves the Round 2 candidate through all four gates, in order', async () => {
+    const result = await runGates(readCandidate(), {
+      gate3: { round: 2, matches: 80, mimicSummary: JSON.parse(readFileSync(summaryPath('camper'), 'utf8')) },
+    });
+    if (!result.approved) {
+      throw new Error(`rejected at gate ${result.stoppedAt}: ${JSON.stringify(result.results.at(-1))}`);
+    }
+    expect(result.results.map((r) => r.gate)).toEqual([1, 2, 3, 4]);
+  }, 60_000);
+
+  it('never reaches the balance simulation when a cheap gate rejects', async () => {
+    // Gate 3 is ~1 s of simulation; a strategy that mentions `Date` must not cost
+    // that (spec §6.3: gates run in order and stop at the first failure).
+    const started = performance.now();
+    const result = await runGates(readBad('uses-date'), { gate3: { round: 2 } });
+    expect(result.stoppedAt).toBe(1);
+    expect(result.results).toHaveLength(1);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('passes options through to gate 2', async () => {
@@ -174,6 +215,39 @@ describe('cli', () => {
     } finally {
       out.restore();
     }
+  });
+
+  it('--round runs all four gates and prints the balance line', async () => {
+    const out = captureStdout();
+    const code = await main(
+      [candidatePath(), '--round', '2', '--matches', '80', '--workers', '3', '--summary', summaryPath('camper')],
+      out.io,
+    );
+    expect(out.text()).toMatch(/✓ Gate 3 balance \d+ms/);
+    expect(out.text()).toMatch(/panel 0\.\d\d \(Camper /);
+    expect(out.text()).toMatch(/Mimic 0\.\d\d/);
+    expect(out.text()).toMatch(/✓ Gate 4 perf \d+ms/);
+    expect(code).toBe(0);
+  }, 60_000);
+
+  it('--round without a summary still checks FAIR, and says ADAPTED was skipped', async () => {
+    const out = captureStdout();
+    const code = await main([goodFixturePath('idle'), '--round', '2', '--matches', '32', '--json'], out.io);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.text()) as {
+      stoppedAt: number;
+      results: Array<{ gate: number; detail?: { adapted?: string } }>;
+    };
+    expect(parsed.stoppedAt).toBe(3);
+    expect(parsed.results.at(-1)?.detail?.adapted).toMatch(/skipped/);
+  }, 60_000);
+
+  it('exits 2 on an unknown round and on an unreadable summary', async () => {
+    const out = captureStdout();
+    expect(await main([goodFixturePath('idle'), '--round', '9'], out.io)).toBe(2);
+    expect(out.err()).toMatch(/--round: '9' is not a round/);
+    expect(await main([goodFixturePath('idle'), '--summary', '/nope/summary.json'], out.io)).toBe(2);
+    expect(out.err()).toMatch(/cannot read the replay summary/);
   });
 
   it('exits 2 on a missing file and on a bad option', async () => {

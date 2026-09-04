@@ -8,6 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev": "pnpm --filter @rematch/web dev",
+    "build": "pnpm --filter @rematch/web build",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "test": "pnpm -r run test",
     "test:contract": "pnpm --filter @rematch/contract run test",
@@ -16,6 +18,7 @@
     "test:harness": "pnpm --filter @rematch/harness run test",
     "test:balance": "pnpm --filter @rematch/harness run test:balance",
     "harness": "pnpm --filter @rematch/harness cli --",
+    "test:e2e": "pnpm --filter @rematch/web run test:e2e",
     "verify": "pnpm run typecheck && pnpm run test"
   },
   "devDependencies": {

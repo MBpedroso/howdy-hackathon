@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "The playable fight: Vite + Canvas 2D renderer, fixed 60 Hz loop, strategies loaded through the real QuickJS sandbox.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -10,15 +11,25 @@
     }
   },
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "gen:inputlog": "node scripts/gen-inputlog.ts"
   },
   "dependencies": {
+    "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",
     "@rematch/contract": "workspace:*",
-    "@rematch/engine": "workspace:*"
+    "@rematch/engine": "workspace:*",
+    "@rematch/sandbox": "workspace:*",
+    "quickjs-emscripten-core": "^0.32.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "typescript": "^5.9.2",
+    "vite": "^8.2.2",
     "vitest": "^4.0.0"
   }
 }

@@ -1,0 +1,202 @@
+/* Chrome only: the fight itself is canvas. Colours mirror src/render/palette.ts. */
+:root {
+  --void: #07080c;
+  --floor: #0d1017;
+  --border: #2b3448;
+  --player: #4de2b0;
+  --boss: #ff4d6d;
+  --slam: #ffd166;
+  --text: #e8ecf5;
+  --text-dim: #7d8799;
+  --font: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font);
+  overflow: hidden;
+  /* A missed click must never select the HUD text mid-fight. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#stage {
+  position: relative;
+  /* Sized in JS to the largest square that fits; see render/viewport.ts. */
+  width: 800px;
+  height: 800px;
+}
+
+#arena {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  background: var(--floor);
+}
+
+#hud, #screen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ HUD */
+
+.hud-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hud-round { color: var(--text); font-weight: 700; }
+.hud-round span { color: var(--text-dim); font-weight: 400; }
+
+.hud-timer {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+.hud-timer.low { color: var(--slam); }
+
+.hud-pips { display: flex; gap: 5px; align-items: center; }
+.hud-pip {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--player);
+  border-radius: 3px;
+  background: var(--player);
+}
+.hud-pip.empty { background: transparent; opacity: 0.35; }
+
+/* Boss strategy panel: spec §12 — the player sees the boss's strategy by name. */
+.hud-strategy {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  max-width: 46%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--boss);
+  background: rgba(7, 8, 12, 0.72);
+}
+.hud-strategy .label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.hud-strategy .name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--boss);
+  margin-top: 2px;
+}
+.hud-strategy .rationale {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text);
+  opacity: 0.86;
+  margin-top: 3px;
+  font-style: italic;
+}
+
+.hud-foot {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- screens */
+
+#screen.active {
+  pointer-events: auto;
+  background: rgba(7, 8, 12, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  animation: fade 140ms ease-out;
+}
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.card { padding: 28px 30px; max-width: 78%; }
+
+.card .kicker {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.card h1 {
+  font-size: 30px;
+  margin: 10px 0 6px;
+  letter-spacing: 0.02em;
+}
+.card h1.lose { color: var(--boss); }
+.card h1.win { color: var(--player); }
+.card p { font-size: 13px; line-height: 1.6; color: var(--text); opacity: 0.9; margin: 6px 0; }
+.card p.dim { color: var(--text-dim); font-size: 11.5px; }
+.card .strategy { color: var(--boss); font-weight: 700; }
+.card .hash { font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em; }
+.card code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.btn {
+  margin-top: 16px;
+  font-family: var(--font);
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--void);
+  background: var(--player);
+  border: 0;
+  border-radius: 4px;
+  padding: 11px 22px;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.12); }
+.btn.danger { background: var(--boss); color: var(--text); }
+.btn:focus-visible { outline: 2px solid var(--slam); outline-offset: 3px; }
+
+.spinner {
+  margin: 14px auto 0;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border);
+  border-top-color: var(--player);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

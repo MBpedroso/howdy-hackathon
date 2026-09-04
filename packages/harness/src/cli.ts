@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `pnpm harness <path/to/strategy.js> [--gates 1,2] [--json]`
+ * `pnpm harness <path/to/strategy.js> [--gates 1,2] [--round 2] [--json]`
  *
  * The harness's human face. One line per gate, exit code 1 on rejection — so it
  * works as a pre-commit check, in CI, and as the thing you run by hand when a
@@ -11,14 +11,21 @@
  */
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { formatGateResult, type GateNumber } from './gates/types.ts';
-import { DEFAULT_GATES, runGates } from './runGates.ts';
+import type { ReplaySummary } from '@rematch/engine';
+import { BALANCE_ROUNDS, DEFAULT_MATCHES, type BalanceRound } from './gates/balanceConfig.ts';
+import { formatGateResult, type GateNumber, type GateResult } from './gates/types.ts';
+import { DEFAULT_GATES, runGates, type RunGatesOptions } from './runGates.ts';
 
 const USAGE = `Usage: pnpm harness <path/to/strategy.js> [options]
 
 Options:
-  --gates <list>   Comma-separated gate numbers to run. Default: ${DEFAULT_GATES.join(',')}
-                   (Gates 3 and 4 are not implemented yet and always reject.)
+  --gates <list>   Comma-separated gate numbers to run.
+                   Default: ${DEFAULT_GATES.join(',')}, or 1,2,3,4 when --round is given.
+  --round <n>      Fairness band to check in Gate 3 (${BALANCE_ROUNDS.join('|')}); enables gates 3 and 4.
+  --summary <path> A replay summary (JSON) to build the Mimic from. Without it,
+                   Gate 3 checks FAIR only and skips the ADAPTED assertion.
+  --matches <n>    Matches for Gate 3. Default: ${DEFAULT_MATCHES} (half vs Mimic, half vs panel).
+  --workers <n>    Worker threads for the simulation. Default: cores - 1.
   --states <n>     States for the Gate 2 fuzz. Default: 500
   --seed <n>       Seed for the Gate 2 fuzz. Default: 1592502478
   --json           Emit one JSON object instead of human-readable lines.
@@ -29,7 +36,12 @@ usage or I/O error.`;
 
 type Args = {
   file?: string;
-  gates: GateNumber[];
+  /** Undefined means "whatever the round implies" — see `gatesFor`. */
+  gates?: GateNumber[];
+  round?: BalanceRound;
+  summary?: string;
+  matches?: number;
+  workers?: number;
   states?: number;
   seed?: number;
   json: boolean;
@@ -39,7 +51,7 @@ type Args = {
 class UsageError extends Error {}
 
 function parseArgs(argv: readonly string[]): Args {
-  const args: Args = { gates: [...DEFAULT_GATES], json: false, help: false };
+  const args: Args = { json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const next = (): string => {
@@ -67,6 +79,23 @@ function parseArgs(argv: readonly string[]): Args {
         args.gates = gates as GateNumber[];
         break;
       }
+      case '--round': {
+        const round = Number(next());
+        if (round !== 2 && round !== 3 && round !== 4 && round !== 5) {
+          throw new UsageError(`--round: '${round}' is not a round with a fairness band (2-5)`);
+        }
+        args.round = round;
+        break;
+      }
+      case '--summary':
+        args.summary = next();
+        break;
+      case '--matches':
+        args.matches = Number(next());
+        break;
+      case '--workers':
+        args.workers = Number(next());
+        break;
       case '--states':
         args.states = Number(next());
         break;
@@ -101,6 +130,24 @@ const processIo: CliIo = {
   err: (text) => void process.stderr.write(text),
 };
 
+/**
+ * The one line of Gate 3 output worth printing even when it passed: the rates are
+ * the whole reason the gate exists, and a `✓` alone hides them.
+ */
+function formatBalanceDetail(gate: GateResult): string | undefined {
+  if (gate.gate !== 3 || gate.detail === null || typeof gate.detail !== 'object') return undefined;
+  const detail = gate.detail as {
+    panel?: { winRate: number; matches: number; perBot?: Array<{ name: string; winRate: number }> };
+    mimic?: { winRate: number; matches: number };
+    band?: readonly number[];
+  };
+  if (detail.panel === undefined) return undefined;
+  const perBot = (detail.panel.perBot ?? []).map((b) => `${b.name} ${b.winRate.toFixed(2)}`).join(', ');
+  const band = detail.band === undefined ? '' : ` band ${detail.band.map((v) => v.toFixed(2)).join('-')}`;
+  const mimic = detail.mimic === undefined ? 'Mimic n/a' : `Mimic ${detail.mimic.winRate.toFixed(2)}`;
+  return `  panel ${detail.panel.winRate.toFixed(2)} (${perBot}) · ${mimic} ·${band}`;
+}
+
 export async function main(argv: readonly string[], io: CliIo = processIo): Promise<number> {
   let args: Args;
   try {
@@ -132,20 +179,43 @@ export async function main(argv: readonly string[], io: CliIo = processIo): Prom
     return 2;
   }
 
-  const result = await runGates(source, {
-    gates: args.gates,
+  let mimicSummary: ReplaySummary | undefined;
+  if (args.summary !== undefined) {
+    const summaryPath = resolve(baseDir, args.summary);
+    try {
+      mimicSummary = JSON.parse(await readFile(summaryPath, 'utf8')) as ReplaySummary;
+    } catch (err) {
+      io.err(`cannot read the replay summary ${summaryPath}: ${(err as Error).message}\n`);
+      return 2;
+    }
+  }
+
+  const options: RunGatesOptions = {
+    ...(args.gates === undefined ? {} : { gates: args.gates }),
     gate2: {
       ...(args.states === undefined ? {} : { states: args.states }),
       ...(args.seed === undefined ? {} : { seed: args.seed }),
     },
-  });
+    gate3: {
+      ...(args.round === undefined ? {} : { round: args.round }),
+      ...(mimicSummary === undefined ? {} : { mimicSummary }),
+      ...(args.matches === undefined ? {} : { matches: args.matches }),
+      ...(args.workers === undefined ? {} : { workers: args.workers }),
+    },
+  };
+
+  const result = await runGates(source, options);
 
   if (args.json) {
     io.out(`${JSON.stringify({ file: path, ...result }, null, 2)}\n`);
     return result.approved ? 0 : 1;
   }
 
-  for (const gate of result.results) io.out(`${formatGateResult(gate)}\n`);
+  for (const gate of result.results) {
+    io.out(`${formatGateResult(gate)}\n`);
+    const balance = formatBalanceDetail(gate);
+    if (balance !== undefined) io.out(`${balance}\n`);
+  }
   io.out(
     result.approved
       ? `\nAPPROVED — ${result.results.length} gate${result.results.length === 1 ? '' : 's'} passed\n`

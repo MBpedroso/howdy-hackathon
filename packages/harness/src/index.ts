@@ -5,14 +5,19 @@
  * (spec §6): every verdict is a deterministic function of the strategy source
  * and a seed, so any rejection replays byte-for-byte.
  *
- * Today: Gate 1 (static) and Gate 2 (contract fuzz) are real; Gates 3 (balance)
- * and 4 (perf) are stubs that reject with `not implemented` and are excluded
- * from `runGates`' default gate list.
+ * All four gates are real. `runGates` runs the two cheap ones by default and all
+ * four when it is given a round (the balance band is per-round, so a round is how
+ * a caller asks for the expensive gates):
  *
  * ```ts
- * const { approved, results, stoppedAt } = await runGates(source);
- * if (!approved) sendBackToCoder(results.at(-1)!.reason);
+ * const quick = await runGates(source);                                  // [1, 2]
+ * const full = await runGates(source, { gate3: { round: 2, mimicSummary } }); // [1..4]
+ * if (!full.approved) sendBackToCoder(full.results.at(-1)!.reason);
  * ```
+ *
+ * This package also owns the reference bot panel (spec §6.1 puts the bots in
+ * `contract`; see the root README for why they live here) and the balance
+ * simulator the panel is played through.
  */
 
 export { gate1Static, type Gate1Options } from './gates/gate1Static.ts';
@@ -33,7 +38,54 @@ export {
   type GateResult,
 } from './gates/types.ts';
 
-export { DEFAULT_GATES, runGates, type RunGatesOptions, type RunGatesResult } from './runGates.ts';
+export { ALL_GATES, DEFAULT_GATES, gatesFor, runGates, type RunGatesOptions, type RunGatesResult } from './runGates.ts';
+
+export {
+  ADAPTED_MIN,
+  BALANCE_ROUNDS,
+  BAND,
+  DEFAULT_MATCHES,
+  DEFAULT_ROUND,
+  SEED_OFFSET,
+  bandFor,
+  formatBand,
+  seedsFor,
+  type BalanceRound,
+} from './gates/balanceConfig.ts';
+
+export { MEASURE_SLACK } from './gates/gate4Perf.ts';
+
+// The reference bot panel (spec §6.1).
+export {
+  BASE_AIM_ERROR,
+  BOT_KINDS,
+  PANEL,
+  camper,
+  dodger,
+  kiter,
+  makeBot,
+  makeFullPanel,
+  makeMimic,
+  makePanel,
+  rusher,
+  type BotKind,
+  type BotOptions,
+  type PlayerBot,
+} from './bots/index.ts';
+
+// The balance simulator.
+export {
+  getSandbox,
+  playMatchState,
+  playerSeed,
+  runMatch,
+  runMatchWith,
+  summarizeMatch,
+  type MatchResult,
+  type RunMatchOptions,
+} from './sim/runMatch.ts';
+export { resolveWorkers, simulate, type BotRate, type SimulateOptions, type SimulateResult } from './sim/simulate.ts';
+export { botFromSpec, botSpecName, type BotSpec } from './sim/protocol.ts';
 
 export {
   CORNER_CASES,

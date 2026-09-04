@@ -187,7 +187,7 @@ describe('boss actions and cooldowns', () => {
     expect(state.boss.lastAction).toBe('idle');
   });
 
-  it('burst spawns `count` projectiles in a cone around the angle', () => {
+  it('burst spawns `count` boss projectiles at boss projectile speed', () => {
     for (const count of [3, 5, 8] as const) {
       const runner = constantRunner({ type: 'burst', angle: Math.PI / 2, count });
       const state = createGame(1, runner);
@@ -198,6 +198,63 @@ describe('boss actions and cooldowns', () => {
         expect(Math.hypot(p.vx, p.vy)).toBeCloseTo(E.projectile.boss.speed, 2);
       }
     }
+  });
+
+  it('burst counts 3 and 5 are cones centred on the angle', () => {
+    for (const count of [3, 5] as const) {
+      const angle = Math.PI / 2;
+      const runner = constantRunner({ type: 'burst', angle, count });
+      const state = createGame(1, runner);
+      step(state, makeInput(), runner);
+
+      const angles = state.projectiles.map((p) => Math.atan2(p.vy, p.vx));
+      // Symmetric about `angle`, `spreadPerShot` between neighbours, total width < 2PI.
+      for (let i = 0; i < angles.length; i += 1) {
+        expect(angles[i]!, `count=${count} shot=${i}`).toBeCloseTo(
+          angle + E.burst.spreadPerShot * (i - (count - 1) / 2),
+          3,
+        );
+      }
+      const width = angles[angles.length - 1]! - angles[0]!;
+      expect(width, `count=${count}`).toBeCloseTo(E.burst.spreadPerShot * (count - 1), 3);
+      expect(width).toBeLessThan(Math.PI * 2);
+    }
+  });
+
+  it('burst count 8 is a full 2PI ring: evenly spaced, first shot on the angle', () => {
+    const count = E.burst.ringCount;
+    const angle = 0.7;
+    const runner = constantRunner({ type: 'burst', angle, count });
+    const state = createGame(1, runner);
+    step(state, makeInput(), runner);
+
+    expect(state.projectiles).toHaveLength(count);
+    const step2Pi = (Math.PI * 2) / count;
+    const norm = (a: number): number => {
+      let v = a % (Math.PI * 2);
+      if (v < 0) v += Math.PI * 2;
+      return v;
+    };
+
+    for (let i = 0; i < count; i += 1) {
+      const p = state.projectiles[i]!;
+      // Direction: evenly spaced, starting exactly at `angle`.
+      expect(norm(Math.atan2(p.vy, p.vx)), `shot=${i}`).toBeCloseTo(norm(angle + step2Pi * i), 3);
+      // Spawn point sits on the ring around the boss, in the same direction. It has
+      // already been integrated once by this tick's projectile phase, so the radius is
+      // the spawn offset plus one tick of travel.
+      const dx = p.x - state.boss.x;
+      const dy = p.y - state.boss.y;
+      expect(norm(Math.atan2(dy, dx)), `spawn=${i}`).toBeCloseTo(norm(angle + step2Pi * i), 3);
+      expect(Math.hypot(dx, dy)).toBeCloseTo(
+        E.boss.radius + E.projectile.radius + E.projectile.boss.speed,
+        2,
+      );
+    }
+
+    // A ring covers every direction: the 8 dash bins are all hit exactly once.
+    const bins = state.projectiles.map((p) => dirBin(p.vx, p.vy)).sort((a, b) => a - b);
+    expect(bins).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   });
 });
 

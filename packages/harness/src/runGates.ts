@@ -18,9 +18,14 @@ import { GATE_NUMBERS, type GateNumber, type GateResult } from './gates/types.ts
 
 export type RunGatesOptions = {
   /**
-   * Which gates to run, in ascending order. Default `[1, 2]` — Gates 3 and 4 are
-   * stubs until the engine and the reference bots land, and defaulting to all
-   * four would mean every strategy is "rejected: not implemented".
+   * Which gates to run, in ascending order.
+   *
+   * Default: `[1, 2, 3, 4]` when `gate3.round` is set, `[1, 2]` otherwise. The
+   * round is what makes the balance gates *meaningful* — Gate 3 asserts a
+   * per-round fairness band and Gate 4 costs a couple of seconds of simulation —
+   * so asking for a round is how a caller says "run the expensive gates too".
+   * The rewrite loop always passes a round; a quick `pnpm harness file.js` does
+   * not, and gets the two cheap gates.
    */
   gates?: readonly GateNumber[];
   gate1?: Gate1Options;
@@ -38,21 +43,30 @@ export type RunGatesResult = {
   stoppedAt?: GateNumber;
 };
 
+/** The cheap gates: static + fuzz. No simulation, no engine, milliseconds. */
 export const DEFAULT_GATES: readonly GateNumber[] = [1, 2];
+/** Every gate, in order. What the rewrite loop runs (spec §6.3). */
+export const ALL_GATES: readonly GateNumber[] = [1, 2, 3, 4];
 
-function normalizeGates(requested: readonly GateNumber[] | undefined): GateNumber[] {
-  const set = new Set(requested ?? DEFAULT_GATES);
+/** The gate list a call implies: see `RunGatesOptions.gates`. */
+export function gatesFor(opts: RunGatesOptions): readonly GateNumber[] {
+  if (opts.gates !== undefined) return opts.gates;
+  return opts.gate3?.round === undefined ? DEFAULT_GATES : ALL_GATES;
+}
+
+function normalizeGates(requested: readonly GateNumber[]): GateNumber[] {
+  const set = new Set(requested);
   return GATE_NUMBERS.filter((n) => set.has(n));
 }
 
 /**
  * Run the requested gates in order, stopping at the first rejection.
  *
- * Async because Gate 2 has to bring up a QuickJS runtime. Gates 1, 3 and 4 are
- * synchronous and are simply awaited in place.
+ * Async because Gates 2, 3 and 4 bring up QuickJS runtimes (and Gate 3 a worker
+ * pool). Gate 1 is synchronous and is simply awaited in place.
  */
 export async function runGates(source: string, opts: RunGatesOptions = {}): Promise<RunGatesResult> {
-  const gates = normalizeGates(opts.gates);
+  const gates = normalizeGates(gatesFor(opts));
   const results: GateResult[] = [];
 
   for (const gate of gates) {

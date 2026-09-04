@@ -10,8 +10,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CONSTANTS } from '@rematch/contract';
-import { gate1Static, gate2Fuzz, gate3Balance, gate4Perf } from '../src/index.ts';
-import { GOOD_FIXTURES, readBad, readGood } from './helpers.ts';
+import { ADAPTED_MIN, BAND, DEFAULT_MATCHES, MEASURE_SLACK, gate1Static, gate2Fuzz, gate3Balance, gate4Perf } from '../src/index.ts';
+import { GOOD_FIXTURES, readBad, readCandidate, readGood, readSummary } from './helpers.ts';
 
 describe('Gate 1 — static', () => {
   it.each(GOOD_FIXTURES)('%s passes', (name) => {
@@ -214,14 +214,137 @@ export function decide(view, mem) {
   });
 });
 
-describe('Gates 3 and 4 — stubs', () => {
-  it('gate 3 rejects with "not implemented"', () => {
-    const result = gate3Balance(readGood('chaser'));
-    expect(result).toMatchObject({ gate: 3, name: 'balance', ok: false, reason: 'not implemented' });
+describe('Gate 3 — balance', () => {
+  it('rejects the null boss as too easy, quantitatively', async () => {
+    const result = await gate3Balance(readGood('idle'), { round: 2, matches: 40 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/^0\.00 vs panel — too easy \(band 0\.35–0\.50 for round 2;/);
+    // The per-bot breakdown is what tells the Coder which approach to threaten.
+    expect(result.reason).toMatch(/Camper 0\.00, Kiter 0\.00, Rusher 0\.00, Dodger 0\.00/);
+    expect(result.detail).toMatchObject({ round: 2, panel: { winRate: 0 } });
   });
 
-  it('gate 4 rejects with "not implemented"', () => {
-    const result = gate4Perf(readGood('chaser'));
-    expect(result).toMatchObject({ gate: 4, name: 'perf', ok: false, reason: 'not implemented' });
+  it('rejects a dominant boss as too hard, naming the band', async () => {
+    const result = await gate3Balance(readGood('orbiter'), { round: 2, matches: 40 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/vs panel — too hard \(band 0\.35–0\.50 for round 2;/);
+    const detail = result.detail as { panel: { winRate: number } };
+    expect(detail.panel.winRate).toBeGreaterThan(0.5);
+  });
+
+  it('approves the hand-written Round 2 candidate on both assertions', async () => {
+    const result = await gate3Balance(readCandidate(), {
+      round: 2,
+      matches: DEFAULT_MATCHES,
+      mimicSummary: readSummary('camper'),
+    });
+    if (!result.ok) throw new Error(`round2-candidate was rejected: ${result.reason}`);
+    const detail = result.detail as {
+      panel: { winRate: number; matches: number };
+      mimic: { winRate: number; matches: number };
+    };
+    const [lo, hi] = BAND[2];
+    expect(detail.panel.winRate).toBeGreaterThanOrEqual(lo);
+    expect(detail.panel.winRate).toBeLessThanOrEqual(hi);
+    expect(detail.mimic.winRate).toBeGreaterThanOrEqual(ADAPTED_MIN);
+    // The budget is split down the middle (spec §6.2), N/2 each.
+    expect(detail.panel.matches).toBe(DEFAULT_MATCHES / 2);
+    expect(detail.mimic.matches).toBe(DEFAULT_MATCHES / 2);
+  }, 60_000);
+
+  it('reports both failures in one reason when both assertions fail', async () => {
+    const result = await gate3Balance(readGood('idle'), {
+      round: 2,
+      matches: 40,
+      mimicSummary: readSummary('camper'),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/too easy/);
+    expect(result.reason).toMatch(/0\.00 vs Mimic — didn't adapt \(need >= 0\.70\)/);
+  });
+
+  it('skips ADAPTED when no replay summary is supplied', async () => {
+    const result = await gate3Balance(readCandidate(), { round: 2, matches: 40 });
+    expect(result.detail).toMatchObject({ adapted: expect.stringContaining('skipped') });
+    expect(JSON.stringify(result.detail)).not.toContain('"mimic"');
+  });
+
+  it('escalates the band per round, so the same boss can be fair in 2 and too easy in 5', async () => {
+    const source = readCandidate();
+    const round2 = await gate3Balance(source, { round: 2, matches: 40 });
+    const round5 = await gate3Balance(source, { round: 5, matches: 40 });
+    expect(round2.ok).toBe(true);
+    expect(round5.ok).toBe(false);
+    if (!round5.ok) expect(round5.reason).toMatch(/too easy \(band 0\.55–0\.70 for round 5/);
+  }, 60_000);
+
+  it('is deterministic, and independent of the worker count', async () => {
+    const opts = { round: 2, matches: 40, mimicSummary: readSummary('kiter') } as const;
+    const one = await gate3Balance(readGood('cornerbreaker'), { ...opts, workers: 1 });
+    const many = await gate3Balance(readGood('cornerbreaker'), { ...opts, workers: 3 });
+    expect(one.ok).toBe(many.ok);
+    if (one.ok || many.ok) return;
+    expect(many.reason).toBe(one.reason);
+    // Every number in `detail` is part of the verdict except the timings.
+    const strip = (detail: unknown): unknown => {
+      const clone = JSON.parse(JSON.stringify(detail)) as Record<string, unknown>;
+      delete (clone['panel'] as Record<string, unknown>)['ms'];
+      delete (clone['mimic'] as Record<string, unknown>)['ms'];
+      delete clone['workers'];
+      return clone;
+    };
+    expect(strip(many.detail)).toEqual(strip(one.detail));
+  }, 60_000);
+});
+
+describe('Gate 4 — perf', () => {
+  it('passes a normal strategy over at least 2000 real calls', async () => {
+    const result = await gate4Perf(readCandidate());
+    if (!result.ok) throw new Error(`round2-candidate was rejected: ${result.reason}`);
+    const detail = result.detail as { samples: number; matchCalls: number; fuzzCalls: number; p99: number };
+    expect(detail.samples).toBeGreaterThanOrEqual(2000);
+    // Both corpora are represented: real match trajectories and Gate 2's states.
+    expect(detail.matchCalls).toBeGreaterThan(0);
+    expect(detail.fuzzCalls).toBeGreaterThan(0);
+    expect(detail.p99).toBeGreaterThan(0);
+    expect(detail.p99).toBeLessThanOrEqual(CONSTANTS.limits.decideBudgetMs);
+  }, 60_000);
+
+  it('rejects a slow decide with the p99 and the budget', async () => {
+    const result = await gate4Perf(readBad('slow-decide'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      new RegExp(`^decide\\(\\) p99 = \\d+\\.\\dms > ${CONSTANTS.limits.decideBudgetMs}ms over \\d+ calls`),
+    );
+    expect(result.reason).toMatch(/p50 = \d+\.\d+ms/);
+  }, 60_000);
+
+  it('stops measuring once the p99 allowance is spent, so a hang cannot stall the gate', async () => {
+    const started = performance.now();
+    const result = await gate4Perf(readBad('infinite-loop'));
+    const wall = performance.now() - started;
+    expect(result.ok).toBe(false);
+    expect(result.detail).toMatchObject({ stoppedEarly: true });
+    // 2000 calls x a 16 ms deadline would be 32 s; the allowance caps it at ~21.
+    expect(wall).toBeLessThan(5000);
+  }, 60_000);
+
+  it('rejects a memory failure regardless of timing', async () => {
+    const result = await gate4Perf(readBad('memory-hog'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      new RegExp(`memory grew past the ${CONSTANTS.limits.memoryBytes}-byte limit \\(\\d+ bytes\\)`),
+    );
+  }, 60_000);
+
+  it('measures with a relaxed deadline so the reported p99 is the real cost', () => {
+    // Gate 2 enforces the shipping 2 ms as a hard interrupt, so measuring there
+    // would report every slow strategy as "p99 = 2.0 ms" — see MEASURE_SLACK.
+    expect(MEASURE_SLACK).toBeGreaterThan(1);
   });
 });

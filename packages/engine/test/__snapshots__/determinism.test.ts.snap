@@ -3,17 +3,17 @@
 exports[`determinism > SNAPSHOT: chaser on seed 1 — any engine change that alters the simulation breaks this 1`] = `
 {
   "bossHp": 0,
-  "hash": "3bb7bc9d5d9d5ea6",
+  "hash": "09e7ba3d15031a39",
   "outcome": "playerWon",
-  "playerHp": 1,
+  "playerHp": 3,
   "primitives": {
     "burst": 10,
-    "charge": 2,
-    "move": 835,
+    "charge": 1,
+    "move": 878,
     "slam": 0,
     "spawn": 3,
   },
-  "ticks": 950,
+  "ticks": 942,
   "violations": 0,
 }
 `;

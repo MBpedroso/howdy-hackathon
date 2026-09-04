@@ -16,7 +16,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "cli": "node --experimental-strip-types src/cli.ts",
-    "test:balance": "vitest run --passWithNoTests balance",
+    "test:balance": "vitest run --passWithNoTests --reporter=verbose balance",
     "test": "vitest run"
   },
   "dependencies": {

@@ -69,9 +69,19 @@ export const ENGINE_CONSTANTS = {
   },
 
   burst: {
-    /** Radians between adjacent projectiles, so `count` widens the cone: 3 -> 0.44 rad,
-     *  5 -> 0.88 rad, 8 -> 1.54 rad. A cone, not a full ring — see README/playtest note. */
+    /** Radians between adjacent projectiles for a CONE burst, so `count` widens it:
+     *  3 -> 0.44 rad, 5 -> 0.88 rad. Only counts 3 and 5 are cones (see `ringCount`). */
     spreadPerShot: 0.22,
+    /**
+     * A burst of exactly this many projectiles fires a full 2*PI **ring** instead of a
+     * cone: `count` evenly spaced shots, the first one exactly on `angle`, step
+     * `2*PI / count`. So `count` is not "how wide" but "which shape": 3 and 5 are aimed
+     * cones the player dodges by sidestepping, 8 is an omnidirectional wall they have to
+     * dash through or outrun. That is the whole reason the contract offers three counts —
+     * a 1.54 rad 8-shot cone was just a slightly wider 5, and the strategy had no way to
+     * ask for area denial.
+     */
+    ringCount: 8,
   },
 
   charge: {

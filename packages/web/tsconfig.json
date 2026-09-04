@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist"
+    "outDir": "dist",
+    // The only package in the workspace that is allowed to see the DOM.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // `vite/client` declares `import.meta.env` and the `?raw` import suffix used to
+    // load `src/strategies/*.js` as text. `node` is kept for the generator script.
+    "types": ["node", "vite/client"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "e2e", "scripts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

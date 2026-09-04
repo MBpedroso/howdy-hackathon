@@ -206,12 +206,21 @@ function advanceCharge(state: GameState): void {
   }
 }
 
+/**
+ * Spawn a burst. Two shapes, chosen by `count` (see `ENGINE_CONSTANTS.burst`):
+ *
+ *  - `count === ringCount` (8): a full 2*PI ring — `count` evenly spaced projectiles,
+ *    the first exactly on `angle`, step `2*PI / count`. Area denial: the player dashes
+ *    through it or outruns it, sidestepping does not work.
+ *  - otherwise (3, 5): an aimed cone centred on `angle`, `spreadPerShot` between shots.
+ */
 function spawnBurst(state: GameState, angle: number, count: number): void {
   const b = state.boss;
   const off = E.boss.radius + E.projectile.radius;
+  const ring = count === E.burst.ringCount;
   for (let i = 0; i < count; i += 1) {
     if (state.projectiles.length >= E.projectile.maxAlive) break;
-    const a = angle + E.burst.spreadPerShot * (i - (count - 1) / 2);
+    const a = ring ? angle + (TAU / count) * i : angle + E.burst.spreadPerShot * (i - (count - 1) / 2);
     const ux = Math.cos(a);
     const uy = Math.sin(a);
     state.projectiles.push({

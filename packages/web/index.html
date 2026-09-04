@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>REMATCH — the boss that learns</title>
+  </head>
+  <body>
+    <!-- The whole game is one canvas plus a DOM overlay for chrome and screens.
+         `src/app.ts` fills #hud and #screen; it never touches #arena's pixels. -->
+    <div id="stage">
+      <canvas id="arena" width="800" height="800" aria-label="Arena"></canvas>
+      <div id="hud" aria-live="off"></div>
+      <div id="screen"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
