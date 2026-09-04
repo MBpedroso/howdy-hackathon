@@ -35,6 +35,18 @@
 
 @keyframes il-in { from { opacity: 0; } to { opacity: 1; } }
 
+/*
+ * `hidden` must actually hide.
+ *
+ * The UA sheet gives `[hidden]` `display: none`, and **any** author `display` rule
+ * beats it — so the moment a panel that toggles `.hidden` also gets `display: flex`
+ * (the fallback banner, the diff byline, the structured analysis) it becomes
+ * permanently visible. It shows up as an empty box on screen and as
+ * `toBeHidden()` failing against an element that really does carry the attribute.
+ * One rule for the whole overlay, rather than a `[hidden]` variant per component.
+ */
+#interlude [hidden] { display: none !important; }
+
 /* ------------------------------------------------------------------ header */
 
 .il-head {
@@ -126,18 +138,50 @@
 .il-panel[data-beat='rewrite'] { --area: rewrite; }
 .il-panel[data-beat='trial'] { --area: trial; }
 
-/* The beat that is currently receiving events is the one with the accent edge. */
+/*
+ * The beat that is currently receiving events is the one with the accent edge, and
+ * `--accent` is the *agent's* colour, set per panel in `ui.ts`. So the screen's
+ * colour tells you who is working: teal while the Analyst reads, amber while the
+ * Coder writes, red/green while the Judge decides.
+ */
 .il-panel[data-state='idle'] { opacity: 0.5; }
-.il-panel[data-state='active'] { border-color: var(--player); box-shadow: inset 3px 0 0 var(--player); }
-.il-panel[data-state='done'] { box-shadow: inset 3px 0 0 rgba(77, 226, 176, 0.35); }
+.il-panel[data-state='active'] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.il-panel[data-state='done'] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
 
+/*
+ * `data-acting` is the agent, not the beat: during a retry the Coder is writing
+ * while the Trial panel still holds the last verdict, and the glow has to be on the
+ * one that is *working*. Two frames of animation, and only while it is acting —
+ * spec §2.3's "what moves is real work happening".
+ */
+.il-panel[data-acting='1'] {
+  opacity: 1;
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 22px -8px var(--accent);
+}
+.il-panel[data-acting='1'] .il-agent-status { color: var(--accent); }
+.il-panel[data-acting='1'] .rm-portrait { border-color: var(--accent); }
+/* Not acting: the face stays, the colour goes. */
+.il-panel:not([data-acting='1']) .rm-portrait { filter: saturate(0.6) brightness(0.86); }
+
+/* Tight: the header costs every panel ~20px of body, and the Trial panel's
+   rejection log and the Rewrite panel's diff are what pay for it. */
 .il-panel-head {
   display: flex;
-  align-items: baseline;
-  gap: 9px;
-  padding-bottom: 8px;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 6px;
   border-bottom: 1px solid rgba(43, 52, 72, 0.6);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+}
+.il-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.il-who-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.il-agent {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  white-space: nowrap;
 }
 .il-panel-head .n {
   font-size: 9px;
@@ -150,9 +194,20 @@
   letter-spacing: 0.2em;
   text-transform: uppercase;
   margin: 0;
+  color: var(--text-dim);
+}
+/* The one line that says what this agent is doing right now. */
+.il-agent-status {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .il-panel-head .note {
   margin-left: auto;
+  align-self: flex-start;
   font-size: 10.5px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -218,6 +273,37 @@
 
 /* --------------------------------------------------------- beat 2: analysis */
 
+/*
+ * The Analyst's speech bubble.
+ *
+ * The only *speech* on the screen — sentences about you, typed as they arrive — so
+ * it is framed as speech, tailed up-left at the portrait in the panel header
+ * directly above it. Everything else here is output; this is somebody talking.
+ */
+.il-bubble {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 3px 8px 8px 8px;
+  background: color-mix(in srgb, var(--accent) 5%, #0a0c12);
+  padding: 7px 10px;
+}
+/* The tail: a small triangle at the top-left corner, pointing at the portrait. */
+.il-bubble::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 13px;
+  width: 12px;
+  height: 7px;
+  background: color-mix(in srgb, var(--accent) 34%, #0a0c12);
+  clip-path: polygon(0 100%, 100% 100%, 20% 0);
+}
+
 .il-stream {
   margin: 0;
   min-height: 0;
@@ -234,7 +320,7 @@
 }
 .il-stream::after {
   content: '▌';
-  color: var(--player);
+  color: var(--accent);
   animation: il-caret 900ms steps(2, end) infinite;
 }
 .il-stream[data-streaming='false']::after { content: ''; }
@@ -247,7 +333,7 @@
   padding-left: 14px;
   position: relative;
 }
-.il-obs li::before { content: '▸'; position: absolute; left: 0; color: var(--player); }
+.il-obs li::before { content: '▸'; position: absolute; left: 0; color: var(--accent); }
 
 .il-tag {
   display: inline-block;
@@ -313,6 +399,25 @@
 .il-cand[data-status='fail'] .mark { color: var(--boss); }
 .il-cand[data-status='fail'] .name { text-decoration: line-through; }
 .il-cand .mark { font-variant-numeric: tabular-nums; }
+
+/* The diff's byline: who wrote it, and what the boss is called now. */
+.il-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(43, 52, 72, 0.6);
+  font-size: 11px;
+}
+.il-diff-head .says {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.il-diff-head .dim { color: var(--text-dim); font-size: 10px; }
 
 .il-code, .il-diff {
   margin: 0;
@@ -392,17 +497,51 @@
 }
 .il-meter.done i { background: var(--player); }
 
+/*
+ * The stamp.
+ *
+ * Three registers, deliberately: the mark is the verdict, the plain line is what it
+ * means, and the monospace line is the harness's own sentence. A judge in the
+ * audience reads the third; the player reads the second. Neither replaces the other
+ * — spec §2.2 requires the rejection itself to stay readable.
+ */
 .il-verdict {
-  font-size: 22px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0 3px;
+  border-top: 1px solid rgba(43, 52, 72, 0.6);
+}
+.il-stamp { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.il-stamp-mark {
+  font-size: 21px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  line-height: 1.2;
-  padding: 6px 0 2px;
+  line-height: 1.15;
+  color: var(--accent);
 }
-.il-verdict[data-kind='rejected'] { color: var(--boss); }
-.il-verdict[data-kind='approved'] { color: var(--player); }
-.il-verdict[data-kind='working'] { color: var(--slam); font-size: 15px; font-weight: 400; letter-spacing: 0.16em; }
-.il-verdict small { display: block; font-size: 11px; font-weight: 400; letter-spacing: 0.04em; color: var(--text-dim); margin-top: 3px; }
+.il-stamp-plain { font-size: 12px; line-height: 1.4; color: var(--text); }
+.il-stamp-raw {
+  font-family: var(--font);
+  font-size: 9.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+.il-verdict[data-kind='working'] .il-stamp-mark {
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  color: var(--slam);
+}
+.il-verdict[data-kind='working'] { --accent: var(--slam); }
+/* A stamp lands: one press, no loop. */
+.il-verdict[data-kind='approved'] .il-stamp-mark,
+.il-verdict[data-kind='rejected'] .il-stamp-mark { animation: il-stamp 220ms ease-out; }
+@keyframes il-stamp {
+  from { transform: scale(1.13); opacity: 0.4; }
+  to { transform: scale(1); opacity: 1; }
+}
 
 /* The rejection log NEVER clears: spec §2.2 — "the player must be able to read
    every rejection. Rejections are the proof." */
@@ -445,8 +584,13 @@
   min-height: 46px;
 }
 
+/* Spec AC 5's fallback, as the Judge's last stamp: nothing was approved, so
+   something that already had been ships instead. */
 .il-banner {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 12px;
   line-height: 1.45;
   border-left: 3px solid var(--slam);
@@ -454,9 +598,46 @@
   color: var(--slam);
   padding: 7px 11px;
 }
+.il-banner-head { display: block; font-size: 12px; letter-spacing: 0.04em; }
+.il-banner-text { display: block; font-size: 11px; color: var(--text); opacity: 0.85; }
 
 .il-status { flex: 1; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 .il-status b { color: var(--text); }
+
+/*
+ * The hand-off line: the boss that was just written, by name, in its own words.
+ * `rationale` comes out of the approved file's `meta`, so this is the strategy
+ * talking — the same sentence the HUD will show during the fight that follows.
+ */
+.il-next {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+.il-boss { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.il-boss .says {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.il-boss-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #e879f9;
+  white-space: nowrap;
+}
+.il-boss-line {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text);
+  opacity: 0.9;
+  min-width: 0;
+}
 
 /* The provenance badge: which of the three sources the player is watching, spelled
    out. `recorded` is the long one (`RECORDED RUN . <model> . <date>`), which is why

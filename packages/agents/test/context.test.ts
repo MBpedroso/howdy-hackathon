@@ -22,6 +22,7 @@ import {
   renderShotsDuring,
   renderSummary,
   renderTimeline,
+  takenNames,
   type Analysis,
 } from '../src/index.ts';
 import { cannedSummary, readGood } from './helpers.ts';
@@ -567,6 +568,86 @@ describe('parallel candidates', () => {
     expect(withDial.system.length).toBeLessThan(13_000);
     expect(withDial.messages[0]!.content).toContain('# YOUR AIM POINT: BALANCED');
     expect(withDial.messages[0]!.content).toContain('meta.name` must end with');
+  });
+
+  /**
+   * The naming rule.
+   *
+   * Both live runs of the loop (2026-09-03/04) shipped a boss called "Warden II",
+   * and neither model invented it: `Warden` was the example name in the dial block
+   * and the model copied the example. Two consecutive rounds of a game about a boss
+   * that changes both produced a boss with the same name.
+   */
+  describe('the boss gets a new name', () => {
+    it('lists the previous name as taken and forbids the burned example', () => {
+      const prompt = coderPrompt({
+        analysis: ANALYSIS,
+        prevSource: readGood('cornerbreaker'),
+        round: 2,
+        dial: dialFor(1, 3)!,
+      });
+      const content = prompt.messages[0]!.content;
+      expect(content).toContain('# THE NAME');
+      expect(content).toContain('Invent a NEW name');
+      // The name it just beat, read out of the file itself, and the example name
+      // that the two live runs copied.
+      expect(content).toContain('TAKEN — do not use any of these, or a variation of one: Warden, Cornerbreaker.');
+      expect(takenNames({ prevSource: readGood('orbiter') })).toEqual(['Warden', 'Orbiter']);
+      // `Warden` may appear as *forbidden*, but never again as a sample to copy.
+      expect(content).not.toContain("name: 'Warden");
+      expect(prompt.system).not.toContain('Warden');
+    });
+
+    it('keeps the suffix rule, with a placeholder instead of a copyable name', () => {
+      const content = coderPrompt({
+        analysis: ANALYSIS,
+        prevSource: readGood('idle'),
+        round: 2,
+        dial: dialFor(2, 3)!,
+      }).messages[0]!.content;
+      expect(content).toContain("name: '<your new name> III'");
+      expect(content).toContain('must end with " III"');
+    });
+
+    it('also takes the names of the two files a retry is interpolating between', () => {
+      // On a bracketed retry `bracket` replaces `prevSource` in the prompt, and both
+      // endpoints are this round's own rejected candidates — reusing one of their
+      // names is the same failure a round late.
+      const taken = takenNames({
+        prevSource: readGood('cornerbreaker'),
+        bracket: {
+          low: { label: 'conservative', panel: 0.31, source: readGood('orbiter') },
+          high: { label: 'aggressive', panel: 0.55, source: readGood('chaser') },
+        },
+      });
+      expect(taken).toContain('Cornerbreaker');
+      expect(taken).toContain('Orbiter');
+      expect(taken.length).toBeGreaterThan(3);
+    });
+
+    it('strips the candidate suffix, so "Warden II" burns "Warden" too', () => {
+      const taken = takenNames({
+        prevSource: "export const meta = { name: 'Lantern III', rationale: 'r', version: 2 };",
+      });
+      expect(taken).toContain('Lantern III');
+      expect(taken).toContain('Lantern');
+    });
+
+    it('says nothing extra when the previous file has no readable meta', () => {
+      // Gate 1 rejects such a file, so this is the "we could not read it" path and
+      // not a case worth inventing a name for.
+      expect(takenNames({ prevSource: 'const meta = 4; export { meta };' })).toEqual(['Warden']);
+    });
+
+    // The taken list changes per round and per attempt, so it must not touch the
+    // ~13 KB cached prefix.
+    it('lives in the message, not in the cached system prompt', () => {
+      const a = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('cornerbreaker'), round: 2, dial: dialFor(0, 3)! });
+      const b = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('orbiter'), round: 2, dial: dialFor(0, 3)! });
+      expect(a.system).toBe(b.system);
+      expect(a.system).not.toContain('# THE NAME');
+      expect(a.messages[0]!.content.length).toBeLessThan(13_000);
+    });
   });
 
   it('renders every candidate as one table with per-bot rates', () => {

@@ -1,7 +1,8 @@
 /**
  * The app: five rounds, one canvas, one sandbox.
  *
- * Flow — Start ("click to fight") -> fight -> outcome:
+ * Flow — Start (the intro: the cast, one round explained, the controls) -> fight
+ * -> outcome:
  *   won  and round < 5  ->  `onRoundWon(context)`  ->  `context.next()`  ->  round + 1
  *   won  and round = 5  ->  the win screen
  *   lost or timed out   ->  the game-over screen, naming the strategy that beat you
@@ -33,6 +34,7 @@ import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy
 import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
 import { createRenderer, type Renderer } from './render/renderer.ts';
 import { createHud, type Hud } from './ui/hud.ts';
+import { introDecision, readSkipIntro, writeSkipIntro } from './ui/intro.ts';
 import { createScreens, type Screens } from './ui/screens.ts';
 
 /** Spec §2.1: up to Round 5, then the win screen. */
@@ -123,7 +125,10 @@ export function createApp(options: AppOptions): App {
   const params = new URLSearchParams(search);
   const sessionSeed = resolveSessionSeed(search);
   const strategyParam = params.get('strategy');
-  const autostart = params.get('autostart') === '1' || params.get('autostart') === 'true';
+  // `?autostart=1` still means "no screens, just fight" — the e2e suite depends on
+  // it. The rest of the decision (the remembered "skip intro" box, `?intro=`) is in
+  // `ui/intro.ts`, as a pure function with its own tests.
+  const intro = introDecision({ search, remembered: readSkipIntro() });
   const startAt = Math.min(MAX_ROUNDS, Math.max(1, Number(params.get('round') ?? 1) || 1));
   // `?interlude=0` keeps the pre-interlude round-won screen. See the header.
   const interludeEnabled = params.get('interlude') !== '0';
@@ -352,12 +357,16 @@ export function createApp(options: AppOptions): App {
       // click that starts the fight.
       await sandboxFactory();
       booted = true;
-      if (autostart) {
+      if (!intro.show) {
         await startRound(startAt);
         return;
       }
       screens.start({
         seed: Number(formatSeed(sessionSeed)),
+        skipIntro: readSkipIntro(),
+        onSkipIntro: (value) => {
+          writeSkipIntro(value);
+        },
         onFight: () => {
           void startRound(startAt);
         },

@@ -30,7 +30,20 @@
  */
 import type { ReplaySummary } from '@rematch/engine';
 
+import { AGENTS, JUDGE_APPROVE } from '../ui/cast.ts';
+import { createPortrait, setPortraitDim } from '../ui/portrait.ts';
+
 import './interlude.css';
+import {
+  castStatus,
+  fallbackHeadline,
+  INITIAL_CAST,
+  plainVerdict,
+  reduceCast,
+  replayStatus,
+  type AgentSlot,
+  type CastState,
+} from './castStatus.ts';
 import {
   balanceRates,
   MAX_ATTEMPTS,
@@ -81,6 +94,23 @@ const BEAT_TITLES: Readonly<Record<Beat, { n: string; title: string }>> = {
   analysis: { n: '02', title: 'Analysis' },
   rewrite: { n: '03', title: 'Rewrite' },
   trial: { n: '04', title: 'Trial' },
+};
+
+/**
+ * Whose beat each panel is.
+ *
+ * The Replay belongs to the **Analyst** rather than to nobody: the three pictures
+ * in that panel are literally its input (see `replayViz.ts` — the player and the
+ * agent look at the same heat grid at the same moment), so the panel is the Analyst
+ * holding up what it is about to read. Its portrait is dimmed until it starts
+ * talking, which is the one frame of the interlude where an agent is present but
+ * not yet working.
+ */
+const BEAT_AGENT: Readonly<Record<Beat, AgentSlot>> = {
+  replay: 'analyst',
+  analysis: 'analyst',
+  rewrite: 'coder',
+  trial: 'judge',
 };
 
 /** Spec AC 5's wording, verbatim. The reason only chooses the second half. */
@@ -301,19 +331,41 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const panelFor = new Map<Beat, HTMLElement>();
   const bodyFor = new Map<Beat, HTMLElement>();
   const noteFor = new Map<Beat, HTMLElement>();
+  /** The status line under each panel's agent name. Written by `paintCast`. */
+  const statusFor = new Map<Beat, HTMLElement>();
+  /** Each panel's portrait, so the Analyst's can stop being dimmed. */
+  const portraitFor = new Map<Beat, HTMLElement>();
 
   for (const beat of BEATS) {
+    const agent = AGENTS[BEAT_AGENT[beat]];
     const panel = el('section', 'il-panel');
     panel.dataset.beat = beat;
+    panel.dataset.agent = agent.id;
     panel.dataset.state = beat === 'replay' ? 'active' : 'idle';
     panel.dataset.testid = `il-beat-${beat}`;
+    // Every accent on this panel — border, glow, name, bullets — comes from here,
+    // so "who is acting" is one custom property and not four rules.
+    panel.style.setProperty('--accent', agent.accent);
 
     const panelHead = el('div', 'il-panel-head');
-    panelHead.append(el('span', 'n', BEAT_TITLES[beat].n), el('h2', undefined, BEAT_TITLES[beat].title));
+    // Dimmed to start with: the Analyst is holding the replay, not reading it yet.
+    const portrait = createPortrait(agent.id, { size: 48, dim: beat === 'replay' });
+    portraitFor.set(beat, portrait);
+
+    const who = el('div', 'il-who');
+    const whoTop = el('div', 'il-who-top');
+    const agentName = el('span', 'il-agent', agent.name.toUpperCase());
+    agentName.dataset.testid = `il-agent-${beat}`;
+    whoTop.append(agentName, el('span', 'n', BEAT_TITLES[beat].n), el('h2', undefined, BEAT_TITLES[beat].title));
+    const status = el('div', 'il-agent-status');
+    status.dataset.testid = `il-status-${beat}`;
+    statusFor.set(beat, status);
+    who.append(whoTop, status);
+
     const note = el('span', 'note');
     note.dataset.testid = `il-note-${beat}`;
-    panelHead.append(note);
     noteFor.set(beat, note);
+    panelHead.append(portrait, who, note);
 
     const body = el('div', 'il-body');
     body.dataset.testid = `il-body-${beat}`;
@@ -360,7 +412,14 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   replayBody.append(figs, stripWrap, replayCap);
 
   // ----------------------------------------------------- beat 2: the analysis
+  //
+  // The Analyst's output is the only thing on this screen that is *speech* — it is
+  // sentences, typed a character at a time, about you — so it is rendered as a
+  // speech bubble tailed at the portrait above it rather than as another pane of
+  // output. The typewriter is unchanged; only the frame around it is new.
   const analysisBody = bodyFor.get('analysis') as HTMLElement;
+  const bubble = el('div', 'il-bubble');
+  bubble.dataset.testid = 'il-bubble';
   const stream = el('pre', 'il-stream');
   stream.dataset.testid = 'il-analysis-stream';
   stream.dataset.streaming = 'false';
@@ -368,7 +427,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const structured = el('div', 'il-structured');
   structured.dataset.testid = 'il-analysis-structured';
   structured.hidden = true;
-  analysisBody.append(stream, structured);
+  bubble.append(stream, structured);
+  analysisBody.append(bubble);
 
   // ------------------------------------------------------ beat 3: the rewrite
   const rewriteBody = bodyFor.get('rewrite') as HTMLElement;
@@ -378,12 +438,26 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const candStrip = el('div', 'il-cands');
   candStrip.dataset.testid = 'il-cands';
   candStrip.hidden = true;
+  // The diff's own byline: the Coder, small, and the name the boss will fight under.
+  // A unified diff is anonymous, and the name is the thing that makes the beat read
+  // as a character changing rather than as a file changing.
+  const diffHead = el('div', 'il-diff-head');
+  diffHead.dataset.testid = 'il-diff-head';
+  diffHead.hidden = true;
+  const diffHeadName = el('b', 'il-strategy-name');
+  const diffHeadNote = el('span', 'dim');
+  diffHead.append(
+    createPortrait('coder', { size: 22 }),
+    el('span', 'says', 'the boss is now'),
+    diffHeadName,
+    diffHeadNote,
+  );
   const code = el('pre', 'il-code');
   code.dataset.testid = 'il-code';
   const diff = el('pre', 'il-diff');
   diff.dataset.testid = 'il-diff';
   diff.hidden = true;
-  rewriteBody.append(candStrip, code, diff);
+  rewriteBody.append(candStrip, diffHead, code, diff);
 
   // -------------------------------------------------------- beat 4: the trial
   const trialBody = bodyFor.get('trial') as HTMLElement;
@@ -402,17 +476,37 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   meter.append(meterFill);
   meterWrap.append(meterLabel, meter);
 
+  // The verdict, as a stamp the Judge puts on a file: its portrait, the mark, the
+  // reason in plain words, and — smaller, in monospace, never dropped — the
+  // harness's own quantitative sentence. Spec §2.2: every rejection stays readable,
+  // and "readable" now means readable by a player *and* checkable by a judge.
   const verdict = el('div', 'il-verdict');
   verdict.dataset.testid = 'il-verdict';
+  const verdictPortrait = createPortrait('judge', { size: 48, dim: true });
+  const stamp = el('div', 'il-stamp');
+  const stampMark = el('b', 'il-stamp-mark');
+  const stampPlain = el('span', 'il-stamp-plain');
+  const stampRaw = el('code', 'il-stamp-raw');
+  stampRaw.dataset.testid = 'il-stamp-raw';
+  stamp.append(stampMark, stampPlain, stampRaw);
+  verdict.append(verdictPortrait, stamp);
   const rejections = el('ul', 'il-rejections');
   rejections.dataset.testid = 'il-rejections';
   trialBody.append(gateList, meterWrap, verdict, rejections);
 
   // ------------------------------------------------------------------ footer
   const foot = el('footer', 'il-foot');
+  // Spec AC 5's fallback is also a Judge verdict — "nothing was approved, so here is
+  // something that already was" — so it wears the same stamp as a rejection rather
+  // than being an anonymous amber strip.
   const banner = el('div', 'il-banner');
   banner.dataset.testid = 'il-banner';
   banner.hidden = true;
+  const bannerHead = el('b', 'il-banner-head');
+  const bannerText = el('span', 'il-banner-text');
+  const bannerBody = el('div');
+  bannerBody.append(bannerHead, bannerText);
+  banner.append(createPortrait('judge', { size: 36 }), bannerBody);
   const status = el('div', 'il-status');
   status.dataset.testid = 'il-status';
   status.append(document.createTextNode('The analyst is reading the replay. The coder writes; the harness decides.'));
@@ -492,6 +586,56 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   function setNote(beat: Beat, text: string): void {
     const note = noteFor.get(beat);
     if (note !== undefined) note.textContent = text;
+  }
+
+  // -------------------------------------------------------------- the cast
+  /**
+   * Who is doing what, accumulated from the same events the panels render.
+   *
+   * Kept as its own value rather than derived from `state` because it is a
+   * *different* reading of the stream — `state` is what happened (every gate, every
+   * rejection, the counters a test asserts), and this is who is speaking right now.
+   * The reducer and the strings are pure and live in `castStatus.ts`.
+   */
+  // `active: 'analyst'` rather than `null`: the screen opens on the Replay beat,
+  // which is the Analyst's, so the first frame already says whose turn it is.
+  let cast: CastState = { ...INITIAL_CAST, active: 'analyst' };
+
+  /** Repaint the three status lines, the glow, and the Analyst's dimmed portrait. */
+  function paintCast(): void {
+    const lines = castStatus(cast);
+    for (const beat of BEATS) {
+      const slot = BEAT_AGENT[beat];
+      const node = statusFor.get(beat);
+      // The Analyst owns two panels, and the same sentence twice on one screen is
+      // noise: the Replay panel's line becomes a caption once the reading exists.
+      if (node !== undefined) node.textContent = beat === 'replay' ? replayStatus(cast) : lines[slot];
+      const panel = panelFor.get(beat);
+      // The acting agent's panel glows in its own accent; everything else is quiet.
+      // `data-acting` rather than reusing `data-state`, because the two answer
+      // different questions: `state` is "has this beat had its turn", `acting` is
+      // "is this agent working *now*", and during a retry the Coder is working
+      // while the Trial panel is still the one holding content.
+      if (panel !== undefined) {
+        if (cast.active === slot && !cast.done) panel.dataset.acting = '1';
+        else delete panel.dataset.acting;
+      }
+    }
+    const replayPortrait = portraitFor.get('replay');
+    if (replayPortrait !== undefined) setPortraitDim(replayPortrait, !cast.analysisStarted);
+    // The Judge's own portrait on the stamp lights up once it has something to say.
+    const working = cast.simulating || cast.written > 0;
+    setPortraitDim(verdictPortrait, cast.verdict === null && cast.fallback === null && !working);
+    // Before the first verdict the stamp is a status, not a ruling — and it must not
+    // still say "nothing has been submitted" while Gate 3 is visibly running. Once
+    // any verdict exists this stops touching it: the ruling stays until it is
+    // replaced by the next one, including the `↻ rewriting…` line a retry sets.
+    if (cast.verdict === null && cast.fallback === null) {
+      if (!working) setVerdict('working', 'WAITING', 'nothing has been submitted to the harness yet');
+      else if (cast.simulating) {
+        setVerdict('working', '↻ TESTING', `simulating ${cast.matchesTotal} matches — no verdict yet`);
+      } else setVerdict('working', '↻ TESTING', 'the harness is running the gates');
+    }
   }
 
   // ------------------------------------------------------------- the clock
@@ -594,6 +738,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       if (other !== undefined) paintTab(other);
     }
     if (view === undefined) return;
+    setDiffHead(view);
     if (view.diff !== null) {
       renderDiff(view.diff === '' ? '(no change from the previous strategy)' : view.diff);
     } else {
@@ -655,6 +800,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     code.replaceChildren();
     code.hidden = false;
     diff.hidden = true;
+    diffHead.hidden = true;
   }
 
   function setCandidateStatus(index: number, status: CandidateView['status']): void {
@@ -758,10 +904,43 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     gateList.scrollTop = gateList.scrollHeight;
   }
 
-  function setVerdict(kind: 'rejected' | 'approved' | 'working', text: string, sub?: string): void {
+  /**
+   * The stamp.
+   *
+   * `mark` is the verdict itself (`✓ APPROVED — 45%`), `plain` is what that means
+   * in words, and `raw` is the harness's sentence verbatim in monospace. All three
+   * slots are always in the DOM and are emptied rather than removed, so nothing
+   * about the panel's height jumps between a rejection and an approval.
+   */
+  function setVerdict(
+    kind: 'rejected' | 'approved' | 'working',
+    mark: string,
+    plain?: string,
+    raw?: string,
+  ): void {
     verdict.dataset.kind = kind;
-    verdict.replaceChildren(document.createTextNode(text));
-    if (sub !== undefined) verdict.append(el('small', undefined, sub));
+    stampMark.textContent = mark;
+    stampPlain.textContent = plain ?? '';
+    stampRaw.textContent = raw ?? '';
+    stampRaw.hidden = raw === undefined || raw === '';
+    // Green for an approval, the Judge's red for a rejection — one agent, two
+    // verdicts (see `JUDGE_APPROVE`), rather than two differently-coloured chromes.
+    verdict.style.setProperty('--accent', kind === 'approved' ? JUDGE_APPROVE : AGENTS.judge.accent);
+  }
+
+  /** The diff's byline: the Coder, and the name the boss will fight under. */
+  function setDiffHead(view: CandidateView | undefined): void {
+    const name = view?.label ?? null;
+    if (view === undefined || name === null || view.diff === null) {
+      diffHead.hidden = true;
+      return;
+    }
+    diffHeadName.textContent = name;
+    diffHeadNote.textContent =
+      state.candidates > 1
+        ? ` · attempt ${state.attempt} · ${view.dial ?? `candidate ${view.index + 1}`}`
+        : ` · attempt ${state.attempt}`;
+    diffHead.hidden = false;
   }
 
   function drawReplay(summary: ReplaySummary): void {
@@ -957,12 +1136,16 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
               state.mimicRate = locked.mimic;
             }
             const pct = state.panelRate === null ? null : `${Math.round(state.panelRate * 100)}%`;
+            const name = views[locked?.candidate ?? state.selectedCandidate]?.label;
             setVerdict(
               'approved',
               pct === null ? '✓ APPROVED' : `✓ APPROVED — ${pct}`,
-              state.mimicRate === null
-                ? 'the harness will ship this strategy'
-                : `${Math.round(state.mimicRate * 100)}% against a bot built from your own replay — it adapted`,
+              name === undefined
+                ? 'it is fair, and it countered you — this is what you fight next'
+                : `${name} is fair, and it countered you — this is what you fight next`,
+              state.panelRate === null
+                ? undefined
+                : `${pct} vs the reference panel${state.mimicRate === null ? '' : ` · ${Math.round(state.mimicRate * 100)}% vs a bot built from your own replay`}`,
             );
           }
           break;
@@ -996,7 +1179,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
           rejections.scrollTop = rejections.scrollHeight;
         }
         if (!perCandidate) {
-          setVerdict('rejected', '✗ REJECTED', reason);
+          const failing = state.gates.filter((g) => g.attempt === event.attempt && !g.ok).at(-1);
+          setVerdict('rejected', '✗ REJECTED', plainVerdict(reason, failing?.gate), reason);
           status.replaceChildren(
             document.createTextNode('The harness rejected it. The reason goes straight back to the coder — '),
             el('b', undefined, 'no human in the loop'),
@@ -1016,13 +1200,23 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         if (event.result.approved) {
           state.strategyName = event.result.meta.name;
           state.approved = true;
-          status.replaceChildren(
-            document.createTextNode('Round '),
-            el('b', undefined, String(options.round + 1)),
-            document.createTextNode(' boss: '),
-            el('b', undefined, event.result.meta.name),
-            document.createTextNode(` — “${event.result.meta.rationale}”`),
+          // The hand-off, and the last thing on screen before the fight: the thing
+          // that was just written, by name, saying in its own words what it intends
+          // to do to you. `rationale` is the strategy file's own `meta`, so this is
+          // the boss talking and not the interlude summarising.
+          const boss = el('div', 'il-boss');
+          boss.dataset.testid = 'il-boss';
+          boss.append(
+            createPortrait('boss', { size: 34 }),
+            el('b', 'il-boss-name', event.result.meta.name),
+            el('span', 'says', 'says:'),
+            el('i', 'il-boss-line', `“${event.result.meta.rationale}”`),
           );
+          status.replaceChildren(
+            el('span', 'il-next', `Round ${options.round + 1}`),
+            boss,
+          );
+          status.hidden = false;
         } else if (state.fallback === null) {
           showFallback(event.result.reason, event.result.message);
         }
@@ -1042,18 +1236,27 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
 
   function showFallback(reason: FailureReason, message?: string): void {
     state.fallback = { reason, ...(message === undefined ? {} : { message }) };
-    banner.replaceChildren(document.createTextNode(fallbackText(reason)));
+    // Plain words on top, spec AC 5's sentence verbatim underneath. The wording of
+    // the second line is the spec's and is not paraphrased — it is the promise the
+    // product makes about never leaving the player on a spinner.
+    bannerHead.textContent = fallbackHeadline(reason);
+    bannerText.replaceChildren(document.createTextNode(fallbackText(reason)));
     if (message !== undefined && message !== '') {
-      banner.append(el('small', undefined, ` (${message})`));
+      bannerText.append(el('small', undefined, ` (${message})`));
     }
     banner.hidden = false;
     status.hidden = true;
-    if (state.approved === null) setVerdict('rejected', '✗ NO APPROVAL', fallbackText(reason));
+    cast = { ...cast, fallback: reason, active: 'judge' };
+    paintCast();
+    if (state.approved === null) setVerdict('rejected', '✗ NO APPROVAL', fallbackHeadline(reason), fallbackText(reason));
   }
 
   function finish(): void {
     if (disposed) return;
     state.done = true;
+    // Nothing is acting any more: every glow goes out, so the eye lands on FIGHT.
+    cast = { ...cast, done: true, active: null };
+    paintCast();
     setPhase('done');
     skip.hidden = true;
     fight.hidden = false;
@@ -1093,10 +1296,21 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   let lastSummary: ReplaySummary | null = null;
   window.addEventListener('resize', onResize);
 
+  // The three status lines have to say something before the first event arrives:
+  // "watching your replay…" is true from the moment the screen opens.
+  paintCast();
+  setVerdict('working', 'WAITING', 'nothing has been submitted to the harness yet');
+
   return {
     handle(event: RewriteEvent): void {
+      if (disposed) return;
       if (event.type === 'replay') lastSummary = event.summary;
+      // The cast is folded first so the panels can be painted against the same
+      // event they are rendering, and repainted after, because `handle` itself
+      // moves the phase and the Judge's stamp.
+      cast = reduceCast(cast, event);
       handle(event);
+      paintCast();
     },
     showFallback,
     finish,

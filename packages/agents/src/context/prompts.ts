@@ -24,6 +24,7 @@ import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
 import { ACTIVITY, ADAPTED_MIN, DEFAULT_MATCHES, bandFor, formatBand, type BalanceRound } from '@rematch/harness';
 import type { GateName } from '@rematch/harness';
+import { extractMeta } from '../meta.ts';
 import { contractDoc } from './contractDoc.ts';
 import { renderSummary } from './renderSummary.ts';
 
@@ -656,6 +657,84 @@ export function bracketHint(
   ].join('\n');
 }
 
+/**
+ * Names that appear as examples in these prompts, and are therefore burned.
+ *
+ * Both live runs of the loop on 2026-09-03/04 shipped a boss called **Warden II**,
+ * and neither model invented it: `Warden` was the example name in the dial block
+ * (`name: 'Warden ${suffix}'`) and the model copied the example, exactly as models
+ * do. Two consecutive rounds of a game about a boss that *changes* both produced a
+ * boss with the same name, which reads on screen as nothing having happened.
+ *
+ * So the example is now a placeholder (`'<your new name> II'`, which nothing would
+ * copy) and the word itself is listed as taken. Anything else that ends up quoted as a sample name belongs in here too.
+ */
+export const RESERVED_NAMES: readonly string[] = ['Warden'];
+
+/**
+ * Every boss name this rewrite may not reuse.
+ *
+ * The previous round's name is read out of its own source with the same AST reader
+ * the interlude uses, rather than being threaded through the loop as another field:
+ * the source is already in the context (it is the file being replaced), so the
+ * name is derivable from what the Coder can see, and nothing else has to know.
+ *
+ * `bracket` replaces `prevSource` on an interpolating retry, so its two endpoint
+ * files are read as well — those are the names on screen for this round's rejected
+ * candidates, and reusing one of them is the same failure a round late.
+ */
+export function takenNames(ctx: Pick<CoderContext, 'prevSource' | 'bracket'>): string[] {
+  const sources = [ctx.prevSource, ctx.bracket?.low.source, ctx.bracket?.high.source];
+  const taken: string[] = [...RESERVED_NAMES];
+  for (const source of sources) {
+    if (source === undefined) continue;
+    const name = extractMeta(source)?.name?.trim();
+    if (name === undefined || name === '') continue;
+    // Bare, without the " II" the candidates carry: the *word* is what is taken.
+    const stem = name.replace(/\s+[IVX]+$/, '').trim();
+    for (const candidate of [name, stem]) {
+      if (candidate !== '' && !taken.includes(candidate)) taken.push(candidate);
+    }
+  }
+  return taken;
+}
+
+/**
+ * The naming rule, as its own block of the message.
+ *
+ * In the *message* and not the system prompt on purpose: the taken list changes per
+ * round and per attempt, and the ~13 KB system prefix has to stay byte-identical
+ * across every candidate of every attempt for the prompt cache to hit.
+ *
+ * It is a named block rather than a line inside the aim point because it applies to
+ * all four modes (first attempt, blend, adapt, single-candidate) and the aim-point
+ * blocks are already the longest thing in the message.
+ */
+export function nameRule(taken: readonly string[], suffix?: string): string {
+  const lines = [
+    '# THE NAME',
+    '',
+    'Invent a NEW name for this boss. `meta.name` is what the player is shown on the',
+    'HUD and in the diff, so a name they have already fought reads as a boss that did',
+    'not change — which is the one thing this round is supposed to prove.',
+    '',
+    `TAKEN — do not use any of these, or a variation of one: ${taken.join(', ')}.`,
+    '',
+    'One or two words. A role, a place, a machine or an instrument — something a',
+    'thing that has decided how to kill you might be called. Not a description of',
+    'its tactics, not a version of a taken name, and not a word from any example in',
+    'this prompt.',
+  ];
+  if (suffix !== undefined) {
+    lines.push(
+      '',
+      `Then append " ${suffix}" and nothing else, so the candidates written in`,
+      `parallel can be told apart on screen: \`name: '<your new name> ${suffix}'\`.`,
+    );
+  }
+  return lines.join('\n');
+}
+
 const CODER_OUTPUT_RULES = `# YOUR OUTPUT
 
 Reply with exactly one fenced code block, tagged \`js\`, containing the complete
@@ -779,8 +858,8 @@ export function coderPrompt(ctx: CoderContext): Prompt {
         '',
         ctx.dial.instruction,
         '',
-        `Your \`meta.name\` must end with " ${ctx.dial.nameSuffix}" so the candidates can be told`,
-        'apart on screen.',
+        `Your \`meta.name\` must be new (see THE NAME, below) and must end with`,
+        `" ${ctx.dial.nameSuffix}" so the candidates can be told apart on screen.`,
         '',
       );
     } else if (ctx.dial.blend !== undefined && bracket !== undefined) {
@@ -802,8 +881,9 @@ export function coderPrompt(ctx: CoderContext): Prompt {
         `punish fires — move A's value ${pct}% of the way to B's. Where B has a rule A does`,
         `not, take it but gate it behind \`rand() < ${(ctx.dial.blend).toFixed(2)}\`. Change nothing else.`,
         '',
-        `Your \`meta.name\` must end with " ${ctx.dial.nameSuffix}" (for example \`name: 'Warden ${ctx.dial.nameSuffix}'\`)`,
-        'so the candidates can be told apart on screen.',
+        `Your \`meta.name\` must end with " ${ctx.dial.nameSuffix}", and it must be a NEW`,
+        'name — see THE NAME, below. Keeping the bracketed files\' name is not part of',
+        'blending them.',
         '',
       );
     } else {
@@ -819,12 +899,18 @@ export function coderPrompt(ctx: CoderContext): Prompt {
         '',
         ctx.dial.instruction,
         '',
-        `Your \`meta.name\` must end with " ${ctx.dial.nameSuffix}" (for example \`name: 'Warden ${ctx.dial.nameSuffix}'\`)`,
-        'so the candidates can be told apart on screen. Everything else is yours.',
+        `Your \`meta.name\` must end with " ${ctx.dial.nameSuffix}" so the candidates can be`,
+        'told apart on screen, and the name itself must be new — see THE NAME, below.',
+        'Everything else is yours.',
         '',
       );
     }
   }
+
+  // Before the analysis and well before the rejection: the rejection sentence has to
+  // stay the last thing in the context (spec §6.3), and a naming rule buried under a
+  // quantitative correction is a naming rule that gets ignored.
+  parts.push(nameRule(takenNames(ctx), ctx.dial?.nameSuffix), '');
 
   parts.push('# THE ANALYST ON THIS PLAYER', '', '```json', JSON.stringify(ctx.analysis, null, 2), '```', '');
 

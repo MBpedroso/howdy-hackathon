@@ -567,6 +567,84 @@ No LLM was called: every number above is the harness's, on the fixed seed set.
 
 ---
 
+## 2026-09-04 — the same playtest, second finding: the agents had no faces
+
+**Human (playtest, continued).** *"Today the interlude is just numbers on a screen; the
+player can't connect what's happening to who is doing it."*
+
+Every number on that screen is real, and that was the problem: four panels of measured
+output with no author read as one machine talking to itself. A viewer could read `✗ Gate 3
+balance — 0.91 vs panel` and still not know that a *model* wrote the file and a
+*deterministic harness* threw it out — which is the entire argument of the project.
+
+**Human decision — raster portraits.** Three PNGs generated with an image model
+(`packages/web/public/agents/{analyst,coder,judge}.png`, plus `boss.png`), 1024×1024 on
+`#0B0F1A`, with the accents chosen at the same time: Analyst teal `#2DD4BF`, Coder amber
+`#F59E0B`, Judge red `#EF4444` / green `#22C55E`, Boss magenta `#C026D3`. This **overrides
+spec §2.3's "no raster art, no image generation dependency"** and is recorded as delta 17
+in [`SPEC.md`](SPEC.md) §13. The dependency it introduces is bounded to four files that
+are not on any code path: `ui/portrait.ts` renders an SVG placeholder *first* and reveals
+the `<img>` only on `load`, so the game is complete without them and the art is a
+drop-in — which is also how the whole screen was built and screenshotted before the PNGs
+existed.
+
+**Agent — two screens.**
+
+1. **A start screen** in place of "Click to fight" (`ui/screens.ts`, full-viewport, fits
+   1280×800 with no scroll): the cast as three cards with a one-line plain-language role
+   each, one round explained in four steps, and the controls — including the dash and both
+   telegraph tells, which no screen had ever taught. The **Judge's card is deliberately
+   built differently** (hard corners, a dashed rule, a `DETERMINISTIC` chip, and "Not an
+   AI" as the first three words of its role), because the one thing a viewer must not
+   conclude is that a model marks its own homework. A remembered "skip this intro next
+   time" box (`ui/intro.ts`, `localStorage`, `try`/`catch` on both sides); `?autostart=1`
+   still bypasses it first in precedence, `?intro=1` forces it back.
+2. **The interlude, attributed** (`interlude/castStatus.ts` + `ui.ts`). Each beat's panel
+   gets a portrait, an agent name and a one-line status that moves with the events —
+   *"watching your replay…"* → *"found 4 patterns · you play like a dodger"*; *"writing
+   candidate 2 of 3…"* → *"3 strategies written"*; *"running 200 simulated fights…"* →
+   *"✗ rejected Warden III — too hard to be fair"*. The acting agent's panel glows in its
+   own accent and the others dim, so *who* is working is legible at a glance and in a
+   still frame. The Analyst's prose became a speech bubble, the Coder's diff got a byline
+   with the boss's new name, and verdicts became **Judge stamps**: the mark, the reason in
+   plain words, and the harness's own quantitative sentence in monospace underneath —
+   never instead of it (spec §2.2: every rejection stays readable). The AC 5 fallback
+   wears the same stamp, because "nothing was approved, so something that already was
+   ships" is a verdict too.
+
+The status mapping is a **pure reducer over the event stream** (`reduceCast` /
+`castStatus`), for the same reason `meterView` is: the mapping is where the bugs are, and
+**38 new unit tests** (plus 6 for the prompt fix below) assert the whole table in Node
+with no browser.
+
+**Two things this turned up.**
+
+- `[hidden]` stopped hiding. The UA sheet's `display: none` for `[hidden]` loses to *any*
+  author `display` rule, so the moment the fallback banner became a flex row it was
+  permanently visible — caught by the existing `toBeHidden()` assertion, fixed with one
+  `#interlude [hidden] { display: none !important }` for the whole overlay.
+- The start screen's 140 ms fade made the first `start-screen.png` look like a layering
+  bug: a capture inside the animation window is semi-transparent, and the arena and HUD
+  skeleton show faintly through it. The artifact now waits for the animation.
+
+**Agent — one prompt fix, from the same session's other observation.** Both live runs of
+the loop shipped a boss called **"Warden II"**, and neither model invented it: `Warden`
+was the example name in the Coder's dial block (`name: 'Warden ${suffix}'`) and the model
+copied the example, as models do. Two consecutive rounds of a game about a boss that
+*changes* both produced a boss with the same name. The example is now
+`'<your new name> II'`, and the Coder's message carries a `# THE NAME` block listing the
+taken names — `Warden` permanently, plus the previous round's name read out of its own
+source with the same AST reader the interlude uses, plus both endpoint files on an
+interpolating retry. It is in the *message*, not the ~13 KB cached system prefix, so the
+prompt cache still hits across every candidate of every attempt.
+
+**Verification.** `pnpm verify` green (`typecheck`, `lint`, `test`), `pnpm test:e2e` **18**
+green (two new: the cast on the start screen, and the remembered skip box), no LLM call
+anywhere — the interlude work was done entirely against `?agent=mock` and `?agent=recorded`.
+New artifacts: `artifacts/web/start-screen.png`, `interlude-cast-{analyst,coder,judge}.png`.
+
+---
+
 ## Open — dated placeholders
 
 Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck

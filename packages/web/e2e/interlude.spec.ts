@@ -19,7 +19,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
-import { armReplay, loadFixture, waitForRound } from './helpers.ts';
+import { armReplay, collectErrors, loadFixture, waitForRound } from './helpers.ts';
 
 const fixture = loadFixture();
 const ARTIFACTS = new URL('../../../artifacts/web/', import.meta.url).pathname;
@@ -46,11 +46,7 @@ async function waitForEvent(page: Page, type: string): Promise<void> {
 }
 
 test('plays all four beats, shows a rejection and an approval, and starts round 2', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(err.message));
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text());
-  });
+  const errors = collectErrors(page);
 
   await winRound1(page, 'agent=mock&speed=20&autofight=0');
 
@@ -62,6 +58,22 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   // nothing, so it must not appear — an always-on caveat is noise, not honesty.
   await expect(page.getByTestId('il-provenance-note')).toBeHidden();
   await expect(page.getByTestId('il-rounds')).toContainText('Round 1 → 2');
+
+  // ------------------------------------------------------------------- the cast
+  // The playtester's complaint, as an assertion: every beat is attributed, and the
+  // four panels between them name the three agents. The Replay belongs to the
+  // Analyst (its three figures are literally that agent's input).
+  await expect(page.getByTestId('il-agent-replay')).toHaveText('ANALYST');
+  await expect(page.getByTestId('il-agent-analysis')).toHaveText('ANALYST');
+  await expect(page.getByTestId('il-agent-rewrite')).toHaveText('CODER');
+  await expect(page.getByTestId('il-agent-trial')).toHaveText('JUDGE');
+  for (const beat of ['replay', 'analysis', 'rewrite', 'trial']) {
+    // The portrait is present whether or not the raster art has landed.
+    await expect(page.getByTestId(`il-beat-${beat}`).locator('.rm-portrait').first()).toBeVisible();
+    // And the status line is never blank: "watching your replay…" is true from the
+    // first frame, and a blank header would be the bug this replaced.
+    await expect(page.getByTestId(`il-status-${beat}`)).not.toHaveText('');
+  }
 
   // Wait for the run to finish. Everything below is asserted on the finished
   // screen precisely because nothing on it is allowed to clear.
@@ -139,9 +151,16 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(rejections).toContainText('too easy');
   await expect(rejections).toContainText('0.41 vs Mimic');
 
+  // The verdict is the Judge's stamp: the mark, what it means in words, and the
+  // harness's own quantitative sentence underneath — spec §2.2's "readable"
+  // for a player and for someone checking the numbers.
   await expect(page.getByTestId('il-verdict')).toContainText('APPROVED');
   await expect(page.getByTestId('il-verdict')).toContainText('45%');
   await expect(page.getByTestId('il-verdict')).toHaveAttribute('data-kind', 'approved');
+  await expect(page.getByTestId('il-verdict').locator('.rm-portrait')).toBeVisible();
+  await expect(page.getByTestId('il-verdict')).toContainText('it countered you');
+  await expect(page.getByTestId('il-stamp-raw')).toContainText('vs the reference panel');
+  await expect(page.getByTestId('il-stamp-raw')).toContainText('vs a bot built from your own replay');
   // The Gate 3 meter finished on the harness's own count, rather than on a timer.
   await expect(page.getByTestId('il-meter')).toHaveClass(/done/);
   // No AC 5 fallback on the happy path.
@@ -162,7 +181,25 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   expect(state?.matchesDone).toBe(state?.matchesTotal);
   expect(state?.elapsedMs ?? 1e9).toBeLessThan(45_000);
 
+  // ------------------------------------------------- the three of them, finished
+  // Every status line has become a past-tense report of what that agent did, and
+  // each names its own number: the Analyst's observation count, the Coder's file
+  // count, the Judge's approval by name.
+  await expect(page.getByTestId('il-status-analysis')).toContainText('found 4 patterns');
+  await expect(page.getByTestId('il-status-analysis')).toContainText('you play like a');
+  await expect(page.getByTestId('il-status-rewrite')).toContainText('3 strategies written');
+  await expect(page.getByTestId('il-status-trial')).toHaveText('✓ approved Warden');
+
+  // The hand-off: the boss that was just written, by name, in its own words. The
+  // rationale comes out of the approved file's `meta`, so this is the strategy
+  // talking — the same sentence the Round 2 HUD is about to show.
+  const boss = page.getByTestId('il-boss');
+  await expect(boss).toContainText('Warden');
+  await expect(boss).toContainText('says');
+  await expect(boss).toContainText('where you live');
+
   await root.screenshot({ path: `${ARTIFACTS}interlude-approved.png` });
+  await page.getByTestId('il-beat-trial').screenshot({ path: `${ARTIFACTS}interlude-cast-judge.png` });
 
   // -------------------------------------------------- and then: round 2
   await page.getByTestId('il-fight').click();
@@ -194,9 +231,15 @@ test('each beat is legible on its own — the demo screenshots', async ({ page }
 
   await waitForEvent(page, 'analysis.done');
   await root.screenshot({ path: `${ARTIFACTS}interlude-2-analysis.png` });
+  // The Analyst, alone: portrait, name, status, and its observations in the speech
+  // bubble. One panel per agent, for the write-up and the demo slides.
+  await page.getByTestId('il-beat-analysis').screenshot({ path: `${ARTIFACTS}interlude-cast-analyst.png` });
 
   await waitForEvent(page, 'rewrite.done');
   await root.screenshot({ path: `${ARTIFACTS}interlude-3-rewrite.png` });
+  // The Coder's diff, with its byline: who wrote it and what the boss is called now.
+  await expect(page.getByTestId('il-diff-head')).toBeVisible();
+  await page.getByTestId('il-beat-rewrite').screenshot({ path: `${ARTIFACTS}interlude-cast-coder.png` });
 
   // Mid-Gate 3 of attempt 1: the meter is moving on real batched progress and no
   // verdict exists yet. This is the frame that shows "waiting is content".
@@ -233,10 +276,15 @@ test('the 45-second deadline shows the AC 5 fallback instead of hanging', async 
 
   const banner = page.getByTestId('il-banner');
   await expect(banner).toBeVisible({ timeout: 15_000 });
-  // Spec AC 5's wording.
+  // Spec AC 5's wording, verbatim, under a plain-words headline — the fallback is a
+  // Judge verdict too ("nothing was approved, so something that already was ships"),
+  // so it wears the same portrait and the same stamp as a rejection.
   await expect(banner).toContainText('Using a pre-approved strategy');
   await expect(banner).toContainText('the coder timed out');
+  await expect(banner).toContainText('⏱ the coder ran out of time');
+  await expect(banner.locator('.rm-portrait')).toBeVisible();
   await expect(page.getByTestId('il-verdict')).toContainText('NO APPROVAL');
+  await expect(page.getByTestId('il-status-trial')).toContainText('shipping a pre-approved strategy');
 
   // The round still starts. A blank screen is the one outcome that is not allowed.
   await expect(page.getByTestId('il-fight')).toBeVisible();

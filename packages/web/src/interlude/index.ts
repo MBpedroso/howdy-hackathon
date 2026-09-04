@@ -33,6 +33,16 @@ import { bootProbeLocalServer, resolveSource, type InterludeSource, type LocalPr
 import { createInterludeUi, type InterludeState, type InterludeUi } from './ui.ts';
 
 export { fallbackText, SKIP_AFTER_MS, createInterludeUi, meterView, type InterludeState, type InterludeUi, type MeterView } from './ui.ts';
+export {
+  INITIAL_CAST,
+  castStatus,
+  fallbackHeadline,
+  plainVerdict,
+  reduceCast,
+  type AgentSlot,
+  type CastState,
+  type CastVerdict,
+} from './castStatus.ts';
 export { createSseParser, readEventStream, type SseFrame, type SseParser } from './sse.ts';
 export { mockSource, buildMockScript, scriptDuration, APPROVED_META, type MockOptions, type MockScript, type MockStep } from './mock.ts';
 export {

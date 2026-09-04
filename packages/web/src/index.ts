@@ -23,7 +23,30 @@ export { recordingRunner, type RunnerStats } from './game/runnerStats.ts';
 export { createRenderer, type Renderer } from './render/renderer.ts';
 export { clientToArena, computeViewport, fitSquare, type Viewport } from './render/viewport.ts';
 export { createHud, formatClock, type Hud } from './ui/hud.ts';
-export { createScreens, type Screens } from './ui/screens.ts';
+export { createScreens, type Screens, type StartOptions } from './ui/screens.ts';
+export {
+  AGENTS,
+  CAST,
+  JUDGE_APPROVE,
+  PORTRAIT_BG,
+  PORTRAIT_DIR,
+  iconSvg,
+  placeholderSvg,
+  portraitUrl,
+  type Agent,
+  type AgentIcon,
+  type AgentId,
+} from './ui/cast.ts';
+export { createPortrait, setPortraitDim, type PortraitOptions } from './ui/portrait.ts';
+export {
+  SKIP_INTRO_KEY,
+  defaultStorage,
+  introDecision,
+  readSkipIntro,
+  writeSkipIntro,
+  type IntroDecision,
+  type StorageLike,
+} from './ui/intro.ts';
 export {
   CLIENT_FALLBACK_STRATEGY,
   createInterludeHandler,

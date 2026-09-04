@@ -19,6 +19,12 @@ full-screen overlay plays the four beats — Replay, Analysis, Rewrite, Trial �
 stream of `RewriteEvent`s, shows at least one harness rejection and the fix that
 follows it, and then starts the next round against the strategy that was approved.
 
+Both screens are **cast** screens: the start screen introduces the three agents before
+the first fight, and each beat of the interlude is attributed to the one doing the work —
+portrait, name, and a one-line status that moves with the events. That came out of a
+playtest (*"the player can't connect what's happening to who is doing it"*); see
+[the cast](#the-cast-analyst-coder-judge) below and `docs/AI-DEV-LOG.md`, 2026-09-04.
+
 The interlude is driven entirely by that event stream, which means it has **three
 interchangeable sources** — and the badge in the footer always says which one you are
 looking at, because that is the only thing about the demo that could be dishonest:
@@ -109,7 +115,8 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 | Parameter | Effect |
 |---|---|
 | `?seed=<n>` | Fix the session seed (decimal or `0x…`). Every round seed is derived from it, so one URL reproduces a whole session. Absent = one `crypto.getRandomValues` call, the only non-determinism in the client. |
-| `?autostart=1` | Skip the start screen and begin Round 1 immediately (used by the e2e suite). |
+| `?autostart=1` | Skip the start screen and begin Round 1 immediately (used by the e2e suite). First in precedence: it wins over the remembered "skip intro" box and over `?intro=`. |
+| `?intro=1` / `?intro=0` | Force the start screen on or off, over the remembered box. `?intro=1` is how the screen gets demoed and screenshotted once the box has been ticked. |
 | `?round=<1-5>` | Start at a given round number. |
 | `?strategy=hound` | Load the alternate bundled strategy instead of Round 1's. `hound` is the only strategy that spends `charge`, so it is how the charge telegraph gets exercised. |
 | `?agent=mock` | Force the mock interlude source. Always works offline. |
@@ -120,6 +127,87 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 | `?interlude=0` | Keep the pre-interlude "Round N cleared" screen. Used by `e2e/controls.spec.ts` to test the outcome path without a 25-second overlay in the way. |
 | `?autofight=0` | Do not auto-continue 3 s after the interlude finishes; wait for the FIGHT button. |
 | `?deadline=<ms>` | Shorten the 45 s interlude deadline, to see the spec AC 5 fallback path on a machine where everything works. |
+
+## The cast (Analyst, Coder, Judge)
+
+The three things that take turns during a rewrite have a face, a name, an accent colour
+and one line of plain language, on the start screen and again on every beat of the
+interlude. The reason is a playtest, quoted in full because it is the whole brief:
+
+> *"Today the interlude is just numbers on a screen; the player can't connect what's
+> happening to who is doing it."*
+
+| | Accent | Says, in plain language | |
+|---|---|---|---|
+| **Analyst** | teal `#2DD4BF` | "Watches your replay and writes down your habits." | a model |
+| **Coder** | amber `#F59E0B` | "Rewrites the boss's strategy to counter you." | a model |
+| **Judge** | red `#EF4444` / green `#22C55E` | "Not an AI. Runs 200 simulated fights and rejects anything unfair or broken." | **the harness** |
+| *The boss* | magenta `#C026D3` | the strategy that comes back to fight you | code |
+
+The **Judge is drawn differently on purpose** — hard corners, a dashed rule, a
+`DETERMINISTIC` chip, and "Not an AI" as the first three words of its role. The one thing
+a viewer must not conclude is that a model marks its own homework.
+
+`src/ui/cast.ts` is the data (accents, roles, the placeholder drawings) and is DOM-free;
+`src/ui/portrait.ts` is the only file that knows how a portrait is put on screen;
+`src/interlude/castStatus.ts` maps the event stream to the status lines and is a pure
+reducer, so `test/interlude-cast.test.ts` asserts the whole table in Node.
+
+### Portraits: where to drop the art
+
+| | |
+|---|---|
+| **Path** | `packages/web/public/agents/analyst.png`, `coder.png`, `judge.png`, `boss.png` |
+| **Size** | 1024×1024, square. Displayed at 22–92 px, `object-fit: cover` |
+| **Background** | dark navy `#0B0F1A` (`PORTRAIT_BG`), flat — the panels behind them are `#0a0c12` |
+| **Format** | PNG. The filename *is* the wiring: `portraitUrl(id)` is `<BASE_URL>agents/<id>.png` |
+| **Optional** | `boss.png`. Everything else on the interlude footer still renders without it |
+
+**No code change is needed to add, replace or remove one.** `createPortrait` renders the
+SVG placeholder from `placeholderSvg(id)` *first and always*, then layers the `<img>` over
+it and reveals it only on `load`; on `error` the `<img>` removes itself and the drawing
+stays. That ordering (rather than a bare `onerror`) is deliberate: an `<img>` with an
+error handler paints a broken-image glyph for a frame first, and this is a screen people
+watch frame by frame in a recording.
+
+While a file is missing the browser console shows one 404 per portrait. That is the
+intended state and it is **not** hidden — `e2e/helpers.ts`'s `isMissingPortrait` filters
+exactly that one message out of the "no console errors" assertions and says why, so the
+day the art lands the filter stops matching and nothing else about the suite changes.
+
+The placeholders are not faces: a flat icon per agent (a lens, a code bracket, a
+portcullis, a sigil) over a faint silhouette in the agent's accent. A generated face that
+is *nearly* the shipped portrait is worse than an obvious stand-in, because then nobody
+can tell whether the art arrived.
+
+Raster art is a documented override of spec §2.3 ("no raster art, no image generation
+dependency") — [`docs/SPEC.md`](../../docs/SPEC.md) §13, delta 17.
+
+### The status lines
+
+`reduceCast(state, event)` folds the stream; `castStatus(state)` renders these three:
+
+| Agent | Waiting | Working | Done |
+|---|---|---|---|
+| Analyst | `watching your replay…` | `writing down your habits…` | `found 4 patterns · you play like a dodger` |
+| Coder | `waiting for the analysis…` | `writing candidate 2 of 3…` *(prefixed `attempt 2 of 4 · ` from the second attempt on)* | `3 strategies written` |
+| Judge | `waiting for a strategy…` | `checking the file…`, then `running 200 simulated fights…` | `✗ rejected Warden III — too hard to be fair` / `✓ approved Warden` |
+
+Rules the strings keep: present tense with an ellipsis while it is happening and past
+tense without one when it is done; the number is always the *measured* one (the Analyst's
+own observation count, the harness's own match total); and the Judge never sounds like an
+opinion — it rejects and it approves, because it is not a model. `running…` outranks the
+last rejection, because the Judge is doing something *now* — the rejection stays readable
+in the stamp and in the append-only log regardless (spec §2.2).
+
+The Replay beat is the Analyst's too (its three figures are that agent's input), so its
+portrait is dimmed until the Analyst starts talking and its line becomes a caption —
+`this is the tape it read` — rather than repeating the reading that is in the next panel.
+
+Verdicts are **stamps**: the mark (`✓ APPROVED — 45%`), the reason in plain words, and the
+harness's own quantitative sentence in monospace underneath — never instead of it. The
+AC 5 fallback wears the same stamp, because "nothing was approved, so something that
+already was ships" is a verdict too.
 
 ## The interlude
 
@@ -133,6 +221,7 @@ src/interlude/
   recorded.ts    `recordedSource` — replays a real eval run from public/recorded/
   diff.ts        a small unified diff, for the mock only
   ui.ts          the four-beat overlay (`meterView` is the Gate 3 bar, DOM-free)
+  castStatus.ts  events -> "who is doing what", as a pure reducer + formatter
   replayViz.ts   beat 1's heat grid, dash rose and timeline strip
   index.ts       `createInterludeHandler` — the `onRoundWon` implementation
   fixtures/attempt1.js   mock data: the "too hard" first draft. Never executed.
@@ -368,9 +457,13 @@ pnpm --filter @rematch/web gen:inputlog
 | `src/game/strategy.ts` | `loadRoundStrategy(source)` — source text in, `StrategyRunner` out. The server's seam. |
 | `src/game/seeds.ts` | Session seed + `roundSeed(session, round)` |
 | `src/render/` | Canvas: floor, telegraphs, actors, effects, viewport maths |
-| `src/ui/` | DOM chrome: HUD (HP pips, timer, boss strategy panel) and the four screens |
+| `src/ui/` | DOM chrome: HUD (HP pips, timer, boss strategy panel) and the five screens |
+| `src/ui/cast.ts` | Who the three agents are — accents, roles, placeholder drawings. DOM-free |
+| `src/ui/portrait.ts` | The only file that knows how a portrait reaches the screen (raster over SVG) |
+| `src/ui/intro.ts` | Whether the start screen is shown: `?autostart`, `?intro=`, the remembered box |
 | `src/interlude/` | The four-beat interlude and its event sources. See above. |
 | `src/strategies/*.js` | Bundled strategy sources, imported with `?raw` |
+| `public/agents/*.png` | The cast's portraits. Optional — see [Portraits](#portraits-where-to-drop-the-art) |
 
 ## Vite and QuickJS
 

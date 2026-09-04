@@ -1,0 +1,88 @@
+/**
+ * A portrait, as DOM — the only file that knows how the raster art and the SVG
+ * placeholder swap for one another.
+ *
+ * ```
+ * <span class="rm-portrait" data-agent="analyst" style="--accent:#2DD4BF">
+ *   <span class="rm-portrait-ph"><svg …/></span>   <!-- always present -->
+ *   <img src="./agents/analyst.png" …/>            <!-- on top, once it loads -->
+ * </span>
+ * ```
+ *
+ * The placeholder is rendered **first and always**, and the `<img>` is layered over
+ * it and only becomes visible on `load`. Two reasons, both from watching this fail
+ * the other way round:
+ *
+ * 1. No flash. An `<img>` with an `onerror` handler paints a broken-image glyph for
+ *    a frame before the handler runs, and the interlude is a screen people watch
+ *    frame by frame in a screen recording.
+ * 2. Dropping the PNGs in needs **no code change** (that is the whole deal with the
+ *    human generating them separately) and neither does taking them out again.
+ *
+ * The 404 while the art is missing is real and visible in the browser console. It is
+ * not hidden — `e2e/helpers.ts` filters exactly that one message out of its console
+ * assertion and says why, so the day the files land the filter stops matching and
+ * nothing else about the suite changes.
+ */
+import { AGENTS, placeholderSvg, portraitUrl, type AgentId } from './cast.ts';
+
+export type PortraitOptions = {
+  /** CSS pixels. The square is `size × size`. */
+  size: number;
+  /**
+   * Render it greyed and half-lit: an agent that has not started acting yet. The
+   * Replay panel opens this way, because the Analyst has not read anything.
+   */
+  dim?: boolean;
+  /** Overrides the `src` base. Tests only. */
+  baseUrl?: string;
+};
+
+/**
+ * Build one portrait.
+ *
+ * `data-testid="portrait-<id>"` so a spec can assert the cast is on screen without
+ * depending on whether the raster art has landed.
+ */
+export function createPortrait(id: AgentId, options: PortraitOptions): HTMLElement {
+  const agent = AGENTS[id];
+  const wrap = document.createElement('span');
+  wrap.className = 'rm-portrait';
+  wrap.dataset.agent = id;
+  wrap.dataset.testid = `portrait-${id}`;
+  wrap.style.setProperty('--accent', agent.accent);
+  wrap.style.setProperty('--portrait-size', `${options.size}px`);
+  if (options.dim === true) wrap.dataset.dim = '1';
+  wrap.title = agent.name;
+
+  const placeholder = document.createElement('span');
+  placeholder.className = 'rm-portrait-ph';
+  // Static markup this module built from `cast.ts`'s own constants — no external
+  // input reaches it. `innerHTML` is how an SVG string becomes SVG elements.
+  placeholder.innerHTML = placeholderSvg(id);
+  wrap.append(placeholder);
+
+  const img = document.createElement('img');
+  img.className = 'rm-portrait-img';
+  img.alt = agent.name;
+  img.decoding = 'async';
+  img.width = options.size;
+  img.height = options.size;
+  img.addEventListener('load', () => {
+    img.dataset.ok = '1';
+  });
+  img.addEventListener('error', () => {
+    // The art is not there. Leave the placeholder as the portrait and stop asking.
+    img.remove();
+  });
+  img.src = portraitUrl(id, options.baseUrl);
+  wrap.append(img);
+
+  return wrap;
+}
+
+/** `dim` after the fact: the Analyst lights up when it starts reading. */
+export function setPortraitDim(portrait: HTMLElement, dim: boolean): void {
+  if (dim) portrait.dataset.dim = '1';
+  else delete portrait.dataset.dim;
+}
