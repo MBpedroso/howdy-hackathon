@@ -63,6 +63,7 @@ export const DEFAULT_DEADLINE_MS = 40_000;
 export const DEFAULT_GRACE_MS = 5_000;
 
 export const DEADLINE_ENV = 'REMATCH_DEADLINE_MS';
+export const MAX_ATTEMPTS_ENV = 'REMATCH_MAX_ATTEMPTS';
 export const MATCHES_ENV = 'REMATCH_MATCHES';
 export const WORKERS_ENV = 'REMATCH_WORKERS';
 
@@ -145,6 +146,34 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 /** `REMATCH_DEADLINE_MS` → the loop's deadline. */
 export function resolveDeadlineMs(env: Record<string, string | undefined> = process.env): number {
   return positiveInt(env[DEADLINE_ENV], DEFAULT_DEADLINE_MS);
+}
+
+/**
+ * `REMATCH_MAX_ATTEMPTS` → how many times the loop may be rejected and try again.
+ *
+ * Absent means the loop's own `MAX_ATTEMPTS` (4), which is the right number when the
+ * interlude has 45 s: at ~30-40 s per attempt on a CLI provider, four is already more
+ * than the clock allows. It is a knob because the *other* configuration is real — a
+ * player training against the boss, who would rather wait three minutes for a boss that
+ * actually adapted than get a pre-approved fallback in forty seconds. Measured
+ * 2026-09-08: a Round 5 run stopped at 90 s having bracketed the band from both sides
+ * (0.27 too easy, 0.91 too hard) and needed one more attempt to interpolate between
+ * them. Raising the deadline without raising this would have stopped it at four
+ * attempts anyway.
+ *
+ * Not unbounded: every attempt is K model calls, so an accidental 999 is a bill or a
+ * subscription, and the ceiling makes the worst case something a person chose.
+ */
+export const MAX_ATTEMPTS_CEILING = 20;
+
+export function resolveMaxAttempts(
+  env: Record<string, string | undefined> = process.env,
+): number | undefined {
+  const raw = env[MAX_ATTEMPTS_ENV];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return undefined;
+  return Math.min(MAX_ATTEMPTS_CEILING, Math.trunc(n));
 }
 
 /**
@@ -336,7 +365,12 @@ export async function handleRewrite(
         harnessOpts: resolveHarnessOpts(env, opts.harnessOpts),
         deadlineMs,
         signal: controller.signal,
-        ...(opts.maxAttempts === undefined ? {} : { maxAttempts: opts.maxAttempts }),
+        // Explicit option wins; otherwise `REMATCH_MAX_ATTEMPTS`, else the loop's own
+        // default. See `resolveMaxAttempts` for why this is configurable at all.
+        ...(() => {
+          const attempts = opts.maxAttempts ?? resolveMaxAttempts(env);
+          return attempts === undefined ? {} : { maxAttempts: attempts };
+        })(),
         // Read from this handler's `env` rather than left to the loop's own
         // `process.env` lookup, so a test (or a serverless config) that passes an
         // env gets the candidate count it asked for.

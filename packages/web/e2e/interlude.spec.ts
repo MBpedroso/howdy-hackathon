@@ -128,7 +128,9 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(diff).toContainText('+++ strategy.js (attempt 2)');
   await expect(diff.locator('.add')).not.toHaveCount(0);
   await expect(diff.locator('.del')).not.toHaveCount(0);
-  await expect(page.getByTestId('il-note-rewrite')).toContainText('attempt 2 / 4');
+  // No total: the server's attempt ceiling is configurable and never crosses the wire,
+  // so the label is the attempt number alone. See `MAX_ATTEMPTS` in `interlude/events.ts`.
+  await expect(page.getByTestId('il-note-rewrite')).toContainText('attempt 2');
   await expect(page.getByTestId('il-note-rewrite')).toContainText('Warden');
 
   // ---------------------------------------------------------------- beat 4

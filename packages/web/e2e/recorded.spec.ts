@@ -104,7 +104,7 @@ test('replays a real recorded run: rejections, approval, and Round 2 loads its s
   await expect(page.getByTestId('il-meter')).toHaveClass(/done/);
   // Nothing fell back: this run was approved for real.
   await expect(page.getByTestId('il-banner')).toBeHidden();
-  await expect(page.getByTestId('il-note-rewrite')).toContainText(`attempt ${RUN.attempts} / 4`);
+  await expect(page.getByTestId('il-note-rewrite')).toContainText(`attempt ${RUN.attempts}`);
 
   await page.getByTestId('il-root').screenshot({ path: `${ARTIFACTS}recorded-approved.png` });
 

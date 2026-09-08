@@ -57,11 +57,22 @@ export type RewriteRequestBody = {
 
 /**
  * Bounds on `budgetMs`. Below the minimum the loop cannot even finish one Coder call
- * (p50 7.7 s), so the request is a mistake; above the maximum a caller is asking the
- * server to hold a worker pool far longer than any interlude the spec describes.
+ * (p50 7.7 s), so the request is a mistake.
+ *
+ * The maximum is an hour, which is not an interlude — it is deliberately far past
+ * anything spec AC 5 describes, because "wait as long as it takes" is a legitimate
+ * *training* configuration even though it is a terrible demo. Measured on the
+ * `claude-cli` provider (2026-09-08): one attempt of K=3 candidates plus their gates
+ * costs ~30-40 s, the loop allows up to `REMATCH_MAX_ATTEMPTS` of them, and a Round 5
+ * run that failed inside 90 s had built the bracket (0.27 low, 0.91 high) it needed to
+ * interpolate on the next attempt. Capping that at 300 s would have thrown away the
+ * one configuration where the loop can actually finish on this provider.
+ *
+ * It is still bounded rather than open: `budgetMs` holds a worker pool and a
+ * subprocess, so an unbounded value is a denial of service with extra steps.
  */
 export const MIN_BUDGET_MS = 5_000;
-export const MAX_BUDGET_MS = 300_000;
+export const MAX_BUDGET_MS = 3_600_000;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 

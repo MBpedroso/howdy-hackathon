@@ -26,7 +26,7 @@
  *    not "think" or "feel". It is not a model, and the status line is one of the
  *    few places the product gets to say so.
  */
-import { MAX_ATTEMPTS, type FailureReason, type GateNumber, type RewriteEvent } from './events.ts';
+import type { FailureReason, GateNumber, RewriteEvent } from './events.ts';
 
 /** The three agents that take turns. The Replay beat belongs to the Analyst. */
 export type AgentSlot = 'analyst' | 'coder' | 'judge';
@@ -128,7 +128,9 @@ export function plainVerdict(reason: string | undefined, gate?: GateNumber): str
 /** The plain-words headline over spec AC 5's fallback banner. */
 export function fallbackHeadline(reason: FailureReason): string {
   if (reason === 'deadline') return '⏱ the coder ran out of time';
-  if (reason === 'max-attempts') return `✗ ${MAX_ATTEMPTS} attempts, none approved`;
+  // No count: `max-attempts` means the server hit *its* ceiling, which the stream does
+  // not carry and which is not necessarily the four the spec names.
+  if (reason === 'max-attempts') return '✗ out of attempts, none approved';
   return '✗ the rewrite failed';
 }
 
@@ -312,7 +314,7 @@ function analystStatus(state: CastState): string {
 
 function coderStatus(state: CastState): string {
   if (state.attempt === 0) return 'waiting for the analysis…';
-  const prefix = state.attempt > 1 ? `attempt ${state.attempt} of ${MAX_ATTEMPTS} · ` : '';
+  const prefix = state.attempt > 1 ? `attempt ${state.attempt} · ` : '';
   const total = state.candidates;
   if (state.written >= total) {
     return `${prefix}${total} ${total === 1 ? 'strategy' : 'strategies'} written`;

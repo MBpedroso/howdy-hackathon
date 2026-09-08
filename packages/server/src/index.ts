@@ -36,7 +36,10 @@ export {
   fallbackOnly,
   handleRewrite,
   resetProcessSpendGuard,
+  MAX_ATTEMPTS_CEILING,
+  MAX_ATTEMPTS_ENV,
   resolveDeadlineMs,
+  resolveMaxAttempts,
   resolveHarnessOpts,
   type RewriteHandlerOptions,
 } from './handleRewrite.ts';

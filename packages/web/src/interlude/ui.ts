@@ -1005,8 +1005,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
               'working',
               '↻ rewriting…',
               total > 1
-                ? `attempt ${event.attempt} of ${MAX_ATTEMPTS} — ${total} files at once, with the rejections as their only feedback`
-                : `attempt ${event.attempt} of ${MAX_ATTEMPTS}, with the rejection as its only feedback`,
+                ? `attempt ${event.attempt} — ${total} files at once, with the rejections as their only feedback`
+                : `attempt ${event.attempt}, with the rejection as its only feedback`,
             );
           }
         }
@@ -1027,8 +1027,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         setNote(
           'rewrite',
           total > 1
-            ? `attempt ${state.attempt} / ${MAX_ATTEMPTS} · ${total} candidates · ${state.codeChars} chars`
-            : `attempt ${state.attempt} / ${MAX_ATTEMPTS} · ${state.codeChars} chars`,
+            ? `attempt ${state.attempt} · ${total} candidates · ${state.codeChars} chars`
+            : `attempt ${state.attempt} · ${state.codeChars} chars`,
         );
         break;
       }
@@ -1057,8 +1057,8 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
           note.append(
             document.createTextNode(
               total > 1
-                ? `attempt ${event.attempt} / ${MAX_ATTEMPTS} · candidate ${index + 1} of ${total} · ${event.source.length} bytes`
-                : `attempt ${event.attempt} / ${MAX_ATTEMPTS} · ${event.source.length} bytes`,
+                ? `attempt ${event.attempt} · candidate ${index + 1} of ${total} · ${event.source.length} bytes`
+                : `attempt ${event.attempt} · ${event.source.length} bytes`,
             ),
           );
         }

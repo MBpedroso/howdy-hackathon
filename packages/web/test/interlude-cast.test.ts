@@ -105,7 +105,7 @@ describe('the Coder', () => {
       { type: 'rewrite.delta', attempt: 1, delta: 'a', candidate: 0, candidates: 3 },
       { type: 'rewrite.delta', attempt: 2, delta: 'a', candidate: 0, candidates: 3 },
     ]);
-    expect(castStatus(retry).coder).toBe('attempt 2 of 4 · writing candidate 1 of 3…');
+    expect(castStatus(retry).coder).toBe('attempt 2 · writing candidate 1 of 3…');
   });
 
   it('reads naturally for a single-candidate stream', () => {
@@ -215,7 +215,7 @@ describe('the Judge', () => {
     expect(castStatus(timedOut).judge).toBe('⏱ the coder ran out of time — shipping a pre-approved strategy');
 
     const exhausted = play([{ type: 'fallback', reason: 'max-attempts' }]);
-    expect(castStatus(exhausted).judge).toBe('✗ 4 attempts, none approved — shipping a pre-approved strategy');
+    expect(castStatus(exhausted).judge).toBe('✗ out of attempts, none approved — shipping a pre-approved strategy');
   });
 });
 
@@ -263,7 +263,7 @@ describe('plainVerdict', () => {
 describe('fallbackHeadline', () => {
   it('says which of the three ways it ended', () => {
     expect(fallbackHeadline('deadline')).toBe('⏱ the coder ran out of time');
-    expect(fallbackHeadline('max-attempts')).toBe('✗ 4 attempts, none approved');
+    expect(fallbackHeadline('max-attempts')).toBe('✗ out of attempts, none approved');
     expect(fallbackHeadline('error')).toBe('✗ the rewrite failed');
   });
 });

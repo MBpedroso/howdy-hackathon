@@ -17,6 +17,9 @@ import {
   CLIENT_BUDGET_RESERVE_MS,
   clampToClientBudget,
   DEFAULT_DEADLINE_MS,
+  MAX_ATTEMPTS_CEILING,
+  MAX_ATTEMPTS_ENV,
+  resolveMaxAttempts,
 } from '../src/handleRewrite.ts';
 import { requestBody } from './helpers.ts';
 
@@ -108,6 +111,37 @@ describe('parseRewriteRequest', () => {
     }
     const fractional = parseRewriteRequest(requestBody({ budgetMs: 45_000.5 }));
     expect(fractional.ok).toBe(false);
+  });
+});
+
+/**
+ * The knob that lets a *player* wait, when a demo cannot.
+ *
+ * Four attempts is right for a 45 s interlude and wrong for someone training against
+ * the boss, who would rather wait three minutes for a boss that actually adapted. See
+ * `resolveMaxAttempts` for the measurement behind that.
+ */
+describe('resolveMaxAttempts', () => {
+  it('is absent unless asked for, so the loop keeps its own default', () => {
+    expect(resolveMaxAttempts({})).toBeUndefined();
+    expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: '' })).toBeUndefined();
+    expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: '   ' })).toBeUndefined();
+  });
+
+  it('reads a number, and truncates rather than rounding', () => {
+    expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: '8' })).toBe(8);
+    expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: '8.9' })).toBe(8);
+  });
+
+  it('ignores nonsense instead of turning it into 0 attempts', () => {
+    // `= 0` would mean "never even try", which is not what anyone typing it meant.
+    for (const bad of ['0', '-3', 'lots', 'NaN']) {
+      expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: bad }), bad).toBeUndefined();
+    }
+  });
+
+  it('caps the ceiling, because every attempt is K model calls', () => {
+    expect(resolveMaxAttempts({ [MAX_ATTEMPTS_ENV]: '999' })).toBe(MAX_ATTEMPTS_CEILING);
   });
 });
 

@@ -61,7 +61,17 @@ export const BAND: Readonly<Record<number, readonly [number, number]>> = {
   5: [0.55, 0.7],
 };
 
-/** Spec §6.3: "Max 4 attempts. Then fallback pool." Drives `attempt 2 / 4`. */
+/**
+ * Spec §6.3: "Max 4 attempts. Then fallback pool."
+ *
+ * The client cannot render this as a *total*, and that is not pedantry — it was on
+ * screen wrong. The server's ceiling is `REMATCH_MAX_ATTEMPTS`, which a player training
+ * against the boss raises (see `.env.example`), and the interlude read `attempt 7 of 4`
+ * for a whole round because this constant was baked into the label. The stream never
+ * carries the server's limit, so the honest label is the attempt number alone; this
+ * constant is kept only for the `max-attempts` copy, where the count *is* known after
+ * the fact.
+ */
 export const MAX_ATTEMPTS = 4;
 
 // -------------------------------------------------------- copied from `agents`
