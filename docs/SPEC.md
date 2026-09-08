@@ -380,5 +380,7 @@ Gate 3 and one approved on the next attempt — with the AC 7 Mimic number of 0.
 against the ≥ 0.70 threshold — is excerpted in `docs/SYSTEM.md` §6, committed as
 `docs/evidence/eval-round2-2026-09-03.json` — **that file is the one quoted run, not
 all ten**; its own `note` field says so, and the other nine survive only as the
-aggregate `passRate: 0.6` — and replayable in the browser with `?agent=recorded`. What remains true is that every *unit test* of an agent path runs
+aggregate `passRate: 0.6`, which is an **upper bound**: the eval ran the day before
+Gate 3's ACTIVE assertion existed, and four of its six approvals fail ACTIVE today
+(`docs/evidence/recheck-active-2026-09-08.json`) — and replayable in the browser with `?agent=recorded`. What remains true is that every *unit test* of an agent path runs
 against a mock provider, deliberately: `pnpm verify` must never spend money.

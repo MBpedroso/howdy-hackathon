@@ -143,7 +143,9 @@ jury read as an unfinished screen to the other.
   measured pass rates), determinism, and the honest limitations.
 - **[`docs/evidence/eval-round2-2026-09-03.json`](docs/evidence/)** — the event log of
   the **one** run §6 quotes: every rejection and every generated `strategy.js` in it,
-  plus the eval's aggregate numbers (`approved: 6, total: 10, passRate: 0.6`). The other
+  plus the eval's aggregate numbers (`approved: 6, total: 10, passRate: 0.6` — an upper
+  bound, measured the day before Gate 3's ACTIVE assertion existed; see
+  [`recheck-active-2026-09-08.json`](docs/evidence/) next to it). The other
   nine runs' event logs are *not* committed; the file's own `note` field says so. This
   entry claimed "all ten runs" until 2026-09-08.
 - **[`docs/SPEC.md`](docs/SPEC.md)** — the spec the whole thing was measured against,

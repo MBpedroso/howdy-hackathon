@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The four deterministic gates that decide whether a generated strategy ships, plus the CLI.",
+  "description": "The four gates that decide whether a generated strategy ships - three reproducible, one a wall-clock perf measurement - plus the CLI.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "cli": "node --experimental-strip-types src/cli.ts",
     "test:balance": "vitest run --passWithNoTests --reporter=verbose balance",
+    "recheck:active": "node --experimental-strip-types scripts/recheck-active.ts",
     "test": "vitest run"
   },
   "dependencies": {

@@ -155,9 +155,9 @@ export function harnessRules(round: BalanceRound): string {
   const rest = Math.max(0, (4 * ((lo + hi) / 2) - 1) / 3).toFixed(2);
   return `# HOW THE HARNESS JUDGES YOU
 
-Your file is not shipped because it looks good. It runs four deterministic gates,
-in order, and stops at the first failure. No LLM in the harness, no human in the
-loop: you get the rejection sentence back and another attempt.
+Your file is not shipped because it looks good. It runs four gates, in order, and
+stops at the first failure. No LLM in the harness, no human in the loop: you get
+the rejection sentence back and another attempt.
 
 Gate 1 — static. An AST walk before anything executes. Forbidden identifiers,
   imports, wrong module shape, an oversized file.

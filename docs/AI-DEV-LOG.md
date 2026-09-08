@@ -760,8 +760,48 @@ ninety seconds to find:
   along. It was being described elsewhere as "documented as a delta" while missing from
   the deltas table. Now delta 20.
 
+### The check that had to come next, and what it turned up
+
+A new gate clause can only *lower* the loop's pass rate. The eleven shipped strategies
+clear the span floor by 2.8x, but they were hand-written to clear it — the distribution
+that matters is what the model actually writes. That corpus is on disk: `artifacts/agents/`
+holds the untrimmed 10-run eval, and `rewrite.done` events carry every candidate's source.
+So all 60 were replayed through the current Gate 3 before anything was called finished.
+It costs nothing — no model call, no network — which is the whole argument for doing it
+first: `packages/harness/scripts/recheck-active.ts` (`pnpm --filter @rematch/harness recheck:active`), results committed at
+`docs/evidence/recheck-active-2026-09-08.json`.
+
+**The span clause rejects 0 of 58.** (Two of the 60 are truncated model output that Gate 1
+rejects.) The narrowest real candidate is 86.9 px against the 56 px floor, and that one
+already fails an idle clause. The clause is free on this distribution — which is the
+result to want, and was not guaranteed.
+
+**But four of the eval's six approvals fail the *idle* clauses today** — `r1-a1-c1`,
+`r2-a3-c0`, `r6-a3-c2`, `r8-a2-c0`, with idle runs of 161, 183, 762 and 155 ticks against
+the 90-tick limit and p90 idle fractions of 0.73–0.95 against 0.25. Nothing to do with the
+span clause. The eval ran on the evening of 09-03; ACTIVE was added on 09-04. **So the 0.6
+pass rate quoted in the README, the spec and `SYSTEM.md` §6 was measured against a harness
+that no longer exists.**
+
+This is the same mistake as the "897 tests" banner, one level up: a number that was true
+when written, quoted ever since, and never re-derived after the thing it measures changed.
+The difference is that this one is the project's headline claim.
+
+What it does *not* mean is that the rate is now 0.2. The loop gets the idle-run rejection
+as feedback — a specific, actionable sentence naming the bot and the tick count — and it
+has four attempts. Whether it recovers inside the deadline is unmeasured, and the deadline
+was already the binding constraint (Coder p50 7.7 s, p90 12.3 s against 40 s). The honest
+statement, now in all four docs, is that **the current pass rate is unknown and 0.6 is an
+upper bound**. The practical consequence: the fallback pool is carrying more of the demo
+than the docs implied, which is an argument for keeping it good, not for hiding it.
+
 ### Not done, and why
 
+- **The pass rate has not been re-measured.** The only way is `pnpm eval:agents` against a
+  live key, which spends money — a human decision, and the top of this list because it is
+  the number a judge will ask about. Everything needed is in place: the eval, the ten canned
+  replays, the spend guards, and now a free pre-check that says the span clause is not the
+  thing to worry about.
 - **Not pushed, so CI has still never run.** `origin/main` is still `4398e6e`, the spec
   template. This costs more than AC 9: `.githooks/pre-commit` argues its own `--no-verify`
   hatch is acceptable *because* "CI re-runs the same script on every push", and that
@@ -800,6 +840,11 @@ Anthropic (credits). Replay `mimic-camper`: three candidates rejected by Gate 3,
   run plus the eval's aggregate numbers, and its own `note` field says so.
 - Watchable: `pnpm dev`, then `/?agent=recorded&run=mimic-camper&autostart=1` — no key.
 - Observed pass rate **0.6** against the 0.8 target, so §7's threshold is **not** met.
+  **And 0.6 is an upper bound**, established on 2026-09-08: this eval ran the evening
+  *before* Gate 3 grew its ACTIVE assertion, and re-grading its candidates against the
+  current harness fails four of the six approvals on the idle clauses
+  ([`evidence/recheck-active-2026-09-08.json`](evidence/recheck-active-2026-09-08.json)).
+  The current rate has never been measured.
   That is recorded rather than smoothed over: the cause is measured (Coder p50 7.7 s /
   p90 12.3 s against a 40 s deadline, so the fourth attempt is usually unreachable) and
   the fallback pool covers the rest visibly. Closing the gap means a faster Coder or a

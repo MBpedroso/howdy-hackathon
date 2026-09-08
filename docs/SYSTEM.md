@@ -640,6 +640,29 @@ What this excerpt is evidence of, precisely:
 
 ### Measured pass rate
 
+> **Read this first: every number in this section predates Gate 3's ACTIVE assertion.**
+> The evals ran on the evening of 2026-09-03; ACTIVE's two idle clauses were added on
+> 09-04 and its span clause on 09-08. Re-grading all 58 gradeable candidate files from
+> the K=3 eval against the harness as it stands —
+> [`docs/evidence/recheck-active-2026-09-08.json`](evidence/recheck-active-2026-09-08.json),
+> reproduce with `pnpm --filter @rematch/harness recheck:active` —
+> **four of the six approvals fail the idle clauses today**, with idle runs of 161, 183,
+> 762 and 155 ticks against the 90-tick limit and p90 idle fractions of 0.73–0.95
+> against 0.25. They would not be approved on the attempt that approved them.
+>
+> That does **not** make the current pass rate 0.2. The loop receives the idle-run
+> rejection as feedback and has four attempts; whether it recovers inside the deadline
+> is unmeasured, and the deadline was already the binding constraint (see below). **The
+> honest statement is that the current pass rate is unknown, and 0.6 is an upper bound
+> measured against a weaker harness.** Re-measuring it means re-running `pnpm
+> eval:agents` against a live key, which spends money and is a human decision — it is
+> the top item in `AI-DEV-LOG.md`'s open list.
+>
+> The same re-grade answers the question the span clause raised, and answers it well: it
+> rejects **0 of 58**. The narrowest real candidate is 86.9 px against the 56 px floor,
+> and that one already fails an idle clause. A new gate clause can only lower the pass
+> rate, so this was checked before it shipped rather than after.
+
 Across the same evening's evals, all `gpt-5.4-mini`, round 2, 200 matches:
 
 | Configuration | Runs approved | Pass rate |
@@ -671,7 +694,10 @@ honest-latency measurement is at concurrency 1.
 
 That is also why the fallback pool is not a formality. At a 0.6 pass rate roughly two
 players in five see it, so it ships a *balance-tested* strategy for that round and the
-interlude says so on screen (spec AC 5's banner) rather than hiding the miss.
+interlude says so on screen (spec AC 5's banner) rather than hiding the miss. Given the
+re-grade above, plan on more than two in five: the pool is carrying more of the demo than
+this section's headline number suggests, which is an argument for keeping it good rather
+than for hiding the uncertainty.
 
 Also on disk: [`artifacts/server/`](../artifacts/server/) holds two real
 `POST /api/rewrite` event logs written by the server's own `log.ts` — but they are
@@ -851,15 +877,20 @@ before the eval in §6 ran that evening, and never updated. Two sections of the 
 file contradicted each other on the project's most load-bearing claim for eleven days.
 The marker is gone because a dated list nobody re-dates is worse than no marker.
 
-1. **The loop's pass rate is 0.6 against spec §7's 0.8 (AC 6 evidence).** A real run
-   *has* been recorded — §6 is it, and `pnpm eval:agents` has been run against a live
-   key (11 times on 2026-09-03; see `docs/AI-DEV-LOG.md`). What the evidence does not
-   show is reliability: 6 of 10 canned replays were approved at K=3, and 3 of the 4
-   failures ended on the *deadline* rather than on `max-attempts`, so the binding
-   constraint is Coder latency against the clock, not the width of the fairness band.
-   Only the quoted run's event log is committed; the other nine survive as the
-   aggregate. Every *unit test* of an agent path still runs against `mockProvider`,
-   deliberately — `pnpm verify` must never spend money.
+1. **The loop's pass rate is unknown, and the 0.6 on record is an upper bound.** A real
+   run *has* been recorded — §6 is it, and `pnpm eval:agents` has been run against a live
+   key (11 times on 2026-09-03; see `docs/AI-DEV-LOG.md`). Two things the evidence does
+   not show. First, reliability: 6 of 10 canned replays were approved at K=3 against
+   spec §7's 0.8, and 3 of the 4 failures ended on the *deadline* rather than on
+   `max-attempts`, so the binding constraint is Coder latency against the clock, not the
+   width of the fairness band. Second, and worse: **that eval predates Gate 3's ACTIVE
+   assertion**, and re-grading its candidates against today's harness fails four of the
+   six approvals on the idle clauses
+   ([`evidence/recheck-active-2026-09-08.json`](evidence/recheck-active-2026-09-08.json)).
+   The current rate has never been measured; doing so spends money and is item 1 of the
+   open list in `AI-DEV-LOG.md`. Only the quoted run's event log is committed; the other
+   nine survive as the aggregate. Every *unit test* of an agent path still runs against
+   `mockProvider`, deliberately — `pnpm verify` must never spend money.
 2. **No human playtest (AC 4).** Whether Round 1 is beatable in under 60 s on a first try
    is unmeasured. The e2e suite proves a *scripted* player wins it in 909 ticks (~15 s),
    which says the fight is winnable, not that it is fun or readable. The renderer agent's

@@ -1,9 +1,18 @@
 # `@rematch/harness`
 
-The four deterministic gates that decide whether a generated strategy ships, and the runner
-that sequences them. **No LLM is called anywhere in this package** (spec §6): a verdict is a
-pure function of the strategy source and a seed, so every rejection replays byte-for-byte —
-which is what makes the rejections in the interlude evidence rather than anecdote.
+The four gates that decide whether a generated strategy ships, and the runner that
+sequences them. **No LLM is called anywhere in this package** (spec §6).
+
+Gates 1–3 are *reproducible*: a verdict is a pure function of the strategy source and a
+seed, so every rejection replays byte-for-byte — which is what makes the rejections in the
+interlude evidence rather than anecdote. Gate 1 is a pure AST walk, and Gates 2 and 3 load
+the sandbox on `monotonicClock()` so their budgets bound *work* rather than time.
+
+**Gate 4 is the exception, on purpose.** "Is this fast enough to render at 60 Hz" is a
+question about real time, so it keeps the host wall clock and its verdict is a
+measurement, not a proof: a strategy whose p99 sits near the 2 ms budget can pass on a
+quiet laptop and fail on a loaded CI box. Three reproducible gates and one measurement —
+this README said "four deterministic gates" until 2026-09-08 (spec §13, delta 18).
 
 | Gate | Name | Status | Catches |
 |---|---|---|---|
