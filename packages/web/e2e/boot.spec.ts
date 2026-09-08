@@ -20,6 +20,35 @@ const ARTIFACTS = new URL('../../../artifacts/web/', import.meta.url).pathname;
 /** The projector the interlude is laid out against; the intro must fit it too. */
 test.use({ viewport: { width: 1280, height: 800 } });
 
+/**
+ * The determinism footer is opt-in, and the flag really works.
+ *
+ * It used to render during every normal fight. That was deliberate — it is the
+ * clearest evidence in the UI that the simulation is seed-deterministic — but to a
+ * non-technical viewer it is an unfinished screen, permanently
+ * (`docs/REVIEW-2026-09-08.md`, question 5). Both halves are asserted here because
+ * only one of them is the risk: a default that quietly flips back on is the
+ * regression, and a flag that silently stops working takes the evidence with it.
+ */
+test('the determinism footer is absent by default and present with ?debug=1', async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await page.goto('/?seed=424242&autostart=1');
+  await waitForRound(page);
+  // Absent from the DOM, not merely hidden — see `createHud`.
+  await expect(page.locator('.hud-foot')).toHaveCount(0);
+
+  await page.goto('/?seed=424242&autostart=1&debug=1');
+  await waitForRound(page);
+  const foot = page.locator('.hud-foot');
+  await expect(foot).toBeVisible();
+  // The two numbers it exists to show: the seed pair and the tick.
+  await expect(foot).toContainText('seed 424242/');
+  await expect(foot).toContainText('tick ');
+
+  expect(errors).toEqual([]);
+});
+
 test('boots to a start screen with a visible arena', async ({ page }) => {
   const errors = collectErrors(page);
 

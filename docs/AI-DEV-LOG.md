@@ -650,6 +650,129 @@ New artifacts: `artifacts/web/start-screen.png`, `interlude-cast-{analyst,coder,
 Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck
 through, rather than deleted: what closed it and what it cost is the interesting part.
 
+## 2026-09-08 — an independent review, and the boss that passed every gate by vibrating
+
+An outside reviewer was handed the repo and `docs/HANDOFF-REVIEW.md` and asked to be
+hostile. The full report is [`REVIEW-2026-09-08.md`](REVIEW-2026-09-08.md); it scores the
+project 68–72 and the reason is one finding, which is worth writing down in full because
+it is the second time the same class of bug has shipped.
+
+### The finding
+
+Five lines, now `packages/harness/test/fixtures/jitter.js`:
+
+```js
+export function decide(view) {
+  return { type: 'move', dx: view.tick % 2 ? 0.02 : -0.02, dy: 0 };
+}
+```
+
+It never attacks, never approaches, never spends a cooldown. It **passed all four
+gates** — approved for Round 2, panel 0.44 inside the 0.35–0.50 band, ACTIVE reporting
+`idle run 0t/90` and `p90 0%`, and **ADAPTED at 1.00** against the `camper` and `dodger`
+replay summaries. Those two are how a nervous first-time player at a demo booth actually
+plays, so this was not a corner case; it was the modal path. On screen it is a dot
+vibrating on one tile, and the interlude stamps APPROVED over it.
+
+The `0.02` is not the trick, and the first hypothesis — that it was sneaking under
+`STILL_EPSILON` (0.01 px) — was **wrong**, which is worth recording because it cost an
+hour. `validateMove` normalizes `move` to a unit vector, so the magnitude is discarded
+and the boss steps its full 2.6 px every single tick. It is genuinely moving at top
+speed. Raising `STILL_EPSILON` to a fraction of boss speed was tried, measured to change
+the idle run of **none** of the eleven shipped strategies, and reverted: `move` is either
+full-speed or wall-clamped to nothing, so there is no middle band for a bigger threshold
+to catch, and shipping an inert behaviour change alongside a real fix only muddies both.
+
+The actual defect is that ACTIVE's two clauses are both about **stalling**, and a boss
+that oscillates never stalls. Worse, `sim/simulate.ts` had been reducing a `minTravelPx`
+aggregate — commented "a boss that never moved at all is 0" — for exactly this purpose
+since the gate was written, and Gate 3 never read it. `grep -rn minTravelPx` returned five
+writes and zero reads. The signal was computed and thrown away.
+
+And path length would not have worked anyway: the jittering boss racks up ~9 000 px of
+`travelPx` inside a 5 px box. What was missing is *displacement*, so the measurement is
+now `spanPx`, the diagonal of the boss's bounding box over a match.
+
+### Why the band accepted it
+
+`runMatch.ts` defines `bossWon: state.outcome !== 'playerWon'` — running out the 60-second
+clock is a boss win. So a boss that never attacks beats any bot that fails to kill it in
+time, which is why a do-nothing boss measured Camper 0.76 and Dodger 1.00. Passivity is
+*rewarded* by the panel.
+
+That is the deeper problem and it is **not fixed**. Changing it re-baselines every band,
+every margin and every calibration fixture in two packages, six days from the deadline —
+so the span clause is a floor under the symptom, and the incentive stays. It is recorded
+here rather than smoothed over: a reviewer asking "is ACTIVE a real control or a patch?"
+is right to ask, and the honest answer is that it is a floor, deliberately.
+
+### The threshold, and why it is not a percentile
+
+`ACTIVITY.minSpanPx` is the boss's own diameter, `ENGINE_CONSTANTS.boss.radius * 2` = 56
+px: over a whole round the boss must range at least its own width. Measured across the
+eleven shipped strategies, the narrowest is `fallback/round5/tollkeeper` at **155.7 px**
+(2.8× of headroom) and the attack measures **2.6 px** (21× below the line). Anything in
+that two-order-of-magnitude gap would work, and a game quantity is the one choice that
+does not need to appeal to a sample of eleven.
+
+The span clause sits *outside* the two idle clauses' `else if` chain, so a boss that
+freezes for a stretch and creeps around a corner for the rest is told about both — that
+sentence is the whole of the Coder's feedback.
+
+### The second finding: Gate 2 was on the wrong clock
+
+`monotonicClock()` reached only the Gate 3 simulator in the 09-04 fix. Gate 2 and Gate 4
+still loaded the sandbox on `performance.now()`. For Gate 4 that is correct and deliberate.
+For Gate 2 it was an oversight against that gate's own docstring, and a bad one, because
+Gate 2 rejects on *any single* runner failure. Measured at the budget edge — a `decide`
+doing N iterations of arithmetic:
+
+```
+  N = 20 000   pass          N = 40 000   REJECTED, 4 of 560 states over budget
+  N = 30 000   pass, 5x      N = 80 000   REJECTED, 543 of 560
+```
+
+Anything in that band was decided by how loaded the machine was. After the fix all three
+pass Gate 2 — deterministically, four runs under three-way CPU load — and slowness is
+Gate 4's business, which is where it belonged. Gate 2's whole `detail` is now bit-identical
+across runs including the timing distribution, and `p50` comes back as an exact multiple of
+`MONOTONIC_STEP_MS`; `test/gates.test.ts` asserts that, because it is what proves *which*
+clock ran. AC 8 still holds: the infinite-loop fixture is still rejected at Gate 2.
+
+So the harness is **three reproducible gates and one measurement**. The docs said "four
+deterministic gates" (spec §13, delta 18).
+
+### The third finding: the docs had drifted
+
+Not a bug, and the most likely thing to actually cost points, because it takes a judge
+ninety seconds to find:
+
+- README's banner said **897 tests + 14 e2e**; `pnpm verify` says 994 + 18. A count nobody
+  re-runs goes stale silently, so the paragraph in `SYSTEM.md` §8 now says which one wins.
+- `SYSTEM.md` §6 said the evidence file held "this and the nine other runs"; it holds one,
+  and its own `note` field says so. README said "all ten runs". Both corrected.
+- `SYSTEM.md` §9 item 1 still read *"No real API run has been recorded (AC 6) … has never
+  been run against a live key"* — written 09-03, before the eval ran that evening, and never
+  updated. Two sections of the same file contradicted each other on the project's most
+  load-bearing claim for eleven days. The `at 069be8d` marker did not save it; the marker
+  is gone, because a dated list nobody re-dates is worse than none.
+- `BossView.history` is described as "rolling" in the contract and was cumulative all
+  along. It was being described elsewhere as "documented as a delta" while missing from
+  the deltas table. Now delta 20.
+
+### Not done, and why
+
+- **Not pushed, so CI has still never run.** `origin/main` is still `4398e6e`, the spec
+  template. This costs more than AC 9: `.githooks/pre-commit` argues its own `--no-verify`
+  hatch is acceptable *because* "CI re-runs the same script on every push", and that
+  sentence is currently false. Outward-facing, so it is a human call.
+- **Recorded demo runs not re-recorded.** They predate the ACTIVE gate and the bosses in
+  them freeze; it is disclosed on screen, in 9 px type, in the busiest corner. Re-recording
+  spends API credit, so it is a human call too.
+- **`timeout = boss win`** — see above.
+- **No audio anywhere.** `grep -riE "audio|\.mp3|\.wav"` over `packages/web/src` returns
+  nothing. Cheapest Product Quality points left on the table.
+
 ### `[ ] 2026-09-0? — human playtest (AC 4)`
 
 *Can a human beat Round 1 in under 60 s with WASD + mouse on a first try, in ≥3 of 5
@@ -672,7 +795,9 @@ Anthropic (credits). Replay `mimic-camper`: three candidates rejected by Gate 3,
 0.99 ≥ 0.70** — in 23.5 s, 7 model calls, no human message anywhere.
 
 - Excerpt and analysis: [`SYSTEM.md`](SYSTEM.md) §6.
-- Full event log, all ten runs: [`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
+- Event log of *this* run: [`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
+  This bullet said "all ten runs" until 2026-09-08; the committed file is the one quoted
+  run plus the eval's aggregate numbers, and its own `note` field says so.
 - Watchable: `pnpm dev`, then `/?agent=recorded&run=mimic-camper&autostart=1` — no key.
 - Observed pass rate **0.6** against the 0.8 target, so §7's threshold is **not** met.
   That is recorded rather than smoothed over: the cause is measured (Coder p50 7.7 s /

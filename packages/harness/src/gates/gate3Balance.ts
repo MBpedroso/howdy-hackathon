@@ -153,22 +153,42 @@ function worstActivity(sims: readonly SimulateResult[]): {
   worstBot: string;
   worstSeed: number;
   idleFractionP90: number;
+  minSpanPx: number;
+  narrowestBot: string;
+  narrowestSeed: number;
 } {
-  let worst = { maxIdleRun: -1, worstBot: '', worstSeed: 0, idleFractionP90: 0 };
+  let worst = {
+    maxIdleRun: -1,
+    worstBot: '',
+    worstSeed: 0,
+    idleFractionP90: 0,
+    minSpanPx: Number.POSITIVE_INFINITY,
+    narrowestBot: '',
+    narrowestSeed: 0,
+  };
   for (const sim of sims) {
     if (sim.activity.maxIdleRun > worst.maxIdleRun) {
       worst = {
+        ...worst,
         maxIdleRun: sim.activity.maxIdleRun,
         worstBot: sim.activity.worstBot,
         worstSeed: sim.activity.worstSeed,
-        idleFractionP90: worst.idleFractionP90,
       };
     }
     if (sim.activity.idleFractionP90 > worst.idleFractionP90) {
       worst.idleFractionP90 = sim.activity.idleFractionP90;
     }
+    if (sim.activity.minSpanPx < worst.minSpanPx) {
+      worst.minSpanPx = sim.activity.minSpanPx;
+      worst.narrowestBot = sim.activity.narrowestBot;
+      worst.narrowestSeed = sim.activity.narrowestSeed;
+    }
   }
-  return { ...worst, maxIdleRun: Math.max(0, worst.maxIdleRun) };
+  return {
+    ...worst,
+    maxIdleRun: Math.max(0, worst.maxIdleRun),
+    minSpanPx: Number.isFinite(worst.minSpanPx) ? worst.minSpanPx : 0,
+  };
 }
 
 export async function gate3Balance(source: string, opts: Gate3Options = {}): Promise<GateResult> {
@@ -254,6 +274,7 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
       fairMax: hi,
       maxIdleRunTicks: ACTIVITY.maxIdleRunTicks,
       maxIdleFractionP90: ACTIVITY.maxIdleFractionP90,
+      minSpanPx: ACTIVITY.minSpanPx,
     },
     matches: panel.matches + (mimic?.matches ?? 0),
     workers: panel.workers,
@@ -263,6 +284,9 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
       worstBot: activity.worstBot,
       worstSeed: activity.worstSeed,
       idleFractionP90: activity.idleFractionP90,
+      minSpanPx: activity.minSpanPx,
+      narrowestBot: activity.narrowestBot,
+      narrowestSeed: activity.narrowestSeed,
     },
     panel: {
       winRate: panel.winRate,
@@ -312,6 +336,15 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
   } else if (activity.idleFractionP90 > ACTIVITY.maxIdleFractionP90) {
     problems.push(
       `boss did nothing on ${Math.round(activity.idleFractionP90 * 100)}% of ticks in a typical match — never return idle as a resting state; patrol, reposition or feint instead (limit ${Math.round(ACTIVITY.maxIdleFractionP90 * 100)}%)`,
+    );
+  }
+  // The span clause is *not* in the same `else if` chain. A boss can be both frozen
+  // for a stretch and confined to one spot for the rest, and telling the Coder only
+  // about the run it happened to trip first would send it to fix the smaller half.
+  if (activity.minSpanPx < ACTIVITY.minSpanPx) {
+    const against = activity.narrowestBot === '' ? '' : ` vs ${activity.narrowestBot}`;
+    problems.push(
+      `boss never left a ${Math.round(activity.minSpanPx)} px patch of floor over a whole match${against} — moving back and forth on the spot is not playing; commit to a direction for long enough to change the range you fight at (need ${ACTIVITY.minSpanPx} px)`,
     );
   }
 

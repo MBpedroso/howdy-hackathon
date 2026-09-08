@@ -5,7 +5,7 @@ boss's strategy to counter you. A second, deterministic verifier refuses to ship
 rewrite until it proves the fight is still fair — and you watch it happen, rejections
 included.
 
-**Status: `pnpm verify` green — 897 tests + 14 e2e. Deployed URL: pending.**
+**Status: `pnpm verify` green — 997 tests + 19 e2e. Deployed URL: pending.**
 
 ## 60-second demo
 
@@ -52,7 +52,7 @@ The interlude *is* the demo. Everything on screen is real output.
 | **Replay** | your position heat map, dash rose, attack timeline | deterministic replay from seed + input log — the same three pictures the Analyst gets |
 | **Analysis** | streamed prose: *"Player camped the bottom-left corner…"* | **Analyst agent** reads the compressed replay. It is shown no code, ever |
 | **Rewrite** | a unified diff, old strategy → new, labelled with the boss's new name | **Coder agent** writes a `strategy.js` against the frozen Boss Contract |
-| **Trial** | gates tick past, a meter fills, verdicts land: `✗ 0.78 vs panel — too hard` … `↻` … `✓ APPROVED` | **harness**, 4 deterministic gates, no LLM. A rejection goes back to the Coder verbatim. Max 4 attempts, then a pre-approved fallback, visibly |
+| **Trial** | gates tick past, a meter fills, verdicts land: `✗ 0.78 vs panel — too hard` … `↻` … `✓ APPROVED` | **harness**, 4 gates, no LLM — three of them reproduce byte-for-byte, and Gate 4 is a wall-clock measurement by design. A rejection goes back to the Coder verbatim. Max 4 attempts, then a pre-approved fallback, visibly |
 
 ## Packages
 
@@ -82,7 +82,7 @@ Two deliberate departures from the spec's package table, plus eight more, are li
 | `pnpm typecheck` / `pnpm lint` / `pnpm test` | The three steps on their own |
 | `pnpm test:contract` / `test:engine` / `test:sandbox` / `test:harness` | Per-layer suites |
 | `pnpm test:balance` | Balance regression: every pooled fallback still lands in its round's band |
-| `pnpm test:e2e` | Playwright (chromium, 14 tests); builds and previews first. Screenshots → `artifacts/` |
+| `pnpm test:e2e` | Playwright (chromium, 19 tests); builds and previews first. Screenshots → `artifacts/` |
 | `pnpm harness <file.js>` | Run the gates against one strategy (`--gates 1,2`, `--seed`, `--json`). Exit 0 approved / 1 rejected / 2 usage error |
 | `pnpm eval:agents` | **Spends money. Refuses to run without `REMATCH_ALLOW_SPEND=1`**, printing the worst-case call count (~250) first. The loop over 10 canned replays vs spec §7's ≥80% target |
 | `pnpm --filter @rematch/web record:run <artifact> <run>…` | Rebuild the recorded demo assets from an eval artifact. Reads a local file; no network |
@@ -128,8 +128,12 @@ and is no control at all on the total bill. The post-mortem is in
 
 `.env` at the repo root is read by Node itself (`--env-file-if-exists`) — no `dotenv`
 dependency, and a missing `.env` is a log line rather than a crash. Useful URL parameters
-(`?seed=`, `?round=`, `?agent=recorded`, `?run=`, `?agent=sse`, `?speed=`, `?deadline=`)
-are in `packages/web/README.md`.
+(`?seed=`, `?round=`, `?agent=recorded`, `?run=`, `?agent=sse`, `?speed=`, `?deadline=`,
+`?debug=1`) are in `packages/web/README.md`. **`?debug=1`** is the one worth knowing for a
+technical walkthrough: it puts the determinism footer back under the HUD — tick, both
+seeds, tick+render ms, and the sandbox runner's call/idle/violation counts. It is off by
+default as of 2026-09-08, because the numbers that read as *evidence* to one half of a
+jury read as an unfinished screen to the other.
 
 ## Docs
 
@@ -137,9 +141,11 @@ are in `packages/web/README.md`.
   boundary, the three agents and what each is denied, the four gates and their real
   thresholds, the **Autonomous Loop Evidence** (a real `gpt-5.4-mini` run, with the
   measured pass rates), determinism, and the honest limitations.
-- **[`docs/evidence/eval-round2-2026-09-03.json`](docs/evidence/)** — the complete event
-  log of the eval that evidence comes from: all ten runs, every rejection, every
-  generated `strategy.js`.
+- **[`docs/evidence/eval-round2-2026-09-03.json`](docs/evidence/)** — the event log of
+  the **one** run §6 quotes: every rejection and every generated `strategy.js` in it,
+  plus the eval's aggregate numbers (`approved: 6, total: 10, passRate: 0.6`). The other
+  nine runs' event logs are *not* committed; the file's own `note` field says so. This
+  entry claimed "all ten runs" until 2026-09-08.
 - **[`docs/SPEC.md`](docs/SPEC.md)** — the spec the whole thing was measured against,
   unedited, with an **Implementation deltas** section at the end.
 - **[`docs/AI-DEV-LOG.md`](docs/AI-DEV-LOG.md)** — how it was built: one orchestrator
@@ -153,7 +159,7 @@ instructions is not what makes them hold.
 
 | # | Control | Where | What it stops |
 |---|---|---|---|
-| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all 897 tests |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](.githooks/pre-commit) → [`scripts/verify.sh`](scripts/verify.sh) | A commit that does not typecheck, lint, and pass all 997 tests |
 | 2 | Determinism lint rule | [`eslint.config.mjs`](eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` — including `Math['random']`, `const { now } = Date`, and `node:perf_hooks` |
 | 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry. The contract is the API the boss agent writes against, so its changes are human-gated |
 

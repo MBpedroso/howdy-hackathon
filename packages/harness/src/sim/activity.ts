@@ -34,6 +34,46 @@
  * `idle` and was the real failure mode of `fallback/round3/emberline.js` (an orbit
  * that pinned itself against the arena edge for 169 ticks without ever returning
  * `idle`). Both are counted; a `move` that actually moved is not.
+ *
+ * ## The second measurement, and why one was not enough (2026-09-08)
+ *
+ * An independent review (`docs/REVIEW-2026-09-08.md`) submitted five lines, kept as
+ * `test/fixtures/jitter.js`:
+ *
+ * ```js
+ * export function decide(view) {
+ *   return { type: 'move', dx: view.tick % 2 ? 0.02 : -0.02, dy: 0 };
+ * }
+ * ```
+ *
+ * It never attacks, never approaches, never spends a cooldown. It twitches back and
+ * forth over a 5 px stretch of floor and it **passed all four gates** — approved for
+ * Round 2 at panel 0.44 inside the 0.35–0.50 band, with ACTIVE reporting
+ * `idle run 0t/90` and `p90 0%`, the gate calling it 100% active, and ADAPTED at
+ * 1.00 against two of the four recorded player replays. Against `camper` and
+ * `dodger`, the two styles a first-time player at a demo actually uses, the harness
+ * stamped APPROVED on a vibrating dot.
+ *
+ * Note what the `0.02` does *not* do: `validateMove` normalizes `move` to a unit
+ * vector (`contract/src/validate.ts`), so the magnitude is discarded and the boss
+ * steps a full 2.6 px every tick. The strategy is not sneaking under
+ * `STILL_EPSILON` — it is genuinely moving at top speed, and clause 1 above is
+ * working exactly as written. The hole is that clauses 1–4 are all about
+ * *stalling*, and a boss that oscillates never stalls.
+ *
+ * So the definition above measures how *busy* the boss was, and nothing measured
+ * where it *got to*. A match now also records `spanPx`, the diagonal of the boss's
+ * bounding box, and Gate 3's ACTIVE reads the smallest span over every match. The
+ * two assertions are complementary and neither subsumes the other: a boss that
+ * crosses the arena once and then freezes has a large span and is caught by the
+ * idle-run clause, and a boss that vibrates forever has no idle run and is caught
+ * by the span clause.
+ *
+ * `travelPx` — path length — was already here and cannot do this job: the jittering
+ * boss accumulates 9 000 px of it without leaving a 5 px box. `sim/simulate.ts` did
+ * already reduce it to a `minTravelPx` aggregate, described in its own comment as
+ * "a boss that never moved at all is 0", and Gate 3 never read it. That aggregate is
+ * now `minSpanPx`, which is the number that comment was reaching for.
  */
 import type { GameState } from '@rematch/engine';
 
@@ -43,6 +83,12 @@ import type { GameState } from '@rematch/engine';
  * The engine quantizes every position with `q()` at 1e-4, and the boss's own speed
  * is 2.6 px/tick, so this separates "did not move at all" from "moved" with three
  * orders of magnitude of daylight on either side.
+ *
+ * Deliberately *not* raised to a fraction of boss speed. `move` is normalized to a
+ * unit vector before the engine applies it, so a boss is either stepping its full
+ * 2.6 px or it is being clamped by a wall to nearly zero — there is no meaningful
+ * middle band for a larger threshold to catch, and raising it was measured to change
+ * the idle run of none of the eleven shipped strategies.
  */
 export const STILL_EPSILON = 0.01;
 
@@ -54,8 +100,20 @@ export type Activity = {
   idleTicks: number;
   /** Longest consecutive run of idle ticks. The number ACTIVE is really about. */
   longestIdleRun: number;
-  /** Total distance the boss travelled, px. A crude "did it play at all" check. */
+  /**
+   * Total distance the boss travelled, px. How busy it was — not where it got to,
+   * which is `spanPx`. A boss vibrating in place has a large `travelPx`.
+   */
   travelPx: number;
+  /**
+   * Diagonal of the boss's bounding box over the match, px. How far it ranged.
+   *
+   * Bounding box rather than net start-to-end displacement, because a boss that
+   * patrols and returns home would read as zero on the latter. Diagonal rather
+   * than area so the number is in px and comparable to the arena's own 1131 px
+   * diagonal.
+   */
+  spanPx: number;
 };
 
 /**
@@ -90,12 +148,22 @@ export function createActivityTracker(state: GameState): ActivityTracker {
   let run = 0;
   let longestIdleRun = 0;
   let travelPx = 0;
+  // The bounding box starts as the boss's opening position, not as an empty box, so
+  // a zero-tick match reports a span of 0 rather than something infinite.
+  let minX = x;
+  let maxX = x;
+  let minY = y;
+  let maxY = y;
 
   return {
     observe(next: GameState): void {
       const movedPx = Math.hypot(next.boss.x - x, next.boss.y - y);
       x = next.boss.x;
       y = next.boss.y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
       ticks += 1;
       travelPx += movedPx;
       if (isIdleTick(next, movedPx)) {
@@ -107,7 +175,13 @@ export function createActivityTracker(state: GameState): ActivityTracker {
       }
     },
     read(): Activity {
-      return { ticks, idleTicks, longestIdleRun, travelPx };
+      return {
+        ticks,
+        idleTicks,
+        longestIdleRun,
+        travelPx,
+        spanPx: Math.hypot(maxX - minX, maxY - minY),
+      };
     },
   };
 }

@@ -52,6 +52,9 @@ export const BAD_FIXTURES = [
   'slow-decide',
   'uses-date',
   'out-of-bounds',
+  // Passes Gates 1, 2 and 4 and fails only Gate 3's span clause — the one entry
+  // here that is not a *crash*, but a boss that plays honestly and goes nowhere.
+  'jitter',
 ] as const;
 export type BadFixture = (typeof BAD_FIXTURES)[number];
 

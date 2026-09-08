@@ -22,7 +22,7 @@ export {
 export { recordingRunner, type RunnerStats } from './game/runnerStats.ts';
 export { createRenderer, type Renderer } from './render/renderer.ts';
 export { clientToArena, computeViewport, fitSquare, type Viewport } from './render/viewport.ts';
-export { createHud, formatClock, type Hud } from './ui/hud.ts';
+export { createHud, debugFooterEnabled, formatClock, type Hud, type HudOptions } from './ui/hud.ts';
 export { createScreens, type Screens, type StartOptions } from './ui/screens.ts';
 export {
   AGENTS,

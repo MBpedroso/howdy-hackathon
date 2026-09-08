@@ -74,8 +74,8 @@ export type BotRate = {
 };
 
 /**
- * Boss activity over a whole simulation. Two numbers, because one alone is
- * gameable in both directions:
+ * Boss activity over a whole simulation. Three numbers, because each one alone is
+ * gameable:
  *
  *  - `maxIdleRun` is the worst single stall, over every match. This is the one
  *    that reads as a crash to the player, and a *max* rather than a mean because
@@ -84,6 +84,11 @@ export type BotRate = {
  *    nothing. p90 rather than max because a match the player ends in two seconds
  *    can be legitimately idle-heavy, and rather than a mean because a mean over
  *    200 matches hides a quarter of them being dead.
+ *  - `minSpanPx` is how far the boss ranged in its most confined match. Both
+ *    numbers above are about *stalling*, and a boss that vibrates never stalls:
+ *    it has no idle run and a zero idle fraction while standing in one spot. This
+ *    is the number that catches it, and it was added on 2026-09-08 after a
+ *    five-line jittering strategy passed all four gates (`sim/activity.ts`).
  */
 export type SimulateActivity = {
   /** Worst `longestIdleRun` over every match, in ticks (60 = 1 s). */
@@ -94,8 +99,22 @@ export type SimulateActivity = {
   worstSeed: number;
   /** p90 of the per-match idle fraction. */
   idleFractionP90: number;
-  /** Smallest per-match `travelPx`. A boss that never moved at all is 0. */
-  minTravelPx: number;
+  /**
+   * Smallest per-match `spanPx` — the diagonal of the boss's bounding box in its
+   * most confined match, px.
+   *
+   * A *min* rather than a mean for the same reason `maxIdleRun` is a max: one
+   * match in which the boss never left a 5 px box is the bug report, and a mean
+   * over 200 matches hides it. This is the measurement that catches a boss which
+   * jitters at full speed and therefore has no idle run at all — see
+   * `sim/activity.ts` for the five-line strategy that got past every gate without
+   * it.
+   */
+  minSpanPx: number;
+  /** Which bot's match produced the narrowest span. */
+  narrowestBot: string;
+  /** The seed it happened on, so it can be replayed by hand. */
+  narrowestSeed: number;
 };
 
 export type SimulateResult = {
@@ -171,7 +190,15 @@ export async function simulate(opts: SimulateOptions): Promise<SimulateResult> {
       perBot: [],
       violations: 0,
       killed: 0,
-      activity: { maxIdleRun: 0, worstBot: '', worstSeed: 0, idleFractionP90: 0, minTravelPx: 0 },
+      activity: {
+        maxIdleRun: 0,
+        worstBot: '',
+        worstSeed: 0,
+        idleFractionP90: 0,
+        minSpanPx: 0,
+        narrowestBot: '',
+        narrowestSeed: 0,
+      },
       ms: 0,
       workers,
     };
@@ -320,7 +347,9 @@ function reduce(
   let maxIdleRun = -1;
   let worstBot = '';
   let worstSeed = 0;
-  let minTravelPx = Number.POSITIVE_INFINITY;
+  let minSpanPx = Number.POSITIVE_INFINITY;
+  let narrowestBot = '';
+  let narrowestSeed = 0;
   const idleFractions: number[] = [];
 
   for (let i = 0; i < jobs.length; i += 1) {
@@ -346,7 +375,14 @@ function reduce(
       worstBot = bucket.name;
       worstSeed = job.seed;
     }
-    if (result.travelPx < minTravelPx) minTravelPx = result.travelPx;
+    // Strictly less, walking the jobs in their fixed order, for the same reason the
+    // idle-run attribution above is strictly greater: the first match to reach the
+    // worst value owns it on every machine and at every worker count.
+    if (result.spanPx < minSpanPx) {
+      minSpanPx = result.spanPx;
+      narrowestBot = bucket.name;
+      narrowestSeed = job.seed;
+    }
     idleFractions.push(result.idleFraction);
   }
 
@@ -373,7 +409,9 @@ function reduce(
       worstBot,
       worstSeed,
       idleFractionP90: quantile(idleFractions, 0.9),
-      minTravelPx: Number.isFinite(minTravelPx) ? minTravelPx : 0,
+      minSpanPx: Number.isFinite(minSpanPx) ? minSpanPx : 0,
+      narrowestBot,
+      narrowestSeed,
     },
     ms,
     workers,

@@ -20,6 +20,24 @@
  *     with a deadline `MEASURE_SLACK` times the budget and compares the result
  *     against the real one, which is what makes the spec §6.3 reason honest:
  *     `"decide() p99 = 6.2ms > 2ms"`.
+ *
+ * ## This gate is the one that is deliberately NOT reproducible
+ *
+ * Gates 1, 2 and 3 return the same verdict for the same input on any machine —
+ * Gate 1 is a pure AST walk, and Gates 2 and 3 load the sandbox on
+ * `monotonicClock()` so their budgets bound *work* rather than time
+ * (`sandbox/src/clock.ts`). Gate 4 keeps the host wall clock, on purpose, because
+ * "is this fast enough to render at 60 Hz" is a question about real time and
+ * nothing else. A monotonic step clock would make every strategy pass it.
+ *
+ * The consequence has to be stated rather than glossed: **a Gate 4 verdict is a
+ * measurement, not a proof.** A strategy whose p99 sits near the 2 ms budget can
+ * pass on a quiet laptop and fail on a loaded CI box, and that is the correct
+ * behaviour for a performance gate — it is also why the project's four gates are
+ * described as "three deterministic gates and one measurement" rather than as four
+ * deterministic ones (`docs/SPEC.md` §6, corrected 2026-09-08). If a *reproducible*
+ * cost signal is ever needed, Gate 2's `elapsedMs` distribution is one: it runs on
+ * the monotonic clock and is a pure function of the source.
  */
 import { CONSTANTS, type BossView, type DecideResult, type RunnerFailure, type StrategyRunner } from '@rematch/contract';
 import type { SandboxFactory, SandboxOptions } from '@rematch/sandbox';

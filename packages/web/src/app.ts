@@ -33,7 +33,7 @@ import { formatSeed, resolveSessionSeed, roundSeed } from './game/seeds.ts';
 import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy.ts';
 import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
 import { createRenderer, type Renderer } from './render/renderer.ts';
-import { createHud, type Hud } from './ui/hud.ts';
+import { createHud, debugFooterEnabled, type Hud } from './ui/hud.ts';
 import { introDecision, readSkipIntro, writeSkipIntro } from './ui/intro.ts';
 import { createScreens, type Screens } from './ui/screens.ts';
 
@@ -134,7 +134,7 @@ export function createApp(options: AppOptions): App {
   const interludeEnabled = params.get('interlude') !== '0';
 
   const renderer: Renderer = createRenderer(options.canvas);
-  const hud: Hud = createHud(options.hud);
+  const hud: Hud = createHud(options.hud, { debugFooter: debugFooterEnabled(search) });
   const screens: Screens = createScreens(options.screen);
   const input: InputSource = createInputSource({ canvas: options.canvas, arenaSize: ARENA });
 

@@ -144,7 +144,13 @@ function formatBalanceDetail(gate: GateResult): string | undefined {
     panel?: { winRate: number; matches: number; perBot?: Array<{ name: string; winRate: number }> };
     mimic?: { winRate: number; matches: number };
     band?: readonly number[];
-    activity?: { longestIdleRun: number; worstBot: string; idleFractionP90: number };
+    activity?: {
+      longestIdleRun: number;
+      worstBot: string;
+      idleFractionP90: number;
+      minSpanPx: number;
+      narrowestBot: string;
+    };
   };
   if (detail.panel === undefined) return undefined;
   const perBot = (detail.panel.perBot ?? []).map((b) => `${b.name} ${b.winRate.toFixed(2)}`).join(', ');
@@ -153,7 +159,7 @@ function formatBalanceDetail(gate: GateResult): string | undefined {
   const idle =
     detail.activity === undefined
       ? ''
-      : ` · idle run ${detail.activity.longestIdleRun}t/${ACTIVITY.maxIdleRunTicks} (${detail.activity.worstBot}), p90 ${(detail.activity.idleFractionP90 * 100).toFixed(0)}%`;
+      : ` · idle run ${detail.activity.longestIdleRun}t/${ACTIVITY.maxIdleRunTicks} (${detail.activity.worstBot}), p90 ${(detail.activity.idleFractionP90 * 100).toFixed(0)}%, span ${Math.round(detail.activity.minSpanPx)}px/${ACTIVITY.minSpanPx} (${detail.activity.narrowestBot})`;
   return `  panel ${detail.panel.winRate.toFixed(2)} (${perBot}) · ${mimic} ·${band}${idle}`;
 }
 

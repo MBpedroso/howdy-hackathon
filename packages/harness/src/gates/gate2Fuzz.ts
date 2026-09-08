@@ -32,7 +32,14 @@ import {
   type RunnerFailure,
   type StrategyRunner,
 } from '@rematch/contract';
-import { createSandbox, SandboxInitError, SandboxLoadError, type SandboxFactory, type SandboxOptions } from '@rematch/sandbox';
+import {
+  createSandbox,
+  monotonicClock,
+  SandboxInitError,
+  SandboxLoadError,
+  type SandboxFactory,
+  type SandboxOptions,
+} from '@rematch/sandbox';
 
 import { describeView, makeFuzzSequence, makeFuzzViews } from '../fuzzViews.ts';
 import { gateFail, gateOk, type GateResult } from './types.ts';
@@ -264,7 +271,23 @@ export async function gate2Fuzz(source: string, opts: Gate2Options = {}): Promis
 
   let runner: StrategyRunner;
   try {
-    runner = sandbox.load(source, opts.sandboxOptions ?? {});
+    // `monotonicClock()` for the same reason the simulator uses it, and this gate is
+    // the one that most needed it: Gate 2 rejects on *any* single runner failure, so
+    // with a wall clock one GC pause inside one `decide` is the whole verdict. The
+    // gate's own promise is that "(states, seed) is all you need to reproduce a
+    // rejection", and that promise was false on a loaded machine — a strategy sitting
+    // near the 2 ms budget measured 0/560 over-budget states on an idle box and 4/560
+    // on a busy one (`docs/REVIEW-2026-09-08.md`, §2).
+    //
+    // The budget then bounds *work* rather than time (~256 interrupt polls per 2 ms;
+    // see `sandbox/src/clock.ts`), which is what this gate actually wants: a runaway
+    // `while (true)` is still caught, deterministically, while "slow but finite" stops
+    // being a Gate 2 rejection at all. Judging real speed is Gate 4's job and Gate 4
+    // deliberately keeps the wall clock.
+    //
+    // Spread last so an explicit `sandboxOptions.now` still wins — `test/gates.test.ts`
+    // uses that to force a real-clock timeout on purpose.
+    runner = sandbox.load(source, { now: monotonicClock(), ...opts.sandboxOptions });
   } catch (err) {
     // Gate 1 already passed, so this is a *runtime* load problem: a module body
     // that throws, `meta` that is only malformed once evaluated, top-level await.

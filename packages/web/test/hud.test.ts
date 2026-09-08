@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, type GameState } from '@rematch/engine';
-import { formatClock, formatRunnerLine } from '../src/ui/hud.ts';
+import { debugFooterEnabled, formatClock, formatRunnerLine } from '../src/ui/hud.ts';
 import type { RunnerStats } from '../src/game/runnerStats.ts';
 
 describe('formatClock', () => {
@@ -73,5 +73,32 @@ describe('formatRunnerLine', () => {
 
   it('shouts when the sandbox killed the strategy', () => {
     expect(formatRunnerLine(state({ strategyKilled: true }), stats())).toContain('KILLED');
+  });
+});
+
+/**
+ * The determinism footer's on/off decision, as a pure function.
+ *
+ * Whether the footer is *rendered* is a DOM question and belongs to the Playwright
+ * suite (`e2e/boot.spec.ts`); what belongs here is the rule, because "off by default"
+ * is the whole point and a default that flips silently is the regression. See
+ * `debugFooterEnabled` for why the footer moved behind a flag at all.
+ */
+describe('debugFooterEnabled', () => {
+  it('is off by default, which is the behaviour that changed', () => {
+    expect(debugFooterEnabled('')).toBe(false);
+    expect(debugFooterEnabled('?seed=424242&autostart=1')).toBe(false);
+  });
+
+  it('is on for the technical walkthrough', () => {
+    expect(debugFooterEnabled('?debug=1')).toBe(true);
+    // Bare `?debug` counts: nobody typing it means "off".
+    expect(debugFooterEnabled('?debug')).toBe(true);
+    expect(debugFooterEnabled('?seed=1&debug=on')).toBe(true);
+  });
+
+  it('treats the two ways of writing "no" as no, like `?interlude=0` does', () => {
+    expect(debugFooterEnabled('?debug=0')).toBe(false);
+    expect(debugFooterEnabled('?debug=false')).toBe(false);
   });
 });

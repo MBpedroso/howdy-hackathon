@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CONSTANTS } from '@rematch/contract';
+import { MONOTONIC_STEP_MS } from '@rematch/sandbox';
 import {
   ACTIVITY,
   ADAPTED_MIN,
@@ -149,19 +150,54 @@ describe('Gate 2 — fuzz', () => {
     expect(result.detail).toMatchObject({ byPrimitive: { burst: expect.any(Number) } });
   });
 
-  it('is deterministic: the same seed gives the same verdict and the same counts', async () => {
+  /**
+   * The whole detail, timing included — which is the part that used to be untrue.
+   *
+   * This test used to strip `elapsedMs` before comparing, on the grounds that it
+   * "is wall clock and never repeats". That was the bug, not a caveat: the gate
+   * loaded the sandbox on `performance.now()` while promising that "(states, seed)
+   * is all you need to reproduce a rejection", and because *any* single runner
+   * failure is a rejection here, one GC pause inside one `decide` was the whole
+   * verdict. A strategy sitting near the 2 ms budget measured 0 over-budget states
+   * on an idle machine and 4 of 560 on a loaded one
+   * (`docs/REVIEW-2026-09-08.md` §2).
+   *
+   * Since 2026-09-08 the gate loads on `monotonicClock()`, so the budget bounds
+   * *work* rather than time and the timing distribution is a pure function of the
+   * source too — `p50` comes back as an exact multiple of `MONOTONIC_STEP_MS`.
+   * Asserting `toEqual` on the unstripped detail is the assertion that says so.
+   */
+  it('is deterministic: the same seed gives the same verdict, counts and timings', async () => {
     const a = await gate2Fuzz(readBad('nan-angle'), { seed: 42, states: 200 });
     const b = await gate2Fuzz(readBad('nan-angle'), { seed: 42, states: 200 });
     expect(a.ok).toBe(false);
     if (a.ok || b.ok) return;
     expect(b.reason).toBe(a.reason);
-    // Everything except the timing distribution is a pure function of
-    // (source, seed, states) — `elapsedMs` is wall clock and never repeats.
-    const strip = (detail: unknown): unknown => {
-      const { elapsedMs: _elapsedMs, ...rest } = detail as Record<string, unknown>;
-      return rest;
-    };
-    expect(strip(b.detail)).toEqual(strip(a.detail));
+    expect(b.detail).toEqual(a.detail);
+    // Not merely equal by luck: a wall clock cannot land on an exact multiple of
+    // the monotonic step twice, so this is what proves *which* clock ran.
+    const { elapsedMs } = a.detail as { elapsedMs: { p50: number; max: number } };
+    expect(elapsedMs.p50 % MONOTONIC_STEP_MS).toBe(0);
+    expect(elapsedMs.max % MONOTONIC_STEP_MS).toBe(0);
+  });
+
+  /**
+   * ...and the caller can still ask for the real clock, which is what
+   * `test/gates.test.ts`' own timeout tests and a live browser tab need. The
+   * monotonic clock is a *default*, not a lock.
+   */
+  it('lets a caller override the clock, so a real-time budget is still testable', async () => {
+    const result = await gate2Fuzz(readBad('slow-decide'), {
+      states: 20,
+      sequenceTicks: 0,
+      sandboxOptions: { now: () => performance.now() },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/exceeded its \d+ ms budget/);
+    const { elapsedMs } = result.detail as { elapsedMs: { max: number } };
+    // A real clock does not land on the monotonic grid.
+    expect(elapsedMs.max % MONOTONIC_STEP_MS).not.toBe(0);
   });
 
   it('a different seed still rejects the same broken strategy', async () => {
@@ -323,11 +359,65 @@ describe('Gate 3 — balance', () => {
     const result = await gate3Balance(readCandidate(), { round: 2, matches: 40 });
     expect(result.ok).toBe(true);
     const detail = result.detail as {
-      activity: { longestIdleRun: number; idleFractionP90: number };
+      activity: { longestIdleRun: number; idleFractionP90: number; minSpanPx: number };
     };
     expect(detail.activity.longestIdleRun).toBeLessThanOrEqual(ACTIVITY.maxIdleRunTicks);
     expect(detail.activity.idleFractionP90).toBeLessThanOrEqual(ACTIVITY.maxIdleFractionP90);
+    expect(detail.activity.minSpanPx).toBeGreaterThanOrEqual(ACTIVITY.minSpanPx);
   }, 60_000);
+
+  /**
+   * ACTIVE's span clause, the assertion an independent review bought.
+   *
+   * The mirror image of the `idle.js` case above, and the reason one number was
+   * not enough. `jitter.js` never stalls for a single tick — `move` is normalized
+   * to a unit vector, so it steps its full 2.6 px every tick — so it posts the
+   * *best possible* values on both of the clauses that came first, and it does it
+   * inside the fairness band. Before this clause it was approved for Round 2. See
+   * `sim/activity.ts` and `docs/REVIEW-2026-09-08.md`.
+   */
+  it('rejects a boss that vibrates on the spot, which the idle clauses call 100% active', async () => {
+    const result = await gate3Balance(readBad('jitter'), { round: 2, matches: 40 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /boss never left a \d+ px patch of floor over a whole match vs \w+ — moving back and forth on the spot is not playing; commit to a direction for long enough to change the range you fight at \(need \d+ px\)/,
+    );
+    const detail = result.detail as {
+      thresholds: { minSpanPx: number };
+      activity: {
+        longestIdleRun: number;
+        idleFractionP90: number;
+        minSpanPx: number;
+        narrowestBot: string;
+      };
+    };
+    expect(detail.thresholds.minSpanPx).toBe(ACTIVITY.minSpanPx);
+    // What makes this the interesting counter-example: the two older clauses are
+    // not merely passed, they are passed perfectly.
+    expect(detail.activity.longestIdleRun).toBe(0);
+    expect(detail.activity.idleFractionP90).toBe(0);
+    // And the span is the only thing that noticed.
+    expect(detail.activity.minSpanPx).toBeLessThan(ACTIVITY.minSpanPx);
+    expect(detail.activity.narrowestBot).not.toBe('');
+  }, 60_000);
+
+  /**
+   * The rejection has to name *both* problems when there are both.
+   *
+   * The span clause is deliberately outside the `else if` chain the two idle
+   * clauses share: a boss that freezes for a stretch and creeps around a corner
+   * for the rest has two things to fix, and this string is the whole of the
+   * Coder's feedback (spec §6.3). `idle.js` is the case that has both — it never
+   * moves, so its span is 0 and its idle run is the whole match.
+   */
+  it('reports the stall and the span together when a boss has both', async () => {
+    const result = await gate3Balance(readGood('idle'), { round: 2, matches: 40 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/boss motionless for \d+ consecutive ticks/);
+    expect(result.reason).toMatch(/boss never left \d+ px patch|boss never left a \d+ px patch/);
+  });
 
   it('skips ADAPTED when no replay summary is supplied', async () => {
     const result = await gate3Balance(readCandidate(), { round: 2, matches: 40 });

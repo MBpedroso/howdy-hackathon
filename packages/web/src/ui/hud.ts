@@ -87,7 +87,33 @@ export function formatRunnerLine(state: GameState, runner: RunnerStats | null | 
   return parts.join(' · ');
 }
 
-export function createHud(root: HTMLElement): Hud {
+/**
+ * `?debug=1` — show the determinism footer.
+ *
+ * The footer (`tick`, both seeds, tick+render ms, the runner's call/idle/violation
+ * counts) is the strongest single piece of evidence in the whole UI that this is a
+ * fixed-seed deterministic simulation, and the reason it used to be on all the time
+ * was that judges asked to see determinism. An independent review pointed out the
+ * other half of that audience: to anyone not reading it as evidence it is an unfinished
+ * screen, permanently, during every normal fight
+ * (`docs/REVIEW-2026-09-08.md`, question 5).
+ *
+ * So it is a flag rather than a deletion: default clean for a player, `?debug=1` for
+ * the technical walkthrough. Off by default is the only part that is a judgement call;
+ * everything the footer said is still one query parameter away.
+ */
+export function debugFooterEnabled(search: string): boolean {
+  const value = new URLSearchParams(search).get('debug');
+  return value !== null && value !== '0' && value !== 'false';
+}
+
+export type HudOptions = {
+  /** Show the determinism footer. Default false — see `debugFooterEnabled`. */
+  debugFooter?: boolean;
+};
+
+export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
+  const debugFooter = options.debugFooter ?? false;
   root.replaceChildren();
 
   const top = el('div', 'hud-top');
@@ -105,7 +131,11 @@ export function createHud(root: HTMLElement): Hud {
 
   const foot = el('div', 'hud-foot');
 
-  root.append(top, strategy, foot);
+  root.append(top, strategy);
+  // Appended rather than hidden, so the element is genuinely absent from the DOM in
+  // the default build — an `[hidden]` footer still shows up in a screenshot diff and
+  // in the accessibility tree.
+  if (debugFooter) root.append(foot);
 
   let lastHp = -1;
   let lastClock = '';
@@ -148,7 +178,10 @@ export function createHud(root: HTMLElement): Hud {
         rationale.textContent = `“${state.strategy.rationale}”`;
       }
 
-      // Small, deliberately technical: the judges asked for determinism, so show it.
+      // Small, deliberately technical: this is the determinism evidence. `?debug=1`
+      // only — see `debugFooterEnabled`. Skipped entirely when off, so the per-frame
+      // string building goes with it.
+      if (!debugFooter) return;
       const runnerLine = formatRunnerLine(state, info.runner);
       const nextFoot =
         `boss ${Math.round(state.boss.hp)}/${ENGINE_CONSTANTS.boss.hp} · tick ${state.tick}` +

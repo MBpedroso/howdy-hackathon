@@ -85,6 +85,15 @@ import { readCandidate, readGood } from './helpers.ts';
  */
 const MAX_STILL_TICKS = ACTIVITY.maxIdleRunTicks;
 
+/**
+ * Smallest bounding-box diagonal a shipped boss may confine itself to, px.
+ *
+ * Imported rather than restated, for the same reason as `MAX_STILL_TICKS`: a test
+ * that could disagree with the gate would be worse than no test. See
+ * `gates/balanceConfig.ts` for why it is the boss's own diameter.
+ */
+const MIN_SPAN_PX = ACTIVITY.minSpanPx;
+
 /** The recorded human Round 1, reused as a Round 2 player. */
 function humanLog(): InputLog {
   const url = new URL('../../web/e2e/fixtures/inputlog-round1.json', import.meta.url);
@@ -156,6 +165,11 @@ describe('a shipped boss keeps playing', () => {
           // The demo's floor: a boss that travelled 100 px in a whole round did not
           // play, whatever its idle runs say.
           expect(activity.travelPx, where).toBeGreaterThan(100);
+          // ...and travel alone is not enough, because a boss can spend 9 000 px of
+          // it vibrating on one tile. `spanPx` is where it *got to*, and Gate 3's
+          // span clause is the assertion; this holds the shipped set to it directly,
+          // including the two in `web/` that no Gate 3 suite ever runs.
+          expect(activity.spanPx, where).toBeGreaterThanOrEqual(MIN_SPAN_PX);
         }
       } finally {
         runner.dispose();
@@ -208,6 +222,46 @@ describe('a shipped boss keeps playing', () => {
       expect(activity.longestIdleRun).toBeGreaterThan(MAX_STILL_TICKS);
       expect(idleFraction(activity)).toBe(1);
       expect(activity.travelPx).toBe(0);
+    } finally {
+      runner.dispose();
+    }
+  }, 30_000);
+
+  /**
+   * The counter-example the run clause cannot produce, and the reason the span
+   * clause exists at all.
+   *
+   * An independent review submitted this strategy on 2026-09-08 and it passed all
+   * four gates — approved for Round 2, panel 0.44 inside the band, ACTIVE reporting
+   * `idle run 0t/90` and `p90 0%`, ADAPTED 1.00 against two of the four recorded
+   * player replays. It is kept verbatim at `test/fixtures/jitter.js` and read from
+   * there rather than inlined, so the file that broke the gate and the file that
+   * guards it cannot drift apart.
+   *
+   * Every clause of the idle definition is satisfied honestly: `validateMove`
+   * normalizes `move` to a unit vector, so `dx: 0.02` steps the boss a full 2.6 px
+   * and *no tick is idle*. That is the whole point — the boss is busy and going
+   * nowhere, so `longestIdleRun` and `idleFraction` are both at their best possible
+   * values while the span is two and a half pixels.
+   */
+  it('jitter.js is the counter-example the idle clauses cannot see', () => {
+    const runner = load(read('./fixtures/jitter.js'));
+    try {
+      const seed = 13;
+      const bot = camper();
+      bot.reset(seed);
+      const state = createGame(seed, runner);
+      const rng = createRng(playerSeed(seed));
+      const activity = measure(state, (s) => bot.act(s, rng), runner);
+      const where = JSON.stringify(activity);
+      // The two clauses that were already there see nothing wrong.
+      expect(activity.longestIdleRun, where).toBeLessThanOrEqual(MAX_STILL_TICKS);
+      expect(idleFraction(activity), where).toBeLessThanOrEqual(ACTIVITY.maxIdleFractionP90);
+      // It is not sneaking under `STILL_EPSILON` either: it really does move, a lot.
+      expect(activity.travelPx, where).toBeGreaterThan(1_000);
+      // And it went nowhere. This is the only number that says so.
+      expect(activity.spanPx, where).toBeLessThan(MIN_SPAN_PX);
+      expect(activity.violations, where).toBe(0);
     } finally {
       runner.dispose();
     }

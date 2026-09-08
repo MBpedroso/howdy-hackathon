@@ -53,8 +53,14 @@ export type MatchResult = {
   longestIdleRun: number;
   /** `idleTicks / ticks` by the same definition. */
   idleFraction: number;
-  /** Total distance the boss travelled, px. */
+  /** Total distance the boss travelled, px. How busy it was. */
   travelPx: number;
+  /**
+   * Diagonal of the boss's bounding box over the match, px. How far it *ranged* —
+   * the number that separates a boss patrolling the arena from one vibrating in
+   * place, which `travelPx` cannot. Gate 3's ACTIVE reads the minimum over matches.
+   */
+  spanPx: number;
 };
 
 /**
@@ -80,6 +86,7 @@ export function runMatchWith(runner: StrategyRunner, bot: PlayerBot, seed: numbe
     longestIdleRun: activity.longestIdleRun,
     idleFraction: idleFraction(activity),
     travelPx: activity.travelPx,
+    spanPx: activity.spanPx,
   };
 }
 

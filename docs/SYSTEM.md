@@ -14,7 +14,7 @@ boss's behaviour is executable code the agent writes at runtime, in the middle o
 player's session — and then putting a verifier with final say in front of it. Between
 rounds, an **Analyst** reads a compressed replay of the round the player just won and
 describes the player; a **Coder** writes a new `strategy.js` to counter that specific
-player; and a **harness** of four deterministic gates (no LLM anywhere in it) decides
+player; and a **harness** of four gates (no LLM anywhere in it) decides
 whether it ships. The harness's one-sentence rejection is the Coder's only feedback, it
 travels verbatim, there is no human message anywhere in the loop, and the player watches
 the whole exchange — rejections included — as the interlude between rounds. The
@@ -134,8 +134,9 @@ Return one of six actions. That is the entire output alphabet:
 ```
 
 Its inputs are the tick, the arena size, boss and player kinematics, live projectiles,
-and three rolling summaries (`playerPosHeat` 8×8 summing to 1, `playerDashDirs` 8 bins,
-`playerShotsDuring` per primitive). It can keep an opaque `Memory` object between ticks
+and three summaries (`playerPosHeat` 8×8 summing to 1, `playerDashDirs` 8 bins,
+`playerShotsDuring` per primitive) — **cumulative from tick 0, not rolling**, which the
+contract's own comment calls them and which §13 delta 20 of the spec now records. It can keep an opaque `Memory` object between ticks
 and call a seeded `rand()`.
 
 ### What it cannot do
@@ -202,8 +203,8 @@ actually *bounds*:
 
 | Caller | Clock | Budget | What the limit is for |
 |---|---|---|---|
-| Gate 2 (fuzz) | `performance.now` | 2 ms | **Containment.** A `while (true)` must come back as a value, fast |
-| Gate 4 (perf) | `performance.now` | 16 ms (8× slack), judged against 2 ms | **Measurement.** The p99 is the promise; measuring at the shipping deadline would report every slow strategy as exactly 2.0 ms |
+| Gate 2 (fuzz) | `monotonicClock()` | 2 ms of *interrupt polls* | **Containment, reproducibly.** A `while (true)` must come back as a value, fast — and since *any* single failure is a Gate 2 rejection, that verdict must not depend on the machine |
+| Gate 4 (perf) | `performance.now` | 16 ms (8× slack), judged against 2 ms | **Measurement.** The p99 is the promise; measuring at the shipping deadline would report every slow strategy as exactly 2.0 ms. The one gate whose verdict is deliberately *not* reproducible |
 | Gate 3 / the simulator | `monotonicClock()` | 2 ms of *interrupt polls* | **Reproducibility.** Spec §6.2 promises "fixed seed set → identical results on every machine", and wall clock breaks that promise |
 | Replays (browser + Node) | `monotonicClock()` | 2 ms of polls | Reproducibility — the AC 3 hash |
 | Live play (browser) | `performance.now` | 20 ms (`LIVE_BUDGET_FACTOR = 10`) | Containment only. Best-effort, never a determinism claim |
@@ -216,6 +217,27 @@ same source reading **0.43 and 0.45** against the panel on back-to-back runs. On
 monotonic clock the budget bounds work instead of time (~256 interrupt polls), a runaway
 loop is still caught deterministically in ~35 ms of wall clock, and Gate 2 in front of
 Gate 3 is what keeps that worst case off the simulator.
+
+**Gate 2 was on the wrong clock until 2026-09-08**, and the table above said
+`performance.now` for it as a design choice when it was an oversight. The reasoning that
+put the simulator on the monotonic clock applies to Gate 2 with more force, not less:
+Gate 2 rejects on *any* single runner failure, so one descheduled `decide` is the entire
+verdict, against a docstring promising that "(states, seed) is all you need to reproduce
+a rejection". An independent review measured a strategy sitting near the budget at **0
+over-budget states on an idle machine and 4 of 560 on a loaded one**
+([`REVIEW-2026-09-08.md`](REVIEW-2026-09-08.md) §2). Gate 2's whole `detail` — the timing
+distribution included — is now bit-identical across runs, and `p50` comes back as an
+exact multiple of `MONOTONIC_STEP_MS`, which is what `test/gates.test.ts` asserts to prove
+*which* clock ran. The consequence is a cleaner split than before: **Gate 2 asks whether
+the strategy is correct and terminates, Gate 4 asks whether it is fast.** "Slow but
+finite" is no longer a Gate 2 rejection at all.
+
+So the harness is three reproducible gates and one measurement, not "four deterministic
+gates" as §1 and the README said until 2026-09-08 (spec §13, delta 18). Gate 4 keeps the
+wall clock on purpose — "fast enough to render at 60 Hz" is a question about real time,
+and a monotonic step clock would make every strategy pass it — which means a strategy
+whose p99 sits near 2 ms can pass on a quiet laptop and fail on a loaded CI box. That is
+correct behaviour for a performance gate and it has to be *said* rather than glossed.
 
 Live play goes the other way. Every shipped strategy's `decide` p99 is 0.3 ms in headless
 Chromium and 0.06 ms in Node — 6× under the 2 ms budget — and a single scheduling hiccup
@@ -300,7 +322,7 @@ is what makes the rejections in the interlude evidence rather than anecdote.
 |---|---|---|---|
 | 1 | `static` | any `staticCheck` violation → reject. Names the first 3 with line numbers, counts the rest | ~1–4 ms |
 | 2 | `fuzz` | 500 seeded states (corner cases first) + 60 consecutive ticks, in QuickJS. **Any** runner failure (throw / timeout / memory), even 1 in 500 → reject. Invalid-action rate > **2%** → reject. On-cooldown-action rate > **20%** → reject | ~30–60 ms |
-| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR**: panel win rate ∈ `BAND[round]`. **ADAPTED**: Mimic win rate ≥ **0.70**. **ACTIVE**: longest motionless run ≤ **90 ticks** (1.5 s) and p90 idle fraction ≤ **0.25** | seconds — worker-parallel |
+| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR**: panel win rate ∈ `BAND[round]`. **ADAPTED**: Mimic win rate ≥ **0.70**. **ACTIVE**: longest motionless run ≤ **90 ticks** (1.5 s), p90 idle fraction ≤ **0.25**, and range over a match ≥ **56 px** | seconds — worker-parallel |
 | 4 | `perf` | `decide` **p99 ≤ 2 ms** over ~2000 calls: 60% from real match trajectories vs the four bots, 40% topped up from Gate 2's corpus. Measured with an 8× relaxed deadline and judged against the real one, so the reported number is honest. A memory failure is fatal regardless of timing | ~60 ms |
 
 Gate 1 is first because it costs ~1 ms: a strategy that mentions `Date` never boots a
@@ -313,6 +335,7 @@ handing Gate 2 a sandbox that throws if it is ever used).
 ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
 FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
 ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
+           boss range over a match   >= 56 px        "…and it is not stuck in one spot"
 ```
 
 | Round | Band vs panel | Midpoint the Coder is told to aim at |
@@ -334,7 +357,7 @@ scores as a boss win (`bossWon: state.outcome !== 'playerWon'`), and `gate3Plan`
 the budget (`matches / 2 / 4`), so 60 requested really runs 62. The meter is labelled
 with `gate3Plan().total`, not with what the caller asked for.
 
-#### ACTIVE — the assertion a playtest bought (`sim/activity.ts`)
+#### ACTIVE — the assertion a playtest bought, and the one a review bought (`sim/activity.ts`)
 
 FAIR and ADAPTED are spec §6.2. ACTIVE is not, and it exists because §6.2 cannot see the
 bug a human found in ten seconds: **the boss standing perfectly still**. A tick counts as
@@ -343,7 +366,31 @@ action was `idle` *or* a `move` that displaced nothing; ACTIVE rejects when the 
 of consecutive idle ticks over every match exceeds `ACTIVITY.maxIdleRunTicks` (90 = 1.5 s)
 or the p90 per-match idle fraction exceeds `ACTIVITY.maxIdleFractionP90` (0.25).
 
-Four design points, each of them load-bearing:
+Both of those are about **stalling**, and on 2026-09-08 an independent review showed that
+is not the same question as "is the boss playing". Five lines:
+
+```js
+export function decide(view) {
+  return { type: 'move', dx: view.tick % 2 ? 0.02 : -0.02, dy: 0 };
+}
+```
+
+`validateMove` normalizes `move` to a unit vector, so the magnitude is discarded and the
+boss steps its full 2.6 px *every tick*. Nothing about it is idle. It posted the best
+possible numbers on both clauses above — `idle run 0t/90`, `p90 0%` — landed at panel 0.44
+inside Round 2's band, scored **1.00 on ADAPTED** against the `camper` and `dodger`
+replays, and was **approved for Round 2**. On screen it is a dot vibrating on one tile,
+and camper and dodger are how a first-time player at a demo actually plays.
+
+So ACTIVE grew a third measurement: `minSpanPx`, the diagonal of the boss's bounding box
+over a match, which may not fall below `ACTIVITY.minSpanPx` — the boss's own diameter,
+56 px. Over a whole 60-second round the boss must range at least its own width. The
+narrowest of the eleven shipped strategies is `fallback/round5/tollkeeper` at 155.7 px;
+the jittering strategy measures 2.6 px. It is kept as `harness/test/fixtures/jitter.js`
+and `test/activity.test.ts` asserts both halves of the story: that the idle clauses still
+see nothing wrong with it, and that the span clause rejects it.
+
+Five design points, each of them load-bearing:
 
 - **It is defined on displacement, not on the action type.** `fallback/round3/emberline`
   had no `idle` branch at all and still froze for 169 ticks: its orbit walked the boss
@@ -351,9 +398,16 @@ Four design points, each of them load-bearing:
   action-type check would have passed it.
 - **Telegraphs are excluded outright**, so the 40-tick slam tell and the 20-tick charge
   tell cost nothing. 90 is therefore pure slack, not a budget shared with the tells.
-- **Two numbers, because one is gameable either way.** A max alone misses a boss that
+- **Three numbers, because each is gameable alone.** A max alone misses a boss that
   idles 80 ticks, twitches, and idles 80 more; a mean alone hides a quarter of the matches
-  being dead. Max for the freeze the player reports, p90 for the general deadness.
+  being dead; and *both* miss a boss that never stalls because it is busy going nowhere.
+  Max for the freeze the player reports, p90 for the general deadness, span for the
+  vibration. Note that path length cannot substitute for span — the jittering strategy
+  racks up 9 000 px of `travelPx` inside a 5 px box, and `sim/simulate.ts` had in fact
+  been reducing a `minTravelPx` aggregate for this exact purpose that Gate 3 never read.
+- **The span clause is outside the two idle clauses' `else if` chain.** A boss that
+  freezes for a stretch *and* creeps around one corner for the rest has two things to
+  fix, and this sentence is the whole of the Coder's feedback.
 - **It is measured on both halves of the budget** — panel *and* Mimic when there is one.
   The four scripted bots all walk scripted paths; the stall needed a *human*, who settles
   in a cell, leaves, and settles elsewhere, which is what makes a cumulative heat map
@@ -365,6 +419,12 @@ and a `hypot` per tick. `reason` names the fix, not the symptom:
 ```
 boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a
 resting state; patrol, reposition or feint instead (limit 90 ticks)
+```
+
+```
+boss never left a 3 px patch of floor over a whole match vs Camper — moving back and
+forth on the spot is not playing; commit to a direction for long enough to change the
+range you fight at (need 56 px)
 ```
 
 FAIR and ADAPTED are reported first and ACTIVE last, all joined into the one sentence —
@@ -457,9 +517,12 @@ actually changed.
 ## 6. Autonomous Loop Evidence
 
 **A real run. OpenAI `gpt-5.4-mini`, 2026-09-03, round 2, 200 Gate 3 matches per
-candidate.** Replay `mimic-camper` from `pnpm eval:agents`; the complete event log of
-this and the nine other runs in the same eval is committed at
-[`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json).
+candidate.** Replay `mimic-camper` from `pnpm eval:agents`. Its complete event log is
+committed at
+[`docs/evidence/eval-round2-2026-09-03.json`](evidence/eval-round2-2026-09-03.json),
+together with the eval's aggregate numbers — **6 of 10 replays approved against spec
+§7's 0.8 target**, which §9 item 1 is about. The other nine runs' event logs are not
+committed; this sentence claimed they were until 2026-09-08.
 
 **Wall clock: 23.5 s. 6 338 events. 7 model calls (1 Analyst + 6 Coder). 32 996 input /
 8 576 output / 19 712 cached tokens. No human message anywhere.** Six candidate files
@@ -682,7 +745,7 @@ any bundler), **release**.
 
 | # | Control | File | Stops |
 |---|---|---|---|
-| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 897 tests |
+| 1 | `pnpm verify` on every commit | [`.githooks/pre-commit`](../.githooks/pre-commit) → [`scripts/verify.sh`](../scripts/verify.sh) | A commit that does not typecheck, lint and pass all 997 tests |
 | 2 | Determinism lint rule | [`eslint.config.mjs`](../eslint.config.mjs) | `Math.random`, `Date.now`, `new Date`, `Date()`, `performance.now` in `packages/engine/src` or `packages/contract/src` |
 | 3 | Contract CHANGELOG gate | [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) | A PR that changes `packages/contract/` without a `CHANGELOG.md` entry |
 
@@ -712,9 +775,14 @@ Three design details are what make these controls rather than suggestions:
   *is* the work: a change to `BossView`, `BossAction`, `validateAction` or the static check
   changes what every generated strategy and every pre-approved fallback is allowed to do.
 
-`pnpm verify` as of 2026-09-04: `✓ verify passed (58s — typecheck lint test)`, **897
-tests** across 7 packages — contract 206, agents 206, web 125, harness 102, sandbox 98,
-engine 91, server 69 — plus **14 Playwright e2e** in `pnpm test:e2e`.
+`pnpm verify` as of 2026-09-08: `✓ verify passed (64s — typecheck lint test)`, **997
+tests** across 7 packages — contract 206, agents 215, web 194, harness 122, sandbox 100,
+engine 91, server 69 — plus **19 Playwright e2e** in `pnpm test:e2e`.
+
+This paragraph carried 897 / 14 until 2026-09-08, having been written on 09-04 and not
+re-run after the ACTIVE-gate, recorded-run and provider work landed. It is a count, so
+it goes stale silently; if it disagrees with `pnpm verify` again, `pnpm verify` is
+right.
 
 **No test in the repo makes a network call**, and none launches the `claude` CLI —
 `claudeCliProvider`'s 29 tests inject a fake `spawn`, which matters more than the API
@@ -777,15 +845,21 @@ stalling with finished work sitting on disk. Both are in the log.
 
 ## 9. Known limitations
 
-Honest list, at `069be8d`.
+Honest list, reconciled with §6 on 2026-09-08. It previously carried the marker "at
+`069be8d`" and item 1 below still said no real API run existed — written on 09-03,
+before the eval in §6 ran that evening, and never updated. Two sections of the same
+file contradicted each other on the project's most load-bearing claim for eleven days.
+The marker is gone because a dated list nobody re-dates is worse than no marker.
 
-1. **No real API run has been recorded (AC 6).** No `ANTHROPIC_API_KEY` has been
-   available in the build environment. Every agent path — provider, Analyst, Coder, loop,
-   eval aggregation — is built and tested against `mockProvider`, which means the *loop* is
-   proven and the *model's* behaviour on this task is not. `pnpm eval:agents` exists to
-   produce the evidence (10 canned replays, spec §7's ≥80% target, writes every event to
-   `artifacts/agents/`) and has never been run against a live key. §6 is labelled
-   accordingly.
+1. **The loop's pass rate is 0.6 against spec §7's 0.8 (AC 6 evidence).** A real run
+   *has* been recorded — §6 is it, and `pnpm eval:agents` has been run against a live
+   key (11 times on 2026-09-03; see `docs/AI-DEV-LOG.md`). What the evidence does not
+   show is reliability: 6 of 10 canned replays were approved at K=3, and 3 of the 4
+   failures ended on the *deadline* rather than on `max-attempts`, so the binding
+   constraint is Coder latency against the clock, not the width of the fairness band.
+   Only the quoted run's event log is committed; the other nine survive as the
+   aggregate. Every *unit test* of an agent path still runs against `mockProvider`,
+   deliberately — `pnpm verify` must never spend money.
 2. **No human playtest (AC 4).** Whether Round 1 is beatable in under 60 s on a first try
    is unmeasured. The e2e suite proves a *scripted* player wins it in 909 ticks (~15 s),
    which says the fight is winnable, not that it is fun or readable. The renderer agent's

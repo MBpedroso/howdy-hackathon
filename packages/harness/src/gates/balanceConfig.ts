@@ -6,12 +6,17 @@
  * ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
  * FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
  * ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
+ *            boss range over a match   >= 56 px        "…and it is not stuck in one spot"
  * ```
  *
  * ACTIVE is the one that is not in the spec's §6.2, and it is here because a human
  * playtest found what §6.2 cannot: a boss frozen in a corner for four seconds,
- * which every gate approved. See `ACTIVITY` below and `sim/activity.ts`.
+ * which every gate approved. Its span clause is here because an independent review
+ * found what the run clause cannot: a boss oscillating on the spot, which every
+ * gate also approved. See `ACTIVITY` below and `sim/activity.ts`.
  */
+
+import { ENGINE_CONSTANTS } from '@rematch/engine';
 
 export type BalanceRound = 2 | 3 | 4 | 5;
 export const BALANCE_ROUNDS = [2, 3, 4, 5] as const satisfies readonly BalanceRound[];
@@ -49,12 +54,35 @@ export const ADAPTED_MIN = 0.7;
  * 80 ticks, moves one, and idles 80 again never trips the run limit and is still
  * dead on screen. p90 rather than the mean, because a two-second match the player
  * won instantly is allowed to be idle-heavy — see `SimulateActivity`.
+ *
+ * `minSpanPx` is the companion *both* of those cannot express, because both are
+ * about stalling. A boss that alternates `move` left and `move` right every tick
+ * never stalls for even one tick — it steps a full 2.6 px each way — so its idle
+ * run is 0 and its idle fraction is 0, and until 2026-09-08 that was enough to be
+ * called 100% active. Five lines of it passed all four gates
+ * (`docs/REVIEW-2026-09-08.md`; the strategy is kept as
+ * `test/fixtures/jitter.js` and asserted in `test/activity.test.ts`).
+ *
+ * 56 px is the boss's own diameter (`ENGINE_CONSTANTS.boss.radius * 2`), and it is
+ * deliberately a floor rather than a tuned percentile: over a whole 60-second match
+ * the boss must range at least its own width. Anything below that is broken by any
+ * reading; plenty above it may still be poor, which is what the two clauses above
+ * are for. Measured against the eleven shipped strategies, the narrowest is
+ * `fallback/round5/tollkeeper` at 155.7 px — 2.8x of headroom — and the jittering
+ * attack measures 2.6 px, 21x below the line. A threshold set anywhere in that
+ * two-order-of-magnitude gap would work; the boss's diameter is the one choice that
+ * can be justified without appealing to the sample.
  */
 export const ACTIVITY = {
   /** Longest run of motionless ticks a shipped boss may have. 90 = 1.5 s. */
   maxIdleRunTicks: 90,
   /** p90, across matches, of the fraction of ticks the boss spent doing nothing. */
   maxIdleFractionP90: 0.25,
+  /**
+   * Smallest bounding-box diagonal, in px, the boss may confine itself to over a
+   * whole match. The boss's own diameter — see the note above.
+   */
+  minSpanPx: ENGINE_CONSTANTS.boss.radius * 2,
 } as const;
 
 /** Matches per Gate 3 verdict (spec §6.2). Half vs the Mimic, half across the panel. */
