@@ -864,10 +864,60 @@ its job on both: in each round the conservative candidate was rejected ("too eas
 vs Mimic) and the balanced one approved inside the band. That is the thesis working, on a
 real human, for the first time.
 
-**Still open from this playtest:** AC 4 proper (five *timed* Round 1 attempts) was not
-run, and Matt's Round 3 complaint from the fallback-only session — a boss that "barely
-shot" — is unexamined. It may be nothing, or it may be the same class as the jitter bug
-one more time: nothing in Gate 3 asserts that the boss *attacks*.
+### "Barely shot" was right, and it is the same root cause a third time
+
+Matt's other complaint from the fallback-only session was that the Round 3 boss barely
+attacked. Measured across four full matches against the reference panel, attack
+primitives (`burst`, `charge`, `slam`, `spawn`) per 1000 ticks:
+
+```
+  r3/emberline    5.0   <-- outlier
+  r2/hollow       7.9        r2/metronome   12.4
+  r5/tollkeeper   8.3        web/round1     15.4
+  r4/bellringer   9.1        r3/nettle      15.6
+  r5/crossfire   10.4        web/hound      15.7
+  r4/curfew      11.8
+```
+
+16 attacks in four whole rounds, 5 of them bursts. Every gate passed it and every gate
+was right to: **nothing in Gate 3 asserts that the boss attacks.** FAIR reads the win
+rate, and this boss's win rate belonged to its minions and the clock. Third instance of
+the pattern, after the frozen boss and the jitter: the harness measures *outcome*, and a
+boss can produce the right outcome while doing nothing a player recognises as fighting.
+
+**The dial that looked like the fix was not, and the measurement is the interesting
+part.** Raising `PRESSURE_CHANCE` alone barely moves engagement — 0.10 → 0.55 took the
+rate from 5.0 to only 7.6, because what limits attacks is cooldowns, not the roll — and
+it leaves the band on the *high* side immediately (0.25 measured 0.62 against a 0.60
+ceiling). What worked was trading the minions away for the boss acting itself, and the
+exchange rate is brutal: at `SPAWN_EVERY` 2400 the boss reached 12.8 attacks/1000t and
+its win rate collapsed to **0.35**, far under the 0.45 floor. Its own attacks are worth a
+fraction of its minions.
+
+That is `timeout = boss win` again. Standing back and letting the clock run is a winning
+strategy, so the band actively rewards a boss that does not act, and any boss that starts
+acting has to be *given* the difficulty back somewhere.
+
+Shipped: `PRESSURE_CHANCE` 0.10 → 0.80, paid for by `SPAWN_EVERY` 560 → 1300. **12.8
+attacks/1000t at panel 0.55**, margin +0.050 — three times the engagement at a held win
+rate, not a harder boss. Verified at 200 matches across the neighbourhood (pressure
+0.75–0.85, spawn 1200–1400): every combination lands 0.50–0.55 with 12.8–13.5
+attacks/1000t, so it is not a knife edge. 0.80 rather than 1.0 keeps the one-in-five
+walking breath the design is built on.
+
+**And this one does *not* become a gate.** The obvious move was a fifth ACTIVE clause,
+and the data said no. Re-graded across the 58 real candidate files from the 09-03 eval,
+the attack rate runs 0.5 → 21.3, median 11.4, **with no gap anywhere**: a floor of 6
+would reject 20 of 58, and one of that eval's six approvals sat at 1.6. Nothing like the
+span clause, where the attack measured 2.6 px against a shipped minimum of 155.7 and the
+60x separation made the threshold obvious. An engagement gate would trade a third of the
+loop's pass rate for a property the model cannot reliably hit — six days out, that is a
+bad trade. So the eleven files we control are held to 6.0/1000t in
+`harness/test/activity.test.ts`, where the range is known, with a walking-only boss as
+the counter-example. The incentive underneath stays broken and stays documented.
+
+**Still open from this playtest:** AC 4 proper — five *timed* Round 1 attempts — was not
+run.
 
 ### Not done, and why
 

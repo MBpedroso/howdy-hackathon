@@ -94,6 +94,39 @@ const MAX_STILL_TICKS = ACTIVITY.maxIdleRunTicks;
  */
 const MIN_SPAN_PX = ACTIVITY.minSpanPx;
 
+/**
+ * Attack primitives per 1000 ticks that a shipped boss must average against the panel.
+ *
+ * A **test**, not a gate, and that distinction is the finding. A playtest on 2026-09-08
+ * reported the Round 3 boss "barely shot", and it was right: `fallback/round3/emberline`
+ * measured **5.0** against 7.9-15.7 for everything else — 16 attacks across four whole
+ * matches. Every gate passed it and all of them were correct to, because nothing in
+ * Gate 3 asserts that the boss *attacks*. FAIR reads the win rate, and that boss's win
+ * rate belonged to its minions and the clock.
+ *
+ * The obvious next move was a fourth ACTIVE clause. The data says no. Re-graded across
+ * the 58 real candidate files the model wrote in the 2026-09-03 eval, the attack rate
+ * runs from 0.5 to 21.3 with a median of 11.4 and **no gap anywhere**: a floor of 6
+ * would reject 20 of the 58, and one of that eval's six approvals sat at 1.6. That is
+ * nothing like the span clause, where the attack measured 2.6 px against a shipped
+ * minimum of 155.7 — a 60x separation that made the threshold obvious. Shipping an
+ * engagement gate would trade a third of the loop's pass rate for a property the model
+ * is not reliably able to hit, six days from a deadline.
+ *
+ * So the eleven files *we* control are held to it here instead, where the range is
+ * known. 6.0 sits 1.3x below the shipped minimum and above emberline's old 5.0, so the
+ * regression that actually shipped would be caught. The underlying incentive — a
+ * timeout is a boss win, so passivity wins — is untouched and is recorded in
+ * `docs/AI-DEV-LOG.md`.
+ */
+const MIN_ATTACKS_PER_1000_TICKS = 6.0;
+
+/** `burst`, `charge`, `slam`, `spawn` — everything that puts something on the board. */
+function attackCount(state: GameState): number {
+  const p = state.counts.primitives;
+  return p.burst + p.charge + p.slam + p.spawn;
+}
+
 /** The recorded human Round 1, reused as a Round 2 player. */
 function humanLog(): InputLog {
   const url = new URL('../../web/e2e/fixtures/inputlog-round1.json', import.meta.url);
@@ -222,6 +255,67 @@ describe('a shipped boss keeps playing', () => {
       expect(activity.longestIdleRun).toBeGreaterThan(MAX_STILL_TICKS);
       expect(idleFraction(activity)).toBe(1);
       expect(activity.travelPx).toBe(0);
+    } finally {
+      runner.dispose();
+    }
+  }, 30_000);
+
+  /**
+   * ...and moving is not the same as playing.
+   *
+   * Separate from the loop above because it is a different question with a different
+   * unit: that one asks whether the boss goes anywhere, this one whether it ever does
+   * anything when it gets there. `emberline` passed every clause of the first question
+   * — idle run 0, span 378 px — while averaging 5.0 attacks per 1000 ticks, and a human
+   * called it broken. See `MIN_ATTACKS_PER_1000_TICKS` for why this is a test over the
+   * eleven files we control rather than a fifth gate assertion.
+   */
+  for (const { name, path } of SHIPPED) {
+    it(`${name} actually attacks, not just moves`, () => {
+      const runner = load(read(path));
+      try {
+        let attacks = 0;
+        let ticks = 0;
+        for (const [i, bot] of ([kiter(), rusher(), camper(), dodger()] as PlayerBot[]).entries()) {
+          const seed = 0x5eedface + i;
+          bot.reset(seed);
+          const state = createGame(seed, runner);
+          const rng = createRng(playerSeed(seed));
+          while (state.outcome === 'playing') step(state, bot.act(state, rng), runner);
+          attacks += attackCount(state);
+          ticks += state.tick;
+        }
+        const per1000 = (attacks / ticks) * 1000;
+        expect(
+          per1000,
+          `${name}: ${attacks} attacks over ${ticks} ticks = ${per1000.toFixed(1)} per 1000`,
+        ).toBeGreaterThanOrEqual(MIN_ATTACKS_PER_1000_TICKS);
+      } finally {
+        runner.dispose();
+      }
+    }, 60_000);
+  }
+
+  /** The control: a boss that only ever moves must fail the assertion above. */
+  it('a boss that only walks is the counter-example, so it is not vacuous', () => {
+    const source = `export const meta = { name: 'Stroller', rationale: 'I am just passing through.', version: 1 };
+export function init() { return {}; }
+export function decide(view) {
+  const a = view.tick / 90;
+  return { type: 'move', dx: Math.cos(a), dy: Math.sin(a) };
+}`;
+    const runner = load(source);
+    try {
+      const seed = 3;
+      const bot = camper();
+      bot.reset(seed);
+      const state = createGame(seed, runner);
+      const rng = createRng(playerSeed(seed));
+      while (state.outcome === 'playing') step(state, bot.act(state, rng), runner);
+      // It moves beautifully and never once threatens anyone.
+      expect(attackCount(state)).toBe(0);
+      const tracker = createActivityTracker(state);
+      expect(tracker.read().spanPx).toBe(0);
     } finally {
       runner.dispose();
     }

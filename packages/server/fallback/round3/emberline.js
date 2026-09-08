@@ -15,16 +15,44 @@
 // The hole: minions have 6 hp. A player who spends four shots killing each one as it
 // arrives dismantles this boss for the price of the ammunition.
 //
+// ## Rebalanced 2026-09-08, after a playtest said it "barely shot"
+//
+// It didn't. Measured across four full matches against the reference panel, this boss
+// took **5.0 attack primitives per 1000 ticks** against 7.9-15.7 for every other
+// shipped strategy — 16 attacks in four whole rounds, of which 5 bursts. Every gate
+// passed it, and all of them were right to: nothing in Gate 3 asserts that the boss
+// *attacks*. FAIR reads the win rate, and this boss's win rate was the minions'.
+//
+// The dial that looked like the fix was not. Raising `PRESSURE_CHANCE` alone buys
+// almost no engagement (0.10 -> 0.55 moved the rate 5.0 -> 7.6, because what limits
+// attacks is cooldowns, not the roll) and immediately leaves the band on the high side
+// (0.25 already measured 0.62 against a 0.60 ceiling). What worked was trading the
+// minions away for the boss acting itself — and the exchange rate is the finding: at
+// `SPAWN_EVERY` 2400 the boss reached 12.8 attacks/1000t and fell to **0.35**, far
+// below the floor. Its own attacks are worth a fraction of its minions, which is the
+// same root cause as everything else in `docs/REVIEW-2026-09-08.md`: a timeout is a
+// boss win, so standing back and letting the clock run is a winning strategy and the
+// band rewards it.
+//
+// So the numbers below are a *held* win rate at three times the engagement, not a
+// harder boss: `PRESSURE_CHANCE` 0.10 -> 0.80 paid for by `SPAWN_EVERY` 560 -> 1300.
+// Verified at 200 matches across the neighbourhood (pressure 0.75-0.85, spawn
+// 1200-1400): every combination lands 0.50-0.55 with 12.8-13.5 attacks/1000t, so this
+// is not a knife edge.
+//
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round3/emberline.js
 // --round 3 --matches 200`:
 //
-//     panel 0.53   (Camper 1.00, Kiter 0.36, Rusher 0.00, Dodger 0.76)   band 0.45-0.60
+//     panel 0.55   band 0.45-0.60, margin +0.050
+//     12.8 attack primitives per 1000 ticks (was 5.0)
 //     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
+//     narrowest bounding box 388 px of the 56 px ACTIVE requires
 //
 // The orbit used to walk this boss into the top-left corner and leave it there — 169
 // consecutive motionless ticks against a camper, without ever returning `idle`, because
 // a `move` into a wall is accepted and displaces nothing. Reversing the orbit at the
-// wall instead took it to 0.72, so `SPAWN_EVERY` went from 380 to 560 to pay that back.
+// wall instead took it to 0.72, so `SPAWN_EVERY` went from 380 to 560 to pay that back
+// (and to 1300 on 09-08, for the engagement trade described below).
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
@@ -37,7 +65,7 @@ export const meta = {
 };
 
 const REFRESH = 55;
-const SPAWN_EVERY = 560;     // spawn cooldown is 300; retry slower than that, not faster
+const SPAWN_EVERY = 1300;    // spawn cooldown is 300; retry slower than that, not faster
 // How far ahead the orbit checks for a wall, and how close to the edge it may aim.
 // The boss clamps at its own radius (28 px), so a leg aimed inside this strip would
 // displace it by nothing — see note 4.
@@ -51,8 +79,13 @@ const SLAM_LEAD = 30;
 // The balance dial. Once per breath the boss rolls whether it adds its own pressure
 // to the minions' or just walks; `rand()` is the engine's seeded PRNG, so the match
 // still replays byte-for-byte.
+//
+// 0.80 rather than 1.0 on purpose: the one-in-five walking breath is the window a
+// patient player needs to spend on the boss instead of on its pets, and removing it
+// entirely measured the same win rate for a boss that never lets up. The lull is the
+// design; what was wrong was 0.10, which made the lull the whole round.
 const BREATH = 150;
-const PRESSURE_CHANCE = 0.10;
+const PRESSURE_CHANCE = 0.80;
 
 export function init() {
   return { hot: -1, refreshedAt: -1, lastSpawn: -999, spin: 1, ticks: 0, breath: -1, pressing: true };

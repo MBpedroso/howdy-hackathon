@@ -413,6 +413,21 @@ Five design points, each of them load-bearing:
   in a cell, leaves, and settles elsewhere, which is what makes a cumulative heat map
   stale. The Mimic is the closest thing the gate has to that player.
 
+A third question this section does **not** answer, and deliberately: *does the boss
+attack?* A playtest on 2026-09-08 found `fallback/round3/emberline` averaging 5.0 attack
+primitives per 1000 ticks against 7.9–15.7 for every other shipped strategy, and it
+passed every clause above — idle run 0, span 378 px — because its win rate belonged to
+its minions and the clock. That strategy was rebalanced to 12.8 at a held 0.55, and the
+property is now a *test* over the eleven shipped files
+(`harness/test/activity.test.ts`, floor 6.0/1000t) rather than a gate assertion. The
+reason is the data: across the 58 real candidate files from the 09-03 eval the attack
+rate runs 0.5–21.3 with a median of 11.4 and no gap anywhere, so a floor of 6 would
+reject 20 of 58 and one of that eval's six approvals sat at 1.6. The span clause had a
+60x separation to aim at; this has none, and a gate that costs a third of the pass rate
+to enforce a property the model cannot reliably hit is not a gate worth having. The
+incentive underneath — `timeout = boss win`, so passivity is a winning strategy — is the
+real cause and is untouched.
+
 It costs nothing: the matches are already being simulated and the measurement is two adds
 and a `hypot` per tick. `reason` names the fix, not the symptom:
 
