@@ -148,6 +148,40 @@ export function resolveDeadlineMs(env: Record<string, string | undefined> = proc
 }
 
 /**
+ * Milliseconds reserved, inside the client's budget, for the loop to *report*.
+ *
+ * The loop's last act is a `fallback` + `done` pair on the wire, and there is no
+ * point finishing the thinking if the client has already hung up before the frames
+ * land. Two seconds is generous for two SSE frames over localhost and cheap against
+ * a 40 s budget.
+ */
+export const CLIENT_BUDGET_RESERVE_MS = 2_000;
+
+/**
+ * The loop may not outlive the client that asked for it.
+ *
+ * Found in a playtest on 2026-09-08. The client aborts at 45 s (spec AC 5) and the
+ * server was reading `REMATCH_DEADLINE_MS`, which was 90 s on the developer's
+ * machine. Every Round 2 rewrite — always the first of a session, so always the one
+ * paying a cold prompt cache — ran past 45 s, the browser hung up mid-stream, and the
+ * request ended at exactly 45 034 ms with `attempts: 0`, `approved: null` and no
+ * artifact on disk. The player saw a dead interlude instead of AC 5's honest
+ * fallback, and there was nothing left to debug it with.
+ *
+ * A larger `REMATCH_DEADLINE_MS` is not wrong on its own — a CLI provider really is
+ * slower, and a caller with no browser attached (the eval) should be able to use it.
+ * What was wrong is that it could *exceed* what the caller would wait for. So the
+ * client sends its budget and this takes the smaller of the two, less the reserve
+ * above, which makes the two numbers impossible to disagree about.
+ */
+export function clampToClientBudget(deadlineMs: number, budgetMs: number | undefined): number {
+  if (budgetMs === undefined) return deadlineMs;
+  // Never below 1 ms: a pathologically small budget should still produce a real
+  // (immediate) fallback rather than a non-positive timeout.
+  return Math.max(1, Math.min(deadlineMs, budgetMs - CLIENT_BUDGET_RESERVE_MS));
+}
+
+/**
  * Gate 3's cost, from the environment.
  *
  * `REMATCH_MATCHES` and `REMATCH_WORKERS` exist for one reason: spec §6.2's 200
@@ -263,7 +297,7 @@ export async function handleRewrite(
     return;
   }
 
-  const deadlineMs = opts.deadlineMs ?? resolveDeadlineMs(env);
+  const deadlineMs = clampToClientBudget(opts.deadlineMs ?? resolveDeadlineMs(env), req.budgetMs);
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
 
   // One controller for the run. The caller's signal (the SSE connection dropped)

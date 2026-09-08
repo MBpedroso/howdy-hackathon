@@ -336,7 +336,12 @@ async function serveRewrite(req: IncomingMessage, res: ServerResponse, ctx: Rewr
     const artifact = writeRewriteArtifact(
       {
         generatedAt: new Date().toISOString(),
-        request: { round: parsed.value.round, seed: parsed.value.seed, prevMeta: parsed.value.prevMeta },
+        request: {
+          round: parsed.value.round,
+          seed: parsed.value.seed,
+          prevMeta: parsed.value.prevMeta,
+          ...(parsed.value.budgetMs === undefined ? {} : { budgetMs: parsed.value.budgetMs }),
+        },
         summary: line,
         events,
       },

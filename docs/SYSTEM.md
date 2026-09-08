@@ -682,6 +682,21 @@ doing the job it exists for: not catching malformed code, but catching code that
 wrong *difficulty*, which is the judgement no linter can make and the reason Gate 3 has
 to simulate.
 
+**The first rewrite of a session is the slow one, and it is Round 2.** Measured in a real
+playtest on 2026-09-08 (`AI-DEV-LOG.md`): every Round 2 request reports `cacheRead: 0`
+while rounds 3–5 read 10 448–18 057 cached tokens, and the cold round runs 5–9 s longer
+for *fewer* output tokens. Round 2 is the first time the boss visibly learns, so the
+demo's most important round is structurally its slowest one. Until the deadline clamp
+below, it crossed the client's 45 s abort in three sessions out of three and the player
+never once saw a live Round 2 rewrite.
+
+**A client's budget now bounds the server's deadline.** `POST /api/rewrite` accepts
+`budgetMs`, and `clampToClientBudget` takes `min(configured, budgetMs - 2 s)`. The two
+numbers used to be able to disagree — `REMATCH_DEADLINE_MS=90000` against a client that
+aborts at 45 s — and when they did, the browser hung up mid-stream: `approved: null`, no
+`fallback` event, no artifact. AC 5's promise is a *visible* fallback, and a dead screen
+is not one. Spec §13 delta 21.
+
 **The binding constraint is Coder latency, not model quality.** Over 65 candidate calls:
 **p50 7.7 s, p90 12.3 s** (min 5.2 s, max 15.7 s), against the loop's 40 s deadline. At
 p90, three candidates plus their gates is most of one attempt's budget, and four

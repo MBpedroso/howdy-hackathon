@@ -126,7 +126,7 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 | `?speed=<n>` | Divide every mock **or recorded** delay by `n`. The mock is ~25 s at `1`, `mimic-camper` 23.5 s; the e2e suite runs at `20`. |
 | `?interlude=0` | Keep the pre-interlude "Round N cleared" screen. Used by `e2e/controls.spec.ts` to test the outcome path without a 25-second overlay in the way. |
 | `?autofight=0` | Do not auto-continue 3 s after the interlude finishes; wait for the FIGHT button. |
-| `?deadline=<ms>` | Shorten the 45 s interlude deadline, to see the spec AC 5 fallback path on a machine where everything works. |
+| `?deadline=<ms>` | Shorten the 45 s interlude deadline, to see the spec AC 5 fallback path on a machine where everything works. The value is also sent to the server as `budgetMs`, which clamps *its* loop to match — so this shortens the whole run, not just the client's patience. |
 | `?debug=1` | Show the determinism footer under the HUD: `tick`, the session/round seed pair, tick+render ms, and the sandbox runner's call/idle/failure counts. **Off by default since 2026-09-08** (`docs/REVIEW-2026-09-08.md`, question 5): it is the clearest evidence in the UI that the simulation is seed-deterministic, and it is also technical clutter on screen during every normal fight, so it is a flag rather than a fixture. `?debug=0` and `?debug=false` are off; bare `?debug` is on. |
 
 ## The cast (Analyst, Coder, Judge)

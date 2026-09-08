@@ -26,6 +26,8 @@
 export {
   CAPPED_MESSAGE,
   DEADLINE_ENV,
+  CLIENT_BUDGET_RESERVE_MS,
+  clampToClientBudget,
   DEFAULT_DEADLINE_MS,
   DEFAULT_GRACE_MS,
   MATCHES_ENV,
@@ -56,6 +58,8 @@ export {
 export {
   BadRequestError,
   MAX_PREV_SOURCE_CHARS,
+  MAX_BUDGET_MS,
+  MIN_BUDGET_MS,
   parseRewriteRequest,
   requireRewriteRequest,
   type ParseResult,

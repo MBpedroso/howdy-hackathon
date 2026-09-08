@@ -795,6 +795,80 @@ statement, now in all four docs, is that **the current pass rate is unknown and 
 upper bound**. The practical consequence: the fallback pool is carrying more of the demo
 than the docs implied, which is an argument for keeping it good, not for hiding it.
 
+### The playtest, finally — and Round 2 never worked
+
+Matt played the game end to end on 2026-09-08, twice. The session is on disk
+(`artifacts/server/rewrite-2026-09-08T13-*.json`) and it is the first real AC 4-shaped
+evidence the project has.
+
+**The first session does not count, and that is on the orchestration.** It was started
+with `REMATCH_PROVIDER=none` out of caution about spend, which is fallback-only — no
+model runs at all. Matt played four rounds against pre-written strategies and reported,
+correctly, that the boss "didn't learn anything" and was "bugged and weird". Nothing was
+wrong with the game; the mode had the product removed from it. Lesson recorded because
+the same caution nearly hid the actual bug: **being conservative about spend is not free
+if it makes the artifact unrepresentative.**
+
+Also found while fixing that: `REMATCH_PROVIDER=openai` was **exported in the shell
+environment**, and Node's `--env-file-if-exists` does not override an already-set
+variable — so the `REMATCH_PROVIDER=claude-cli` in `.env` had never once taken effect
+from that shell. That is the most likely explanation for the OpenAI credits burning on
+09-03.
+
+**The second session found the real bug, and it is the worst-placed one yet.** Server
+log, three Round 2 requests across two sessions:
+
+```
+round 2   ms 45267   attempts 0   approved null   (no artifact)
+round 2   ms 45034   attempts 0   approved null   (no artifact)
+round 3   ms 45008   attempts 0   approved null   (no artifact)
+round 3   ms 39912   attempts 1   approved true   cacheRead 15672
+round 4   ms 36181   attempts 1   approved true   cacheRead 10448
+round 5   ms 37052   attempts 1   approved true   cacheRead 10448
+```
+
+Every failure sits at **~45 000 ms exactly**, which is `INTERLUDE_DEADLINE_MS` — the
+client aborting. The server's deadline was `REMATCH_DEADLINE_MS=90000`, so the loop was
+still working when the browser hung up: `approved: null`, no `fallback` event, and **no
+artifact written**. The case most worth debugging was the only one with no evidence.
+
+Why always Round 2: it is the *first* rewrite of a session, so it is the only one paying
+a cold prompt cache. `cacheRead: 0` on every round-2 row against 10 448–18 057 later.
+Cold is slower, slower crosses 45 s, and Round 2 is the round the entire product thesis
+rests on — the first time the boss visibly learns. **It never worked, in any session, and
+nothing in the repo would have told us.**
+
+The fix is not a bigger number on either side. It is that the two numbers were allowed to
+disagree: the client now sends `budgetMs` and the server clamps to
+`min(configured, budgetMs - 2 s)` (`clampToClientBudget`). A larger `REMATCH_DEADLINE_MS`
+is still legitimate for a caller with no browser attached — the eval — it just cannot
+exceed what the caller will wait for. Verified live: 12 s budget against a 90 s server
+finished in **10 004 ms** with `reason: 'deadline'`, a named fallback (`emberline`) and an
+artifact on disk. The player gets AC 5's visible fallback on time instead of a dead
+screen, and the run leaves evidence either way. `budgetMs` is recorded in the artifact
+for the same reason.
+
+**What the boss actually learned, when it got to run.** Rounds 3–5 of the second session,
+all approved on attempt 1, and it tracked Matt changing style between rounds:
+
+| Round | It read him as | The boss it wrote | Its own line |
+|---|---|---|---|
+| 3 | `mixed` | Cistern II | *"You never hold a cell for long, so half the time you settle, the floor already knows."* |
+| 4 | `dodger` | Ferrule II | *"You live in the same band and never touch the edges, so that is exactly where I send the next wave."* |
+| 5 | `camper` | Culvert II | *"You never leave the left wall, so the spawns and the follow-up both land there now."* |
+
+The Analyst's observations are specific and checkable — *"0 of 5 damage across 1222
+ticks"*, *"49 shots/use during spawn versus 0.1 during plain movement"*, *"only 14 dashes,
+skewed East and South, used for repositioning rather than evasion"*. And the harness did
+its job on both: in each round the conservative candidate was rejected ("too easy", 0.00
+vs Mimic) and the balanced one approved inside the band. That is the thesis working, on a
+real human, for the first time.
+
+**Still open from this playtest:** AC 4 proper (five *timed* Round 1 attempts) was not
+run, and Matt's Round 3 complaint from the fallback-only session — a boss that "barely
+shot" — is unexamined. It may be nothing, or it may be the same class as the jitter bug
+one more time: nothing in Gate 3 asserts that the boss *attacks*.
+
 ### Not done, and why
 
 - **The pass rate has not been re-measured.** The only way is `pnpm eval:agents` against a

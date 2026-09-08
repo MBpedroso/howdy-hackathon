@@ -266,6 +266,12 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
       prevSource: context.source,
       prevMeta: context.summary.strategy,
       seed: context.seed,
+      // Tell the server how long we will actually wait, so it cannot outlive us.
+      // Before this, a server configured with a larger `REMATCH_DEADLINE_MS` kept
+      // working after `controller.abort()` below fired: the run ended with no
+      // `fallback` event, no `done`, and no artifact — see `clampToClientBudget`
+      // in `packages/server/src/handleRewrite.ts` for the playtest that found it.
+      budgetMs: Math.trunc(deadlineMs),
     };
 
     try {

@@ -92,7 +92,8 @@ handler with a mocked model and nothing else faked.
   "seed":       3221225473, // the round seed; makes a fallback pick reproducible
   "summary":    { ... },    // engine `ReplaySummary` of the round just won
   "prevSource": "export const meta = ...",   // the strategy that just lost
-  "prevMeta":   { "name": "Cornerbreaker", "rationale": "...", "version": 1 }
+  "prevMeta":   { "name": "Cornerbreaker", "rationale": "...", "version": 1 },
+  "budgetMs":   45000       // optional: how long the CALLER will wait. See below.
 }
 ```
 
@@ -142,6 +143,28 @@ bosses. So the widened type is the server's (`src/events.ts`: `ServerDoneEvent`,
 it keeps working; the reason it is there is that a client which needs a boss at exactly the
 moment something has gone wrong should not have to make a second request to get one
 (spec AC 5).
+
+### `budgetMs` — why the caller sets the deadline
+
+Optional, 5 000–300 000, and the server clamps its loop to
+`min(REMATCH_DEADLINE_MS, budgetMs - 2 s)`.
+
+It exists because the two deadlines were allowed to disagree, and on the developer's
+machine they did: `REMATCH_DEADLINE_MS=90000` against a browser that aborts at 45 s
+(`INTERLUDE_DEADLINE_MS`, spec AC 5). A playtest on 2026-09-08 hit that three times out
+of three, always on **Round 2** — the first rewrite of a session, so the only one paying
+a cold prompt cache. Each request ended at ~45 034 ms with `attempts: 0`,
+`approved: null`, **no `fallback` event and no artifact**: the client hung up mid-stream,
+so the loop's honest ending never reached anyone, and the one case worth debugging was
+the one that left nothing behind.
+
+A larger `REMATCH_DEADLINE_MS` is still legitimate — a CLI provider really is slower, and
+the eval has no browser attached — it just may not exceed what the caller will wait for.
+The 2 s reserve is for the `fallback` + `done` frames to actually land.
+
+Out-of-range values are a **400, not a silent clamp**: a caller asking for 5 ms would get
+an instant fallback every round and a caller asking for an hour would hold a worker pool,
+and neither is a thing an honest client asks for.
 
 ## Fallback-only mode
 

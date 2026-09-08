@@ -36,7 +36,32 @@ export type RewriteRequestBody = {
   prevMeta: StrategyMeta;
   /** The round seed. Makes a fallback pick reproducible (spec AC 3). */
   seed: number;
+  /**
+   * How long the *client* will wait, ms. Optional; absent means "use the server's
+   * own configured deadline".
+   *
+   * The server clamps its loop to this, and the reason is a bug this caught in a
+   * real playtest (2026-09-08). The client aborts at `INTERLUDE_DEADLINE_MS` (45 s,
+   * spec AC 5) while the server's deadline is whatever `REMATCH_DEADLINE_MS` says —
+   * 90 s on the developer's machine. Three Round 2 rewrites in a row died at exactly
+   * 45 034 ms with `attempts: 0`, `approved: null` and **no artifact written**: the
+   * client hung up mid-stream, so the loop's `fallback` + `done` pair never reached
+   * anyone and the one case most worth debugging was the one with no evidence.
+   *
+   * Sending the budget makes the two numbers impossible to disagree about. The
+   * player still gets AC 5's visible fallback, on time, and the server still writes
+   * its artifact.
+   */
+  budgetMs?: number;
 };
+
+/**
+ * Bounds on `budgetMs`. Below the minimum the loop cannot even finish one Coder call
+ * (p50 7.7 s), so the request is a mistake; above the maximum a caller is asking the
+ * server to hold a worker pool far longer than any interlude the spec describes.
+ */
+export const MIN_BUDGET_MS = 5_000;
+export const MAX_BUDGET_MS = 300_000;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -171,6 +196,22 @@ export function parseRewriteRequest(body: unknown): ParseResult<RewriteRequestBo
   const summaryError = summary(body['summary']);
   if (summaryError !== undefined) return fail(summaryError);
 
+  // Optional, and bounded on both sides. A client asking for 5 ms would get an
+  // instant fallback every round, and one asking for an hour would hold a worker
+  // pool hostage — neither is a thing an honest client asks for, so both are a
+  // rejection rather than a silent clamp.
+  const rawBudget = body['budgetMs'];
+  let budgetMs: number | undefined;
+  if (rawBudget !== undefined) {
+    if (!isFiniteNumber(rawBudget) || !Number.isInteger(rawBudget)) {
+      return fail('budgetMs must be an integer number of milliseconds');
+    }
+    if (rawBudget < MIN_BUDGET_MS || rawBudget > MAX_BUDGET_MS) {
+      return fail(`budgetMs must be between ${MIN_BUDGET_MS} and ${MAX_BUDGET_MS}`);
+    }
+    budgetMs = rawBudget;
+  }
+
   return {
     ok: true,
     value: {
@@ -179,6 +220,7 @@ export function parseRewriteRequest(body: unknown): ParseResult<RewriteRequestBo
       prevSource,
       prevMeta: body['prevMeta'] as StrategyMeta,
       summary: body['summary'] as ReplaySummary,
+      ...(budgetMs === undefined ? {} : { budgetMs }),
     },
   };
 }

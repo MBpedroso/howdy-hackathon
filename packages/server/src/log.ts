@@ -117,7 +117,18 @@ export function logLine(line: RequestLogLine, write: (text: string) => void = (t
 
 export type RewriteArtifact = {
   generatedAt: string;
-  request: { round: number; seed: number; prevMeta: RewriteRequestBody['prevMeta'] };
+  request: {
+    round: number;
+    seed: number;
+    prevMeta: RewriteRequestBody['prevMeta'];
+    /**
+     * The client's budget, when it sent one. Recorded because it is half of the
+     * arithmetic behind the run's deadline — without it, an artifact that ends on
+     * `reason: 'deadline'` cannot say whether the server ran out of its own time or
+     * was clamped to the browser's. See `clampToClientBudget`.
+     */
+    budgetMs?: number | undefined;
+  };
   summary: RequestLogLine;
   /** Every frame the client was sent, in order. */
   events: readonly ServerRewriteEvent[];
