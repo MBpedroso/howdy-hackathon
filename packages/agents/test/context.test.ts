@@ -306,7 +306,10 @@ describe('renderBotRates', () => {
     // A rate inside the band is stated and left alone.
     expect(table).toMatch(/Kiter\s+0\.96$/m);
     expect(table).toMatch(/Dodger\s+0\.76$/m);
-    expect(table).toMatch(/Mimic\s+0\.41\s+<- ADAPTED needs >= 0\.70/);
+    // ADAPTED advises rather than rejects (2026-09-08), and the marker has to say
+    // so: a Coder told it "needs" the number spends its retry on the one assertion
+    // that cannot refuse it, at FAIR's expense.
+    expect(table).toMatch(/Mimic\s+0\.41\s+<- short of the 0\.70 goal \(did not reject you\)/);
   });
 
   it('leaves the Mimic unmarked once ADAPTED passes, and omits it when unmeasured', () => {

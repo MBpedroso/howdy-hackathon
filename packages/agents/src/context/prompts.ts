@@ -170,11 +170,12 @@ Gate 2 — contract fuzz. Your \`decide\` is called on ~500 generated states,
     ✗ "returned an invalid action on 3.0% of states (15/500); the most common
        problem was burst.angle must be a finite number, got NaN (12x)"
 
-Gate 3 — balance. ${DEFAULT_MATCHES} simulated matches on a fixed seed set. Two assertions:
-    ADAPTED : boss win rate vs the Mimic  >= ${ADAPTED_MIN.toFixed(2)}
+Gate 3 — balance. ${DEFAULT_MATCHES} simulated matches on a fixed seed set. Two assertions
+that reject, and one goal that does not:
+    ADAPTED : boss win rate vs the Mimic  >= ${ADAPTED_MIN.toFixed(2)}   (a goal — it cannot reject you)
               The Mimic is a bot rebuilt from THIS player's replay — their heat
               map, their dash bias, their shot timing. Beating it is what "you
-              countered how they played" means. This is what the analysis is for.
+              countered how they played" means. Aim at it; never trade FAIR for it.
     FAIR    : boss win rate vs the scripted panel  in ${formatBand(round)}   (round ${round})
               Four scripted bots that play nothing like this player: Camper,
               Kiter, Rusher, Dodger. The panel rate is the plain mean of their
@@ -212,9 +213,9 @@ What this means for how you write:
   unconditionally beats it every match. \`Kiter 0.00, Rusher 0.00\` is "too easy".
 - On a retry, move magnitude, not architecture. 0.90 wants about half the
   pressure it has, not none — a rewrite is how "too hard" becomes "too easy".
-- Counter the *specific* player in the analysis — that is the only way ADAPTED
-  passes — but leave the counter answerable. Prefer punishing one habit hard over
-  raising pressure everywhere.
+- Counter the *specific* player in the analysis — that is the whole point of the
+  rewrite, and what the ADAPTED number reports — but leave the counter answerable.
+  Prefer punishing one habit hard over raising pressure everywhere.
 - Guard every division and every \`Math.atan2\` input. A single NaN angle in one
   branch is a Gate 2 rejection even if the rest of the file is perfect.
 - Keep \`decide\` straight-line, allocate nothing per tick beyond the returned
@@ -280,7 +281,7 @@ export function renderBotRates(rates: BotRates): string {
       const rate = row.winRate.toFixed(2);
       const note = row.mimic
         ? row.winRate < ADAPTED_MIN
-          ? `  <- ADAPTED needs >= ${ADAPTED_MIN.toFixed(2)}`
+          ? `  <- short of the ${ADAPTED_MIN.toFixed(2)} goal (did not reject you)`
           : ''
         : row.winRate >= 1
           ? '  <- unwinnable for that bot; this is what makes you too hard'
@@ -340,10 +341,15 @@ export function correctionHint(rates: BotRates, round: BalanceRound): string | u
     ].join('\n');
   }
   if (rates.mimic !== undefined && rates.mimic < ADAPTED_MIN) {
+    // Reachable only alongside another failure now that ADAPTED advises rather than
+    // rejects: an in-band, active boss that merely misses the Mimic goal ships. Kept
+    // because ACTIVE can still be the rejection while the Mimic rate is also low,
+    // and then this is exactly the right instruction.
     return [
       `Your panel rate (${panel.toFixed(2)}) is already inside the band: change NOTHING that the`,
-      'panel bots see. The only thing to fix is the Mimic — sharpen the one counter',
-      'to the habit in the analysis, and leave every other dial exactly where it is.',
+      'panel bots see. Sharpen the one counter to the habit in the analysis and leave',
+      'every other dial exactly where it is — the Mimic rate is a goal, not the reason',
+      'you were rejected.',
     ].join('\n');
   }
   return undefined;
@@ -443,8 +449,7 @@ export const DIALS: readonly { name: string; instruction: string; aim: CoderDial
 ];
 
 /**
- * The aim points for an attempt whose panel rate is already inside the band and
- * whose only failure is ADAPTED.
+ * The aim points for an attempt whose panel rate is already inside the band.
  *
  * This is the third mode the search needs, and leaving it out was worth several
  * runs: a boss measured at 0.44 vs the panel and 0.00 vs the Mimic is *fair* and
@@ -452,6 +457,11 @@ export const DIALS: readonly { name: string; instruction: string; aim: CoderDial
  * the way towards something — breaks the half that already works. The three
  * candidates therefore hold every rate constant and differ in *where the pressure
  * is aimed*: the place, the ground, and the timing.
+ *
+ * Since ADAPTED stopped rejecting (2026-09-08) the file that reaches this mode was
+ * refused by ACTIVE rather than by the Mimic rate, and the instruction is right for
+ * that too: a frozen boss that is otherwise in band needs its pressure moved
+ * somewhere, not scaled.
  */
 export const ADAPT_DIALS: readonly { name: string; instruction: string }[] = [
   {
@@ -572,7 +582,10 @@ function shortVerdict(outcome: CandidateOutcome, round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
   if (outcome.panel !== undefined && outcome.panel > hi) return 'too hard';
   if (outcome.panel !== undefined && outcome.panel < lo) return 'too easy';
-  if (outcome.rates?.mimic !== undefined && outcome.rates.mimic < ADAPTED_MIN) return "didn't adapt";
+  // Last, and only when nothing that rejects explains the row: ADAPTED advises now,
+  // so "short of goal" is a description of a candidate that was refused for some
+  // other reason — never the verdict on its own.
+  if (outcome.rates?.mimic !== undefined && outcome.rates.mimic < ADAPTED_MIN) return 'short of goal';
   return 'rejected';
 }
 
@@ -833,7 +846,8 @@ export function coderPrompt(ctx: CoderContext): Prompt {
     `# ROUND ${ctx.round}`,
     '',
     `You are writing the boss for round ${ctx.round}. Its fairness band is ${formatBand(ctx.round)} against the`,
-    `panel, and it must beat the Mimic of this player at least ${ADAPTED_MIN.toFixed(2)} of the time.`,
+    `panel — that is the hard requirement. Beating the Mimic of this player ${ADAPTED_MIN.toFixed(2)} of the`,
+    'time is the goal to aim at, and it is reported rather than enforced.',
     '',
   ];
 

@@ -271,8 +271,11 @@ describe('the autonomous rewrite loop', () => {
   });
 
   it('measures ADAPTED against this player, so Gate 3 is never skipped', async () => {
-    // A boss that ignores the player entirely fails FAIR as too easy AND fails
-    // ADAPTED. Both halves must appear, which proves `mimicSummary` was passed.
+    // A boss that ignores the player entirely fails FAIR as too easy and misses
+    // ADAPTED. Both halves must appear in the reason, which is what proves
+    // `mimicSummary` reached the gate — ADAPTED advises rather than rejects now
+    // (2026-09-08), so its sentence rides along with a rejection rather than
+    // causing one, and the relative baseline proves `prevSource` got measured too.
     const analyst = mockProvider([JSON.stringify(ANALYSIS)]);
     const idle = asCoderReply(readGood('idle'));
     const coder = mockProvider([idle, idle, idle, idle]);
@@ -300,8 +303,11 @@ describe('the autonomous rewrite loop', () => {
 
     const verdicts = eventsOf(events, 'verdict');
     expect(verdicts.every((v) => !v.approved)).toBe(true);
-    expect(verdicts[0]!.reason).toMatch(/vs Mimic — didn't adapt/);
+    expect(verdicts[0]!.reason).toMatch(/vs Mimic — aim for >= 0\.70/);
+    expect(verdicts[0]!.reason).toMatch(/\(not blocking\)/);
     expect(verdicts[0]!.reason).toMatch(/too easy/);
+    // `measureMimicWinRate(prevSource, …)` ran and its number reached the reason.
+    expect(verdicts[0]!.reason).toMatch(/to beat the boss you are replacing/);
 
     const fallback = eventsOf(events, 'fallback');
     expect(fallback).toHaveLength(1);

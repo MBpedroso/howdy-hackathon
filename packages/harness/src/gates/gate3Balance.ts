@@ -5,16 +5,32 @@
  * Three assertions, all measured by simulating real matches in the same QuickJS
  * sandbox the live game uses:
  *
+ * Two assertions block and one advises:
+ *
  * ```
- * ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
- * FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
- * ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
+ * FAIR    :  win_rate(boss vs panel)  in BAND[round]   blocks   "a different approach still beats it"
+ * ACTIVE  :  longest motionless run   <= 90 ticks      blocks   "…and it never looks crashed"
+ * ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          advises  "it countered how you played"
+ *        or  win_rate(boss vs Mimic)  >= base + 0.10   advises  "…or better than the boss it replaces"
  * ```
  *
- * ADAPTED needs the player's replay, so it is checked **only** when a
+ * ADAPTED stopped blocking on 2026-09-08, and the reason is a number rather than a
+ * preference: the incumbent boss beats a Mimic of a run the human had just won
+ * *without taking damage* 0.710 of the time. The Mimic is a far weaker player than
+ * the person it imitates, so the assertion did not mean what it read as — and
+ * against FAIR, which caps strength versus the scripted panel, it was unsatisfiable
+ * for anyone who plays well. It is still measured on every run, still in every
+ * artifact, and still appended to a rejection so the Coder aims at it. The full
+ * argument and the measurements are in the ADAPTED clause below and in
+ * `balanceConfig.ts`'s `ADAPTED_MARGIN`.
+ *
+ * ADAPTED needs the player's replay, so it is measured **only** when a
  * `mimicSummary` is supplied — the balance-regression suite and the CLI often have
- * no human to mimic, and a gate that failed for lack of input would be useless
- * there. FAIR and ACTIVE are always checked.
+ * no human to mimic. FAIR and ACTIVE are always checked.
+ *
+ * ADAPTED's relative route needs one more input, `adaptedBase`: the **incumbent**
+ * boss's win rate against the same Mimic on the same seeds. Without a base the
+ * absolute target stands alone, which is what the CLI and the regression suite get.
  *
  * ## Why ACTIVE is here and not a separate gate
  * It was a test before it was an assertion (`test/activity.test.ts`), on the
@@ -65,6 +81,7 @@ import type { BotSpec } from '../sim/protocol.ts';
 import { ticksAsSeconds } from '../sim/activity.ts';
 import {
   ACTIVITY,
+  ADAPTED_MARGIN,
   ADAPTED_MIN,
   DEFAULT_MATCHES,
   DEFAULT_ROUND,
@@ -84,6 +101,18 @@ export type Gate3Options = {
    * ADAPTED assertion; without it only FAIR is checked.
    */
   mimicSummary?: ReplaySummary;
+  /**
+   * The incumbent boss's win rate against this same Mimic, measured on the same
+   * seeds — `measureMimicWinRate(prevSource, …)`. Enables ADAPTED's relative
+   * route: a candidate that clears this by `ADAPTED_MARGIN` has adapted even if it
+   * cannot reach `ADAPTED_MIN`.
+   *
+   * Same seeds is not a detail. A difference between two rates only means anything
+   * if both were measured on the identical matches, which is why the baseline is
+   * produced by a function in this module rather than by whatever the caller has
+   * lying around.
+   */
+  adaptedBase?: number;
   /** Total matches. Default 200. Half vs the Mimic, half across the panel. */
   matches?: number;
   /** Worker threads. Default `availableParallelism() - 1`. 1 runs inline. */
@@ -191,6 +220,60 @@ function worstActivity(sims: readonly SimulateResult[]): {
   };
 }
 
+/**
+ * The incumbent boss's win rate against a Mimic — ADAPTED's relative baseline.
+ *
+ * Runs exactly the Mimic half of Gate 3: the same bot built from the same replay,
+ * the same seed count and the **same seed offset**, so the candidate and the boss
+ * it replaces are compared on identical matches. Anything less and the difference
+ * between the two rates is mostly noise about which seeds each one happened to get.
+ *
+ * It is a separate call rather than a second bot inside `gate3Balance` because the
+ * baseline belongs to the *round*, not to the attempt: it is measured once per
+ * interlude, against a strategy that is not changing, while Gate 3 runs once per
+ * candidate. Folding it in would pay for it three to twelve times over.
+ *
+ * Returns `undefined` if the incumbent cannot even be simulated — a source that
+ * fails to load is not a baseline, and ADAPTED then falls back to the absolute
+ * threshold alone rather than to a fabricated number.
+ */
+export async function measureMimicWinRate(
+  source: string,
+  opts: Pick<Gate3Options, 'mimicSummary' | 'matches' | 'accuracy' | 'workers' | 'sandbox'>,
+): Promise<number | undefined> {
+  if (opts.mimicSummary === undefined) return undefined;
+  const seeds = Math.max(1, gate3Plan(opts).mimicSeeds);
+  const spec: BotSpec =
+    opts.accuracy === undefined
+      ? { kind: 'mimic', summary: opts.mimicSummary }
+      : { kind: 'mimic', summary: opts.mimicSummary, accuracy: opts.accuracy };
+  try {
+    const result = await simulate({
+      source,
+      ...(opts.workers === undefined ? {} : { workers: opts.workers }),
+      ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      bots: [spec],
+      seeds: seedsFor(seeds, SEED_OFFSET.mimic),
+    });
+    return result.winRate;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * ADAPTED, both routes. `base` is the incumbent's rate against the same Mimic, or
+ * `undefined` when there is no incumbent to compare against (round 2 of a session
+ * has one; the CLI and the regression suite do not).
+ *
+ * Deliberately an `||`: the relative route only ever *adds* a way to pass, so
+ * nothing that passed before this existed can fail because of it.
+ */
+export function adapted(winRate: number, base?: number): boolean {
+  if (winRate >= ADAPTED_MIN) return true;
+  return base !== undefined && winRate >= base + ADAPTED_MARGIN;
+}
+
 export async function gate3Balance(source: string, opts: Gate3Options = {}): Promise<GateResult> {
   const now = opts.now ?? ((): number => performance.now());
   const started = now();
@@ -270,6 +353,12 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
     band: [lo, hi] as const,
     thresholds: {
       adaptedMin: ADAPTED_MIN,
+      // Present only when there was an incumbent to measure. A reader of an
+      // artifact has to be able to tell "no relative route was available" from
+      // "the relative route was available and the candidate missed it".
+      ...(opts.adaptedBase === undefined
+        ? {}
+        : { adaptedBase: opts.adaptedBase, adaptedRelativeMin: opts.adaptedBase + ADAPTED_MARGIN }),
       fairMin: lo,
       fairMax: hi,
       maxIdleRunTicks: ACTIVITY.maxIdleRunTicks,
@@ -307,6 +396,16 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
             killed: mimic.killed,
             ms: mimic.ms,
           },
+          /**
+           * Whether ADAPTED was met, and the fact that missing it does not reject.
+           * Explicit in the artifact so a reader of a run log can tell "the boss
+           * did not counter this player" from "the boss was rejected", which used
+           * to be the same event and no longer is.
+           */
+          adapted: {
+            met: adapted(mimic.winRate, opts.adaptedBase),
+            blocking: false as const,
+          },
         }),
   };
 
@@ -320,8 +419,37 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
       `${pct(panel.winRate)} vs panel — too easy (band ${formatBand(round)} for round ${round}; ${renderPerBot(panel.perBot)})`,
     );
   }
-  if (mimic !== undefined && mimic.winRate < ADAPTED_MIN) {
-    problems.push(`${pct(mimic.winRate)} vs Mimic — didn't adapt (need >= ${pct(ADAPTED_MIN)})`);
+  /**
+   * ADAPTED, which **advises** rather than blocks (2026-09-08). Measured on every
+   * run, reported in `detail` and appended to a rejection so the Coder still aims
+   * at it — but never the reason a candidate is rejected.
+   *
+   * The measurement that decided this: the incumbent round-1 boss beats a Mimic of
+   * a run the human had just won **without taking damage** 0.710 of the time
+   * (`scripts/live-base.ts`). The Mimic is a much weaker player than the person it
+   * imitates, so "≥ 0.70 vs Mimic" is not the difficulty claim it reads as — and
+   * paired with FAIR, which caps how strong the boss may be against the scripted
+   * panel, it was unsatisfiable for a good player. On the 12-attempt live run of
+   * 2026-09-08, eight candidates sat inside the FAIR band and were rejected by this
+   * clause alone, on a round the player had won flawlessly. The better the human,
+   * the more certainly every rewrite was refused, which is backwards.
+   *
+   * FAIR and ACTIVE still block, and still do most of the refusing: 15 of those 23
+   * candidates failed one of them. So the loop keeps its back pressure and the
+   * interlude keeps its visible rejections — what it loses is the one assertion
+   * that depended on a bot standing in for a human, which is a research problem
+   * rather than a verification one. Spec AC 7 becomes measured-and-reported;
+   * recorded as a delta in `docs/SPEC.md` §13.
+   */
+  const advisories: string[] = [];
+  if (mimic !== undefined && !adapted(mimic.winRate, opts.adaptedBase)) {
+    const relative =
+      opts.adaptedBase === undefined
+        ? ''
+        : `, or ${pct(opts.adaptedBase + ADAPTED_MARGIN)} to beat the boss you are replacing (${pct(opts.adaptedBase)})`;
+    advisories.push(
+      `${pct(mimic.winRate)} vs Mimic — aim for >= ${pct(ADAPTED_MIN)}${relative} (not blocking)`,
+    );
   }
 
   // ACTIVE last, and reported even when FAIR already failed: a boss that is both
@@ -348,6 +476,11 @@ export async function gate3Balance(source: string, opts: Gate3Options = {}): Pro
     );
   }
 
-  if (problems.length > 0) return gateFail(3, elapsed(), problems.join('; '), detail);
+  // The advisory rides along with a rejection that happened for another reason: the
+  // reason string is the whole of the Coder's feedback (spec §6.3), and "you are
+  // also not countering this player yet" is useful there. It is never the rejection
+  // by itself — a candidate whose only shortfall is ADAPTED passes.
+  const withAdvice = [...problems, ...advisories];
+  if (problems.length > 0) return gateFail(3, elapsed(), withAdvice.join('; '), detail);
   return gateOk(3, elapsed(), detail);
 }

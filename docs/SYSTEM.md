@@ -322,7 +322,7 @@ is what makes the rejections in the interlude evidence rather than anecdote.
 |---|---|---|---|
 | 1 | `static` | any `staticCheck` violation → reject. Names the first 3 with line numbers, counts the rest | ~1–4 ms |
 | 2 | `fuzz` | 500 seeded states (corner cases first) + 60 consecutive ticks, in QuickJS. **Any** runner failure (throw / timeout / memory), even 1 in 500 → reject. Invalid-action rate > **2%** → reject. On-cooldown-action rate > **20%** → reject | ~30–60 ms |
-| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR**: panel win rate ∈ `BAND[round]`. **ADAPTED**: Mimic win rate ≥ **0.70**. **ACTIVE**: longest motionless run ≤ **90 ticks** (1.5 s), p90 idle fraction ≤ **0.25**, and range over a match ≥ **56 px** | seconds — worker-parallel |
+| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR** (rejects): panel win rate ∈ `BAND[round]`. **ACTIVE** (rejects): longest motionless run ≤ **90 ticks** (1.5 s), p90 idle fraction ≤ **0.25**, and range over a match ≥ **56 px**. **ADAPTED** (reported, not enforced since 2026-09-08 — SPEC §13 delta 23): Mimic win rate ≥ **0.70** | seconds — worker-parallel |
 | 4 | `perf` | `decide` **p99 ≤ 2 ms** over ~2000 calls: 60% from real match trajectories vs the four bots, 40% topped up from Gate 2's corpus. Measured with an 8× relaxed deadline and judged against the real one, so the reported number is honest. A memory failure is fatal regardless of timing | ~60 ms |
 
 Gate 1 is first because it costs ~1 ms: a strategy that mentions `Date` never boots a
@@ -332,7 +332,7 @@ handing Gate 2 a sandbox that throws if it is ever used).
 ### The fairness band (`gates/balanceConfig.ts`)
 
 ```
-ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
+ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          reported, does not reject"
 FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
 ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
            boss range over a match   >= 56 px        "…and it is not stuck in one spot"
@@ -359,7 +359,7 @@ with `gate3Plan().total`, not with what the caller asked for.
 
 #### ACTIVE — the assertion a playtest bought, and the one a review bought (`sim/activity.ts`)
 
-FAIR and ADAPTED are spec §6.2. ACTIVE is not, and it exists because §6.2 cannot see the
+FAIR and ADAPTED are spec §6.2, though only FAIR rejects. ACTIVE is not in §6.2, and it exists because §6.2 cannot see the
 bug a human found in ten seconds: **the boss standing perfectly still**. A tick counts as
 idle when the boss did not move, is not telegraphing, is not mid-charge, and its last
 action was `idle` *or* a `move` that displaced nothing; ACTIVE rejects when the worst run
@@ -442,7 +442,7 @@ forth on the spot is not playing; commit to a direction for long enough to chang
 range you fight at (need 56 px)
 ```
 
-FAIR and ADAPTED are reported first and ACTIVE last, all joined into the one sentence —
+The two assertions that reject are reported first and ADAPTED's advice last, all joined into the one sentence —
 the win rate is what the Coder was aiming at, the stall is a bug in how it rests, and
 neither masks the other. `detail.activity` carries the numbers and `detail.panel.perBot[]`
 breaks the worst run down per opponent, so a rejection can say *which* approach froze it.
@@ -470,7 +470,7 @@ Gate 2  ✗ strategy memory grew past the 4096-byte limit (4902 bytes) on 141/56
 
 Gate 3  ✗ 0.78 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kiter 0.88,
           Rusher 1.00, Dodger 0.25)
-Gate 3  ✗ 0.41 vs Mimic — didn't adapt (need >= 0.70)
+Gate 3  ✗ 0.91 vs panel — too hard (band 0.35–0.50 for round 2; …); 0.41 vs Mimic — aim for >= 0.70 (not blocking)
 Gate 3  ✗ 0.21 vs panel — too easy (band 0.35–0.50 for round 2; …)
 
 Gate 4  ✗ decide() p99 = 16.4ms > 2ms over 21 calls (p50 = 16.23ms, max = 16.4ms;
@@ -897,6 +897,46 @@ built simultaneously against an engine neither owned; the sandbox agent's own be
 was written. Where it cost: two concurrent agents editing `pnpm-lock.yaml`, and one agent
 stalling with finished work sitting on disk. Both are in the log.
 
+### 8.1 What the history can and cannot prove
+
+The lane diagram above is a description, not evidence, and it is worth being exact about
+why. **The development timeline is not recoverable from this repository.** History was
+squashed to one commit per milestone, so `679c8c3` through `c67c324` — six lanes' work —
+all carry the timestamp `09-04 09:55`, and their file sets overlap by package rather than
+partitioning cleanly. A reader can see *that* the lanes were integrated together; they
+cannot reconstruct when each ran. The narrative in [`AI-DEV-LOG.md`](AI-DEV-LOG.md) is the
+only record of the ordering, and it is testimony.
+
+One thing the history *does* prove, and it is the load-bearing one: the contract was
+frozen before the lanes that depended on it. [`packages/contract/CHANGELOG.md`](../packages/contract/CHANGELOG.md)
+0.1.1 is the freeze, and the pre-commit hook plus CI defend that file to this day — which
+is why two agents building the engine and the sandbox at the same time could not each
+invent the boundary between them.
+
+### 8.2 Parallelism that is still running, measured
+
+The other half is not historical at all: the shipped loop is parallel in two places, and
+both are measurable on demand. `pnpm --filter @rematch/harness evidence:parallel`
+produces [`evidence/parallel-2026-09-09.txt`](evidence/parallel-2026-09-09.txt):
+
+| Gate 3, 200 matches | wall clock | workers |
+|---|---|---|
+| inline (`workers = 1`) | 2 997 ms | 1 |
+| worker pool (default) | **623 ms** | 11 |
+
+**4.81x on 12 cores.** That is not a micro-optimisation, it is what makes the interlude
+possible: Gate 3 is the loop's only CPU-bound stage, and at three candidates per attempt
+the serial cost is **9.0 s per attempt against 1.9 s** — inside a 45 s budget that also
+has to fit an Analyst call and three Coder calls.
+
+The second place is the **K = 3 candidates per attempt** (`agents/src/loop.ts`): three
+Coder calls issued concurrently, each measured by Gate 3 as its own reply lands, with a
+straggler cut so one slow generation cannot spend the whole attempt. A live artifact shows
+it working — `rewrite-2026-09-08T15-07-33-331Z.json` carries 23 candidates across 12
+attempts, two or three per attempt, each with its own Gate 3 verdict. And the choice
+between them is not "first past the post": the loop keeps the candidate nearest the middle
+of the round's band, which is only a meaningful choice because several were measured.
+
 ---
 
 ## 9. Known limitations
@@ -907,20 +947,30 @@ before the eval in §6 ran that evening, and never updated. Two sections of the 
 file contradicted each other on the project's most load-bearing claim for eleven days.
 The marker is gone because a dated list nobody re-dates is worse than no marker.
 
-1. **The loop's pass rate is unknown, and the 0.6 on record is an upper bound.** A real
-   run *has* been recorded — §6 is it, and `pnpm eval:agents` has been run against a live
-   key (11 times on 2026-09-03; see `docs/AI-DEV-LOG.md`). Two things the evidence does
-   not show. First, reliability: 6 of 10 canned replays were approved at K=3 against
-   spec §7's 0.8, and 3 of the 4 failures ended on the *deadline* rather than on
-   `max-attempts`, so the binding constraint is Coder latency against the clock, not the
-   width of the fairness band. Second, and worse: **that eval predates Gate 3's ACTIVE
-   assertion**, and re-grading its candidates against today's harness fails four of the
-   six approvals on the idle clauses
-   ([`evidence/recheck-active-2026-09-08.json`](evidence/recheck-active-2026-09-08.json)).
-   The current rate has never been measured; doing so spends money and is item 1 of the
-   open list in `AI-DEV-LOG.md`. Only the quoted run's event log is committed; the other
-   nine survive as the aggregate. Every *unit test* of an agent path still runs against
-   `mockProvider`, deliberately — `pnpm verify` must never spend money.
+1. **The loop's pass rate is unknown, and every number on record is stale in a
+   different direction.** A real run *has* been recorded — §6 is it, and `pnpm eval:agents`
+   has been run against a live key (11 times on 2026-09-03; see `docs/AI-DEV-LOG.md`).
+   Three things about that evidence, and the third replaced this item's own diagnosis.
+
+   First: **it predates Gate 3's ACTIVE assertion**, and re-grading its candidates against
+   today's harness fails four of the six approvals on the idle clauses
+   ([`evidence/recheck-active-2026-09-08.json`](evidence/recheck-active-2026-09-08.json)),
+   so the quoted 0.6 is an upper bound.
+
+   Second: **it also predates ADAPTED becoming advisory** (SPEC §13 delta 23), which moves
+   the rate the other way — and by more. Re-grading the 12-attempt live run of 2026-09-08
+   through the current gate approves **8 of 23 candidates where it approved 0**, with the
+   first on attempt 1 ([`evidence/regrade-live-2026-09-08.txt`](evidence/regrade-live-2026-09-08.txt)).
+
+   Third, and this is what this item used to get wrong: it said "the binding constraint is
+   Coder latency against the clock". That was inferred from three of four failures ending
+   on the deadline — with a 40 s deadline and 4 attempts. Unlock both (`REMATCH_DEADLINE_MS`,
+   `REMATCH_MAX_ATTEMPTS`) and latency stops binding; what appeared instead was the Mimic,
+   and delta 23 is the measurement that identified it. **The current rate has never been
+   measured** and doing so spends money — item 1 of the open list in `AI-DEV-LOG.md`. Only
+   the quoted run's event log is committed; the other nine survive as the aggregate. Every
+   *unit test* of an agent path still runs against `mockProvider`, deliberately —
+   `pnpm verify` must never spend money.
 2. **No human playtest (AC 4).** Whether Round 1 is beatable in under 60 s on a first try
    is unmeasured. The e2e suite proves a *scripted* player wins it in 909 ticks (~15 s),
    which says the fight is winnable, not that it is fun or readable. The renderer agent's

@@ -1,0 +1,12 @@
+$ node --experimental-strip-types scripts/parallel-evidence.ts
+cores available: 12
+matches:         200 (one Gate 3 run)
+
+inline (workers = 1)       2961 ms   workers=1
+worker pool (default)       561 ms   workers=11
+
+speedup: 5.28x
+Gate 3 is the loop's only CPU-bound stage; at 200 matches per candidate and
+3 candidates per attempt, the serial cost would be 8.9 s per attempt
+against 1.7 s — inside a 45 s interlude budget that also has to
+fit two model calls.

@@ -22,7 +22,14 @@
 
 export { gate1Static, type Gate1Options } from './gates/gate1Static.ts';
 export { gate2Fuzz, type Gate2Options } from './gates/gate2Fuzz.ts';
-export { gate3Balance, gate3Plan, type Gate3Options, type Gate3Plan } from './gates/gate3Balance.ts';
+export {
+  adapted,
+  gate3Balance,
+  gate3Plan,
+  measureMimicWinRate,
+  type Gate3Options,
+  type Gate3Plan,
+} from './gates/gate3Balance.ts';
 export { gate4Perf, type Gate4Options } from './gates/gate4Perf.ts';
 
 export {
@@ -42,6 +49,7 @@ export { ALL_GATES, DEFAULT_GATES, gatesFor, runGates, type RunGatesOptions, typ
 
 export {
   ACTIVITY,
+  ADAPTED_MARGIN,
   ADAPTED_MIN,
   BALANCE_ROUNDS,
   BAND,

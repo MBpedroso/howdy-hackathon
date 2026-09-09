@@ -1,0 +1,32 @@
+artifact:  artifacts/server/rewrite-2026-09-08T15-07-33-331Z.json
+round:     2  band 0.35–0.50  incumbent "Cornerbreaker"
+candidates: 23
+round-1 boss vs this Mimic: 0.700
+
+id       name                 panel  mimic  verdict
+a1c0     Longbow I            0.06   0.00   rejected: 0.06 vs panel — too easy (band 0.35–0.50 for round 2; Camper 0.23, Kit
+a1c1     Kilnwright II        0.48   0.62   APPROVED
+a2c0     Sextant I            0.71   0.60   rejected: 0.71 vs panel — too hard (band 0.35–0.50 for round 2; Camper 0.38, Kit
+a2c1     Causeway II          0.65   0.38   rejected: 0.65 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a3c0     Cistern I            0.50   0.30   APPROVED
+a3c2     Fulcrum III          0.54   0.44   rejected: 0.54 vs panel — too hard (band 0.35–0.50 for round 2; Camper 0.54, Kit
+a4c0     Foundry I            0.48   0.40   APPROVED
+a5c0     Reliquary I          0.52   0.32   rejected: 0.52 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a6c0     Sextant I            0.42   0.26   APPROVED
+a6c1     Anchorage II         0.56   0.34   rejected: 0.56 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a7c0     Cistern I            0.62   0.34   rejected: 0.62 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a7c2     Fulcrum III          0.50   0.56   APPROVED
+a8c0     Gravewell I          0.54   0.38   rejected: 0.54 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a8c1     Sentinel Post II     0.62   0.46   rejected: 0.62 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a9c0     Sentinel I           0.52   0.34   rejected: 0.52 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a9c1     Isthmus II           0.46   0.26   APPROVED
+a9c2     Undertow III         0.56   0.64   rejected: 0.56 vs panel — too hard (band 0.35–0.50 for round 2; Camper 0.62, Kit
+a10c0    Ossuary I            0.54   0.38   rejected: 0.54 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a10c1    Undertow II          0.56   0.80   rejected: 0.56 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a11c0    Cistern I            0.46   0.26   APPROVED
+a11c2    Anchorage III        0.42   0.46   APPROVED
+a12c0    Sentry Hollow I      0.54   0.38   rejected: 0.54 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+a12c1    Sentry Ring II       0.58   0.42   rejected: 0.58 vs panel — too hard (band 0.35–0.50 for round 2; Camper 1.00, Kit
+
+approved: 8 of 23
+first approved candidate: a1c1

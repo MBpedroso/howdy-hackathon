@@ -301,7 +301,7 @@ describe('Gate 3 — balance', () => {
     expect(detail.mimic.matches).toBe(DEFAULT_MATCHES / 2);
   }, 60_000);
 
-  it('reports every failed assertion in one reason, FAIR and ADAPTED before ACTIVE', async () => {
+  it('reports every failed assertion in one reason, blocking ones first', async () => {
     const result = await gate3Balance(readGood('idle'), {
       round: 2,
       matches: 40,
@@ -310,17 +310,49 @@ describe('Gate 3 — balance', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/too easy/);
-    expect(result.reason).toMatch(/0\.00 vs Mimic — didn't adapt \(need >= 0\.70\)/);
     expect(result.reason).toMatch(/boss motionless for \d+ consecutive ticks/);
-    // The order is fixed and it is a judgement about what the Coder should read
-    // first: the win rate is the thing it was aiming at, the stall is a bug in how
-    // it rests. Nothing masks anything — all three are in the one sentence.
+    // ADAPTED advises rather than blocks (2026-09-08), and the wording says so —
+    // the Coder should still aim at it, and must not read it as the rejection.
+    expect(result.reason).toMatch(/0\.00 vs Mimic — aim for >= 0\.70 \(not blocking\)/);
+    expect(result.reason).not.toMatch(/didn't adapt/);
+    // The order is fixed and it is a judgement about what the Coder reads first:
+    // the two assertions that actually refused the file, then the goal it missed.
     const fair = result.reason.indexOf('too easy');
-    const adapted = result.reason.indexOf("didn't adapt");
     const active = result.reason.indexOf('boss motionless');
-    expect(fair).toBeLessThan(adapted);
-    expect(adapted).toBeLessThan(active);
+    const advice = result.reason.indexOf('aim for');
+    expect(fair).toBeLessThan(active);
+    expect(active).toBeLessThan(advice);
   });
+
+  /**
+   * The change of 2026-09-08, as the one case that proves it.
+   *
+   * `hound.js` is in band and active, and it scores 0.00 against a Mimic built from
+   * a *different* player than the one it was written for. Before this change that
+   * was a rejection — and on the 12-attempt live run it was eight rejections in a
+   * row, on a round the human had won without taking damage, because the Mimic of a
+   * flawless run is a bot no in-band boss can beat 70% of the time.
+   */
+  it('approves a candidate whose only shortfall is ADAPTED, and still reports it', async () => {
+    // In band at 0.35, active, and 0.65 against a Mimic of the kiter — a real file
+    // that misses the 0.70 target by five points and nothing else. It was a
+    // rejection until 2026-09-08.
+    const result = await gate3Balance(readCandidate(), {
+      round: 2,
+      matches: 40,
+      mimicSummary: readSummary('kiter'),
+    });
+    const detail = result.detail as {
+      mimic: { winRate: number };
+      adapted: { met: boolean; blocking: false };
+    };
+    // The premise of the test: it really did miss ADAPTED.
+    expect(detail.adapted.met).toBe(false);
+    expect(detail.mimic.winRate).toBeLessThan(ADAPTED_MIN);
+    // …and it shipped anyway, with the miss on the record.
+    expect(result.ok).toBe(true);
+    expect(detail.adapted.blocking).toBe(false);
+  }, 60_000);
 
   /**
    * ACTIVE, the assertion a human playtest bought.

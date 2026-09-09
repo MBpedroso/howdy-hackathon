@@ -18,7 +18,7 @@ this README said "four deterministic gates" until 2026-09-08 (spec §13, delta 1
 |---|---|---|---|
 | 1 | `static` | **implemented** | forbidden names, imports, wrong module shape — before any code runs |
 | 2 | `fuzz` | **implemented** | throws, timeouts, memory growth, invalid actions, ignored cooldowns |
-| 3 | `balance` | worker-parallel sim vs Camper/Kiter/Rusher/Dodger + Mimic; FAIR band per round, ADAPTED ≥ 0.70, ACTIVE ≤ 90 motionless ticks | `0.78 vs panel — too hard (band 0.35–0.50 for round 2; …)` · `boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a resting state …` |
+| 3 | `balance` | worker-parallel sim vs Camper/Kiter/Rusher/Dodger + Mimic; FAIR band per round and ACTIVE ≤ 90 motionless ticks reject; ADAPTED ≥ 0.70 is measured and reported | `0.78 vs panel — too hard (band 0.35–0.50 for round 2; …)` · `boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle as a resting state …` |
 | 4 | `perf` | ≥ 2000 sandboxed `decide` calls on real match views; p99 ≤ 2 ms, no memory failure | `decide() p99 = 6.2ms > 2ms` |
 
 ```ts
@@ -128,14 +128,22 @@ sandbox and applies the `CONSTANTS.limits.decideBudgetMs` p99 threshold using th
 ### Gate 3's three assertions
 
 ```
-ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
+FAIR    :  win_rate(boss vs panel)  in BAND[round]   rejects
+ACTIVE  :  longest motionless run   <= 90 ticks      rejects
+ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          reports  "it countered how you played"
 FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
 ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
 ```
 
+ADAPTED stopped rejecting on 2026-09-08: the incumbent boss beats a Mimic of a run the
+human had just won *without taking damage* 0.700 of the time, so the Mimic is a much weaker
+player than the person it imitates and the threshold was unsatisfiable for anyone who plays
+well. It is still measured, still in every artifact, and still appended to a rejection so
+the Coder aims at it. `docs/SPEC.md` §13 delta 23 carries both measurements.
+
 ADAPTED is skipped when no `mimicSummary` is supplied (the CLI and the balance suites often
 have no human to mimic). FAIR and ACTIVE are always checked. Every failed assertion is
-reported in the one `reason`, FAIR and ADAPTED first and ACTIVE last.
+reported in the one `reason`, the two that reject first and ADAPTED's advice last.
 
 **ACTIVE** (added 2026-09-04, `src/sim/activity.ts`) is not in spec §6.2. It is there
 because a human playtest found what §6.2 cannot see: a boss frozen in a corner for 4.4

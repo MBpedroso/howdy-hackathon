@@ -34,8 +34,73 @@ export const BAND: Readonly<Record<BalanceRound, readonly [number, number]>> = {
   5: [0.55, 0.7],
 };
 
-/** ADAPTED: the boss must beat a bot built from the player's own replay this often. */
+/**
+ * ADAPTED, route 1: the boss beats a bot built from the player's own replay this
+ * often. The absolute claim — "it counters how you played".
+ */
 export const ADAPTED_MIN = 0.7;
+
+/**
+ * ADAPTED, route 2: how much the new boss must beat the *incumbent's* rate against
+ * the same Mimic by, when the absolute threshold is out of reach.
+ *
+ * ## Why a second route exists at all
+ *
+ * A live run on 2026-09-08 (12 attempts, no time ceiling) produced 23 candidates.
+ * Eight of them were **inside** the round's FAIR band and were rejected by ADAPTED
+ * alone; the best of them scored 0.60 against the Mimic. The round in question was
+ * one the player had won taking **zero damage** — so the Mimic was a bot that
+ * reproduced a flawless run, and no rewrite was going to beat it 70% of the time.
+ *
+ * That is the two assertions contradicting each other. FAIR caps how strong the
+ * boss may be against the scripted panel; ADAPTED demands a rate against this
+ * player that, for a player who plays well, sits above that cap. The better the
+ * human, the more certainly every rewrite is rejected — which is backwards, because
+ * a good player is exactly who the feature exists for.
+ *
+ * So ADAPTED now asks the question it was always reaching for: *is this rewrite
+ * better against this player than the boss it replaces?* The incumbent's rate
+ * against the identical Mimic on the identical seeds is the baseline, and a
+ * candidate that clears it by this margin has adapted, whatever the absolute number.
+ *
+ * ## Why 0.10, and why nothing weaker
+ *
+ * The Mimic half is 100 matches by default, so a win rate near 0.5 carries a
+ * standard error of about 0.05. A margin of 0.05 would approve one standard error
+ * of noise; 0.10 is two, which makes "better" mean better rather than luckier.
+ *
+ * ## Why this cannot make the gate toothless
+ *
+ * It only ever *adds* a way to pass — nothing that passes the absolute threshold
+ * today stops passing, so every recorded run and every calibration fixture stays
+ * valid. And the relative route has no floor of its own on purpose: FAIR is the
+ * floor. A boss that clears its predecessor against one player while losing 80% to
+ * the scripted panel fails FAIR's lower bound and never reaches this check.
+ *
+ * ## What it does **not** fix, measured
+ *
+ * It does not open the wall it was written for, and the numbers say so plainly.
+ *
+ *  - Across the 58 recorded candidates (`scripts/recheck-adapted.ts`,
+ *    `docs/evidence/recheck-adapted-2026-09-08.json`): **0 regressions and 0 newly
+ *    approved.** Seven were rejected by ADAPTED alone and all seven still are.
+ *  - On the 12-attempt live run itself: the incumbent — `web/src/strategies/round1.js`,
+ *    "Cornerbreaker" — scores **0.710** against a Mimic of the very run the human
+ *    had just *won* (`scripts/live-base.ts`). The relative bar is therefore 0.810,
+ *    which is **stricter** than the absolute 0.70, and the best of the eight in-band
+ *    candidates was 0.60.
+ *
+ * That last number is the real finding, and it is not about a threshold. A boss the
+ * human beat, taking no damage, beats a bot built from that same run 71% of the
+ * time — so the Mimic is a far weaker player than the person it imitates, and
+ * "≥ 0.70 vs Mimic" is not the difficulty claim it reads as. Whether ADAPTED should
+ * therefore stop being a blocking assertion is a decision about what the gate
+ * promises (spec AC 7), not a constant to retune, and it is recorded as an open
+ * question rather than quietly changed. The relative route stays because it is
+ * sound, costs one simulation per interlude, and binds whenever the incumbent is
+ * weak — a round following a fallback boss, most obviously.
+ */
+export const ADAPTED_MARGIN = 0.1;
 
 /**
  * ACTIVE: how still a shipped boss is allowed to be.

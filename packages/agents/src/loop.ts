@@ -47,6 +47,7 @@ import {
   bandFor,
   gate3Plan,
   getSandbox,
+  measureMimicWinRate,
   runGates,
   type BalanceRound,
   type Gate3Options,
@@ -216,6 +217,27 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
   try {
     emit({ type: 'replay', summary: input.summary, round: input.round });
 
+    /**
+     * ADAPTED's relative baseline: how well the boss that just lost does against a
+     * Mimic of the round it just lost. Kicked off **now** and awaited only when the
+     * first Gate 3 needs it, so its ~100 matches run under the Analyst's model call
+     * rather than after it — the Analyst is seconds and this is well inside that.
+     *
+     * Started before the Analyst rather than after because there is nothing to wait
+     * for: it depends only on `prevSource` and the replay, both of which are inputs.
+     *
+     * Never rejected: a baseline that could not be measured is `undefined`, and
+     * ADAPTED then behaves exactly as it did before the relative route existed.
+     * A failure here must not cost the player their rewrite.
+     */
+    const gate3Opts = input.harnessOpts?.gate3 ?? {};
+    const adaptedBase: Promise<number | undefined> = measureMimicWinRate(input.prevSource, {
+      mimicSummary: input.summary,
+      ...(gate3Opts.matches === undefined ? {} : { matches: gate3Opts.matches }),
+      ...(gate3Opts.accuracy === undefined ? {} : { accuracy: gate3Opts.accuracy }),
+      ...(gate3Opts.workers === undefined ? {} : { workers: gate3Opts.workers }),
+    }).catch(() => undefined);
+
     // ---------------------------------------------------------------- Analysis
     let analysis: Analysis;
     try {
@@ -274,13 +296,20 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
      */
     const measured: { label: string; panel: number; source: string }[] = [];
     /**
-     * The best file so far that is FAIR and only fails ADAPTED.
+     * The best file so far that is already FAIR and was rejected for something else.
      *
      * It gets its own mode because it needs the opposite instruction from everything
-     * else in the loop: a boss at 0.44 vs the panel and 0.00 vs the Mimic must not
-     * move its pressure at all, only re-aim it. Without this the bisection below
-     * kept "correcting" a rate that was already correct — measured over a ten-replay
-     * eval, one replay spent all three attempts at 0.44 / 0.00.
+     * else in the loop: a boss at 0.44 vs the panel must not move its pressure at
+     * all, only re-aim it. Without this the bisection below kept "correcting" a rate
+     * that was already correct — measured over a ten-replay eval, one replay spent
+     * all three attempts at 0.44 / 0.00.
+     *
+     * Since 2026-09-08 the rejection reaching this branch is ACTIVE rather than
+     * ADAPTED: an in-band boss that merely misses the Mimic goal now ships. The
+     * mode survives because the instruction is the same either way — the pressure
+     * is right, so change where it goes, not how much of it there is. `mimic` is
+     * still the ranking key, because among several fair-but-rejected files the one
+     * that already counters this player best is the one worth building on.
      */
     let fairButBlind: { label: string; source: string; mimic: number } | undefined;
 
@@ -401,6 +430,9 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           input,
           emit,
           log.gates,
+          // Awaited here, on the first candidate that reaches the gates: by now the
+          // Analyst's model call has already covered its ~100 matches.
+          await adaptedBase,
           tagOf(index, candidateCount),
         );
         log.approved = trial.ok;
@@ -411,9 +443,9 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           log.panel = panel;
           measured.push({ label, panel, source: coder.source });
           const mimic = balanceRates(log.gates.find((g) => g.gate === 3))?.mimic;
-          // FAIR but not ADAPTED: keep the best of these, and keep the *best Mimic
-          // rate* among them, because the next attempt's job is to raise exactly
-          // that number without touching anything else.
+          // FAIR but rejected anyway: keep the best of these, ranked by Mimic rate,
+          // because the next attempt's job is to fix the other assertion without
+          // touching the rate that already works.
           if (
             !trial.ok &&
             panel >= bandLo &&
@@ -685,13 +717,25 @@ async function runTrial(
   input: RewriteInput,
   emit: Emit,
   into: GateResult[],
+  /**
+   * The incumbent's rate against this Mimic, or `undefined` when it could not be
+   * measured. Enables ADAPTED's relative route (`harness/gates/balanceConfig.ts`,
+   * `ADAPTED_MARGIN`).
+   */
+  adaptedBase: number | undefined,
   /** `{ candidate, candidates }`, or `{}` for a single-candidate attempt. */
   tag: CandidateTag = {},
 ): Promise<TrialOutcome> {
   const opts = input.harnessOpts ?? {};
-  // `round` and `mimicSummary` are the loop's, not the caller's: ADAPTED is only
-  // measured if the Mimic is built from *this* player's replay (spec §6.2).
-  const gate3: Gate3Options = { ...(opts.gate3 ?? {}), round: input.round, mimicSummary: input.summary };
+  // `round`, `mimicSummary` and `adaptedBase` are the loop's, not the caller's:
+  // ADAPTED is only measured if the Mimic is built from *this* player's replay
+  // (spec §6.2), and its baseline only if the incumbent ran on the same seeds.
+  const gate3: Gate3Options = {
+    ...(opts.gate3 ?? {}),
+    round: input.round,
+    mimicSummary: input.summary,
+    ...(adaptedBase === undefined ? {} : { adaptedBase }),
+  };
   // The denominator the meter is labelled with, known before the first match.
   const total = gate3Plan(gate3).total;
   const now = input.now ?? ((): number => Date.now());

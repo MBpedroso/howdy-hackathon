@@ -18,7 +18,10 @@
     "cli": "node --experimental-strip-types src/cli.ts",
     "test:balance": "vitest run --passWithNoTests --reporter=verbose balance",
     "recheck:active": "node --experimental-strip-types scripts/recheck-active.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "recheck:adapted": "node --experimental-strip-types scripts/recheck-adapted.ts",
+    "regrade:live": "node --experimental-strip-types scripts/regrade-live.ts",
+    "evidence:parallel": "node --experimental-strip-types scripts/parallel-evidence.ts"
   },
   "dependencies": {
     "@rematch/contract": "workspace:*",
