@@ -18,7 +18,26 @@
  * see the last test in this file.
  */
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { collectErrors, waitForBoot, waitForRound } from './helpers.ts';
+
+/**
+ * Advance the intro to a named beat by pressing its primary button.
+ *
+ * The four beats live behind one `#screen[data-screen='start']` with `data-intro`
+ * naming the current one (`src/ui/introSequence.ts`), so "go to the agents screen"
+ * is a walk rather than a URL. Every spec below that needs a later beat says so by
+ * calling this, which is also the assertion that the walk *works*.
+ */
+async function toBeat(page: Page, beat: 'hook' | 'concept' | 'agents' | 'arena'): Promise<void> {
+  const order = ['hook', 'concept', 'agents', 'arena'] as const;
+  const screen = page.locator('#screen');
+  await expect(screen).toHaveAttribute('data-intro', 'hook');
+  for (const step of order.slice(1, order.indexOf(beat) + 1)) {
+    await page.getByTestId('primary').click();
+    await expect(screen).toHaveAttribute('data-intro', step);
+  }
+}
 
 const ARTIFACTS = new URL('../../../artifacts/web/', import.meta.url).pathname;
 
@@ -69,24 +88,68 @@ test('boots to a start screen with a visible arena', async ({ page }) => {
 
   const screen = page.locator('#screen');
   await expect(screen).toHaveAttribute('data-screen', 'start');
-  await expect(screen).toContainText('REMATCH');
-  await expect(screen).toContainText('The boss that learns');
-  // The controls, still on the first screen the player sees.
+  // Beat 1 is the hook and it carries seven words plus the crew: the title, the
+  // subtitle, START and a way past it. Anything else here would be the old screen.
+  await expect(screen).toHaveAttribute('data-intro', 'hook');
+  await expect(screen).toContainText('Howdy Hackathon');
+  await expect(screen).toContainText('A boss that learns');
+  await expect(screen).toContainText('Five rounds. One boss. It adapts.');
+  await expect(page.getByTestId('primary')).toHaveText('START');
+  await expect(page.getByTestId('skip-intro')).toBeVisible();
+  // Four dots, one lit — the player can see how long this is going to take.
+  await expect(page.getByTestId('intro-dots').locator('.intro-dot')).toHaveCount(4);
+
+  // The controls and the tells moved to the last beat, next to the fight.
+  await toBeat(page, 'arena');
   await expect(screen).toContainText('WASD');
   await expect(screen).toContainText('dash');
   // Spec §2.3: the tells are what make the fight fair to read, so they are taught.
   await expect(screen).toContainText('a filling line = charge');
   await expect(screen).toContainText('a shrinking ring = slam');
   await expect(screen).toContainText('424242');
+  await expect(page.getByTestId('primary')).toHaveText('ENTER THE ARENA');
 
   expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
 });
 
-test('introduces the three agents, and marks the one that is not an AI', async ({ page }) => {
+test('the intro fits the projector without scrolling on any beat', async ({ page }) => {
+  // 1280x800 is what the interlude is laid out against, and the intro shares it.
+  await page.goto('/?seed=424242&intro=1');
+  await waitForBoot(page);
+  for (const beat of ['hook', 'concept', 'agents', 'arena'] as const) {
+    await expect(page.locator('#screen')).toHaveAttribute('data-intro', beat);
+    const overflow = await page.evaluate(() => {
+      const el = document.querySelector('#screen');
+      return el === null ? 0 : el.scrollHeight - el.clientHeight;
+    });
+    // A few pixels of rounding is fine; a beat you have to scroll is not.
+    expect(overflow, `${beat} overflows by ${overflow}px`).toBeLessThan(8);
+    if (beat !== 'arena') await page.getByTestId('primary').click();
+  }
+});
+
+test('the concept and the agents beats explain the loop and who runs it', async ({ page }) => {
+  const errors = collectErrors(page);
   await page.goto('/?seed=424242');
   await waitForBoot(page);
+  const screen = page.locator('#screen');
 
-  // ------------------------------------------------------------------ the cast
+  // ------------------------------------------------------- beat 2: the concept
+  await toBeat(page, 'concept');
+  await expect(screen).toContainText('The boss learns');
+  await expect(screen.locator('.concept-step')).toHaveCount(3);
+  await expect(screen).toContainText('You fight');
+  await expect(screen).toContainText('The system watches');
+  await expect(screen).toContainText('The boss changes');
+  // The loop, as three nouns and two arrows.
+  const flow = screen.locator('.concept-flow .flow-node');
+  await expect(flow).toHaveText(['YOU', 'REPLAY', 'NEW BOSS']);
+  await expect(page.getByTestId('primary')).toHaveText('NEXT →');
+
+  // -------------------------------------------------------- beat 3: the agents
+  await page.getByTestId('primary').click();
+  await expect(screen).toHaveAttribute('data-intro', 'agents');
+  await expect(screen).toContainText('Three agents. One fight.');
   for (const id of ['analyst', 'coder', 'judge']) {
     const card = page.getByTestId(`cast-${id}`);
     await expect(card).toBeVisible();
@@ -96,47 +159,49 @@ test('introduces the three agents, and marks the one that is not an AI', async (
   }
   await expect(page.getByTestId('cast-analyst')).toContainText('Reads your replay');
   await expect(page.getByTestId('cast-coder')).toContainText('Rewrites');
-  // The thesis: the thing with the final say is a deterministic harness. It is said
-  // in full in the "why" block above and carried here by the chip plus the count.
-  await expect(page.getByTestId('cast-judge')).toContainText('200 simulations');
+  // The thesis: the thing with the final say is a deterministic harness. Said by the
+  // chip, by the count, and by the line under the three cards.
+  await expect(page.getByTestId('cast-judge')).toContainText('200 simulated fights');
   await expect(page.getByTestId('cast-deterministic')).toHaveText('DETERMINISTIC');
+  await expect(screen).toContainText('The Judge decides what gets through.');
 
-  // ------------------------------------------------------------------- the why
-  // Three key points, and the middle one is the project's argument. A judge who
-  // reads only this block should already know what is unusual here.
-  const why = page.getByTestId('start-why');
-  await expect(why.locator('.why')).toHaveCount(3);
-  await expect(why).toContainText('The boss writes itself');
-  await expect(why).toContainText('200 simulated fights');
+  // The screen fades in over 140 ms (`@keyframes fade`) and each beat wipes in over
+  // 260 ms; a capture inside either window is semi-transparent and looks like a
+  // layering bug that is not there. Wait, then shoot each beat.
+  await page.waitForTimeout(320);
+  await page.screenshot({ path: `${ARTIFACTS}intro-3-agents.png` });
 
-  // -------------------------------------------------------- one round, in four
-  const how = page.getByTestId('start-how');
-  await expect(how.locator('.step')).toHaveCount(4);
-  await expect(how).toContainText('You fight');
-  await expect(how).toContainText('The Analyst');
-  await expect(how).toContainText('The Coder');
-  await expect(how).toContainText('The Judge');
-  // Numbered, so the four read as a sequence and not as four unrelated cards.
-  await expect(how.locator('.step-n').first()).toHaveText('01');
-
-  // The screen fades in over 140 ms (`@keyframes fade`), and a capture taken inside
-  // that window is semi-transparent — which shows the arena and the HUD skeleton
-  // faintly through it, and makes the artifact look like a layering bug that is not
-  // there. Wait for the animation, then shoot.
-  await page.waitForTimeout(250);
-  await page.screenshot({ path: `${ARTIFACTS}start-screen.png` });
+  expect(errors, `console errors: ${errors.join(' | ')}`).toEqual([]);
 });
 
-test('the skip-intro box is remembered, and ?intro=1 brings the screen back', async ({ page }) => {
+test('every beat of the intro is legible on its own — the demo screenshots', async ({ page }) => {
+  await page.goto('/?seed=424242');
+  await waitForBoot(page);
+  const beats = ['hook', 'concept', 'agents', 'arena'] as const;
+  for (const [i, beat] of beats.entries()) {
+    if (i > 0) await page.getByTestId('primary').click();
+    await expect(page.locator('#screen')).toHaveAttribute('data-intro', beat);
+    await page.waitForTimeout(320);
+    await page.screenshot({ path: `${ARTIFACTS}intro-${i + 1}-${beat}.png` });
+  }
+});
+
+/**
+ * SKIP INTRO, and the two ways to use it.
+ *
+ * It was a checkbox on the old single screen — "skip this intro next time" — and it
+ * is a button on beat 1 now, which changes the semantics on purpose: pressing it
+ * goes to the fight *and* remembers, because a player who skips an attract sequence
+ * has said what they want for next time too. `?intro=1` is the documented way back
+ * (`src/ui/intro.ts`), and it is how the beats get demoed and screenshotted.
+ */
+test('SKIP INTRO starts the fight and is remembered; ?intro=1 brings the intro back', async ({ page }) => {
   await page.goto('/?seed=424242');
   await waitForBoot(page);
 
-  const box = page.getByTestId('skip-intro');
-  await expect(box).not.toBeChecked();
-  await box.check();
-  // The whole overlay is the primary action's hit box, so this is also a check that
-  // ticking the box does not start the fight.
-  await expect(page.locator('#screen')).toHaveAttribute('data-screen', 'start');
+  await page.getByTestId('skip-intro').click();
+  await waitForRound(page);
+  await expect(page.locator('#screen')).not.toHaveClass(/active/);
   expect(await page.evaluate(() => window.localStorage.getItem('rematch.skipIntro'))).toBe('1');
 
   // A fresh load now goes straight into Round 1.
@@ -144,16 +209,37 @@ test('the skip-intro box is remembered, and ?intro=1 brings the screen back', as
   await waitForRound(page);
   await expect(page.locator('#screen')).not.toHaveClass(/active/);
 
-  // …and `?intro=1` overrides the memory, which is how the screen gets demoed.
+  // …and `?intro=1` overrides the memory.
   await page.goto('/?seed=424242&intro=1');
   await waitForBoot(page);
-  await expect(page.locator('#screen')).toHaveAttribute('data-screen', 'start');
-  await expect(page.getByTestId('skip-intro')).toBeChecked();
+  await expect(page.locator('#screen')).toHaveAttribute('data-intro', 'hook');
+});
+
+/**
+ * The keyboard contract: ENTER/SPACE advance, ESC skips. An arcade intro where
+ * Enter sometimes skips and sometimes advances is worse than no intro, and the
+ * mapping lives in one function (`introKeyAction`) precisely so it cannot drift.
+ */
+test('ENTER advances the intro and ESC skips it', async ({ page }) => {
+  await page.goto('/?seed=424242&intro=1');
+  await waitForBoot(page);
+  const screen = page.locator('#screen');
+
+  await page.keyboard.press('Enter');
+  await expect(screen).toHaveAttribute('data-intro', 'concept');
+  await page.keyboard.press('Space');
+  await expect(screen).toHaveAttribute('data-intro', 'agents');
+
+  // ESC from the middle of the sequence goes straight to the fight.
+  await page.keyboard.press('Escape');
+  await waitForRound(page);
+  await expect(screen).not.toHaveClass(/active/);
 });
 
 test('starting the fight loads the strategy through QuickJS', async ({ page }) => {
   await page.goto('/?seed=424242');
   await waitForBoot(page);
+  await toBeat(page, 'arena');
   await page.getByTestId('primary').click();
   await waitForRound(page);
 
@@ -189,6 +275,8 @@ test('picking a fighter for each side is remembered, and does not start the figh
   const errors = collectErrors(page);
   await page.goto('/?seed=424242');
   await waitForBoot(page);
+  // The picker is the last beat's: it is the thing you set right before fighting.
+  await toBeat(page, 'arena');
 
   const pick = page.getByTestId('start-pick');
   await expect(pick).toBeVisible();
@@ -221,6 +309,7 @@ test('picking a fighter for each side is remembered, and does not start the figh
   // And they come back on the next visit.
   await page.goto('/?seed=424242&intro=1');
   await waitForBoot(page);
+  await toBeat(page, 'arena');
   await expect(page.getByTestId('pick-player-saturn')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('pick-boss-earth')).toHaveAttribute('aria-checked', 'true');
 
@@ -250,38 +339,42 @@ test('the start screen reorganises at narrow widths and keeps FIGHT in view', as
   await page.goto('/?seed=424242&intro=1');
   await waitForBoot(page);
 
-  for (const [width, height, why, steps] of [
-    [1280, 800, 3, 4],
-    [1000, 820, 2, 2],
-    [700, 900, 1, 2],
-    [430, 900, 1, 1],
+  // The concept beat is the one with a three-up grid to reorganise.
+  await toBeat(page, 'concept');
+
+  for (const [width, height, steps] of [
+    [1280, 800, 3],
+    [1000, 820, 3],
+    [700, 900, 1],
+    [430, 900, 1],
   ] as const) {
     await page.setViewportSize({ width, height });
     // One frame for the media query to settle before anything is measured.
     await page.waitForTimeout(120);
 
-    expect(await columns('.why-row > .why'), `why columns at ${width}px`).toBe(why);
-    expect(await columns('.step-row > .step'), `step columns at ${width}px`).toBe(steps);
+    expect(await columns('.concept-row > .concept-step'), `concept columns at ${width}px`).toBe(steps);
 
-    // FIGHT is reachable without hunting for it: on screen, or at worst one short
-    // scroll from the bottom of a screen that is allowed to scroll.
+    // The primary action is reachable without hunting for it at any width.
     const btn = page.getByTestId('primary');
     await expect(btn).toBeVisible();
     const box = await btn.boundingBox();
-    expect(box, `FIGHT has a box at ${width}px`).not.toBeNull();
+    expect(box, `the primary button has a box at ${width}px`).not.toBeNull();
     if (box !== null) {
       // Centred on the card at every width — it is the middle cell of the footer
       // band, and it stays the middle cell when that band stacks.
       const centre = box.x + box.width / 2;
-      expect(Math.abs(centre - width / 2), `FIGHT centred at ${width}px`).toBeLessThan(40);
+      expect(Math.abs(centre - width / 2), `primary centred at ${width}px`).toBeLessThan(40);
     }
   }
 
-  // The two stacked layouts, for the record.
+  // The two stacked layouts, for the record — the hook beat, since that is the one
+  // whose artwork has to survive being squeezed.
+  await page.goto('/?seed=424242&intro=1');
+  await waitForBoot(page);
   await page.setViewportSize({ width: 700, height: 900 });
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(320);
   await page.screenshot({ path: `${ARTIFACTS}start-screen-narrow.png`, fullPage: true });
   await page.setViewportSize({ width: 430, height: 900 });
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(320);
   await page.screenshot({ path: `${ARTIFACTS}start-screen-phone.png`, fullPage: true });
 });

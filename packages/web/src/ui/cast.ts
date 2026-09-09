@@ -75,7 +75,7 @@ export const AGENTS: Readonly<Record<AgentId, Agent>> = {
     id: 'analyst',
     name: 'Analyst',
     accent: '#2DD4BF',
-    role: 'Watches your replay and writes down your habits.',
+    role: 'Reads your replay and identifies your habits.',
     icon: 'lens',
   },
   coder: {
@@ -89,7 +89,10 @@ export const AGENTS: Readonly<Record<AgentId, Agent>> = {
     id: 'judge',
     name: 'Judge',
     accent: '#EF4444',
-    role: 'Not an AI. Runs 200 simulated fights and rejects anything unfair or broken.',
+    // "Not an AI" used to open this line. It moved to the DETERMINISTIC chip that
+    // sits on the same card — the sentence is the *job*, and the card had the same
+    // claim twice while being the shortest thing on screen that had to land.
+    role: 'Runs 200 simulated fights and rejects anything unfair, broken, or unsafe.',
     deterministic: true,
     icon: 'gate',
   },

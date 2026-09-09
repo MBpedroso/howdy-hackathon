@@ -645,11 +645,6 @@ New artifacts: `artifacts/web/start-screen.png`, `interlude-cast-{analyst,coder,
 
 ---
 
-## Open — dated placeholders
-
-Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck
-through, rather than deleted: what closed it and what it cost is the interesting part.
-
 ## 2026-09-08 — an independent review, and the boss that passed every gate by vibrating
 
 An outside reviewer was handed the repo and `docs/HANDOFF-REVIEW.md` and asked to be
@@ -926,16 +921,68 @@ run.
   the number a judge will ask about. Everything needed is in place: the eval, the ten canned
   replays, the spend guards, and now a free pre-check that says the span clause is not the
   thing to worry about.
-- **Not pushed, so CI has still never run.** `origin/main` is still `4398e6e`, the spec
-  template. This costs more than AC 9: `.githooks/pre-commit` argues its own `--no-verify`
-  hatch is acceptable *because* "CI re-runs the same script on every push", and that
-  sentence is currently false. Outward-facing, so it is a human call.
+- ~~**Not pushed, so CI has still never run.**~~ **Fixed 2026-09-09**: 19 commits went to
+  `origin/main` (`4398e6e..6407ce3`), so `.githooks/pre-commit`'s claim that "CI re-runs the
+  same script on every push" now has a workflow behind it. Not verified from this machine —
+  the repository is private and the `gh` account this session is logged into cannot read it,
+  so whether `verify.yml` went green on GitHub is a thing to check in a browser, not a thing
+  this log gets to assert.
 - **Recorded demo runs not re-recorded.** They predate the ACTIVE gate and the bosses in
   them freeze; it is disclosed on screen, in 9 px type, in the busiest corner. Re-recording
   spends API credit, so it is a human call too.
 - **`timeout = boss win`** — see above.
 - **No audio anywhere.** `grep -riE "audio|\.mp3|\.wav"` over `packages/web/src` returns
   nothing. Cheapest Product Quality points left on the table.
+
+## 2026-09-09 — the intro stopped being a wall of text
+
+The start screen had grown into the whole pitch on one card: three "why" blocks, four
+pipeline steps, the fighter picker, the controls and both boss tells — eleven things to
+read before the first button. Every one of them was true, which is exactly why it kept
+growing. A brief that morning asked for the opposite shape: an arcade attract sequence
+where each screen is understandable in three to five seconds and the primary action is
+never in doubt.
+
+Same content, four beats (`ui/introSequence.ts` for the shape, `ui/screens.ts` for the DOM):
+
+1. **hook** — `A BOSS THAT LEARNS`, the four mascots, seven words of promise, `START`.
+2. **concept** — the loop in three steps, plus `YOU → REPLAY → NEW BOSS`.
+3. **agents** — who runs it: Analyst → Coder → Judge, the Judge wearing DETERMINISTIC.
+4. **arena** — the promise, pick your fighter, the controls, `ENTER THE ARENA`.
+
+Enter/Space advances, Escape skips and is remembered, `?intro=1` brings it back. The
+sequence's *shape* is data in one module and unit-tested (`test/intro-sequence.test.ts`):
+the order, and the fact that Enter always means continue. An intro where Enter sometimes
+skips is worse than no intro, and that bug does not show up in a screenshot.
+
+### Three things the screenshots caught that the tests could not
+
+The e2e suite writes one PNG per beat (`e2e/boot.spec.ts`, `intro-1-hook.png` …
+`intro-4-arena.png`) and every assertion about them passed while all three of these were
+on screen:
+
+- **The title rendered at 30 px.** `.card h1` is specificity (0,1,1) and `.hook-title` is
+  (0,1,0), so the generic card rule won. Fixed by prefixing `.card.start` on all three
+  intro headings — the fix is one selector, but the lesson is that a `.card h1` in a
+  shared stylesheet outranks every bare class anyone writes later.
+- **`START` overlapped the dots and `SKIP INTRO`.** A margin, not a bug in anything.
+- **The hero's edge feather greyed Saturn's white head.** `scripts/prepare-hero.py`
+  dissolves the artwork's vignette into the page with a smoothstep on the alpha; at
+  `FEATHER = 0.14` the falloff reached inside the top mascot. 0.07 and regenerated.
+
+A "beat is visible and fits" assertion cannot see any of those. Looking at the four files
+is still the check that finds them, and it took one minute against a suite that takes 38 s.
+
+### The copy the Judge gets
+
+`cast.ts`'s Judge line was `"Not an AI. Runs 200 simulated fights…"`. "Not an AI" moved to
+the DETERMINISTIC chip on the same card, because the card was making the same claim twice
+while being the shortest thing on screen that has to land.
+
+## Open — dated placeholders
+
+Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck
+through, rather than deleted: what closed it and what it cost is the interesting part.
 
 ### `[ ] 2026-09-0? — human playtest (AC 4)`
 

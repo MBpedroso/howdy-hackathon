@@ -26,7 +26,12 @@ describe('the cast', () => {
   // and the start screen renders its card differently off this flag.
   it('marks the Judge, and only the Judge, as deterministic', () => {
     expect(CAST.filter((a) => a.deterministic === true).map((a) => a.id)).toEqual(['judge']);
-    expect(AGENTS.judge.role).toContain('Not an AI');
+    // The Judge's line is its job, not its nature: "not an AI" is the DETERMINISTIC
+    // chip's, on the same card, and having both put the same claim on screen twice.
+    // What the sentence must carry is the number and the verb.
+    expect(AGENTS.judge.role).toContain('200 simulated fights');
+    expect(AGENTS.judge.role).toContain('rejects');
+    expect(AGENTS.judge.deterministic).toBe(true);
   });
 
   it('gives each one a role in plain language, no jargon', () => {
