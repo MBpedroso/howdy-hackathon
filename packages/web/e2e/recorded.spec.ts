@@ -118,6 +118,10 @@ test('replays a real recorded run: rejections, approval, and Round 2 loads its s
   // went through the sandbox and is driving the fight.
   await expect(page.locator('.hud-strategy .name')).toHaveText(RUN.strategy);
   await expect(page.locator('.hud-round')).toContainText('Round 2');
+  // The recorded run ends in an approval, so the fight is entitled to claim
+  // authorship. The opposite case — a pool pick that must *not* claim it — is in
+  // `interlude.spec.ts`'s deadline test.
+  await expect(page.getByTestId('boss-origin')).toHaveText('written for you');
   await expect.poll(async () => page.evaluate(() => window.__rematch?.state?.tick ?? 0)).toBeGreaterThan(30);
 
   await page.locator('#stage').screenshot({ path: `${ARTIFACTS}recorded-round2-boss.png` });

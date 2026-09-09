@@ -217,6 +217,14 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
 
     /** The source of the next round's strategy, decided by the stream's ending. */
     let nextSource: string | null = null;
+    /**
+     * Where that source came from, for the HUD's chip during the next fight
+     * (`app.ts`, `StrategyProvenance`). Starts as `fallback` because every ending
+     * except an approval is one: a stream that dies, a deadline, an exhausted
+     * attempt budget and a client last resort all ship a strategy nobody approved
+     * this session, and the fight must not imply otherwise.
+     */
+    let nextProvenance: 'approved' | 'fallback' = 'fallback';
 
     function goToNextRound(source: string | null): void {
       if (continued) return;
@@ -228,7 +236,10 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
       release();
       // `next` re-enters `app.ts`, which tears the round down and builds the next
       // one; it must not run while this overlay is still in the document.
-      void context.next(source ?? bundledSource(CLIENT_FALLBACK_STRATEGY));
+      void context.next(
+        source ?? bundledSource(CLIENT_FALLBACK_STRATEGY),
+        source === null ? 'fallback' : nextProvenance,
+      );
     }
 
     ui = createInterludeUi({
@@ -282,6 +293,7 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
           if (event.type === 'done') {
             if (event.result.approved) {
               nextSource = event.result.source;
+              nextProvenance = 'approved';
             } else {
               // Prefer the server's pool pick over the client's bundled last resort.
               const pick = serverFallbackPick(event.result);

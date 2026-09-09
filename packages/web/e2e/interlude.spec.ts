@@ -293,4 +293,10 @@ test('the 45-second deadline shows the AC 5 fallback instead of hanging', async 
   await page.getByTestId('il-fight').click();
   await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
   await expect(page.locator('.hud-strategy .name')).toHaveText('Hound');
+  // …and the fight says where it came from. This is the assertion that stops the
+  // product overclaiming: nothing was approved this session, so the boss on screen
+  // must not be labelled as one written for this player.
+  const origin = page.getByTestId('boss-origin');
+  await expect(origin).toHaveText('pre-approved');
+  await expect(origin).not.toHaveText('written for you');
 });

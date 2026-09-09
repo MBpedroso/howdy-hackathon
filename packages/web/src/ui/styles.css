@@ -102,11 +102,29 @@ body {
   background: rgba(7, 8, 12, 0.72);
 }
 .hud-strategy .label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 9px;
   letter-spacing: 0.22em;
   color: var(--text-dim);
   text-transform: uppercase;
 }
+/*
+ * The provenance chip. Two states that say something and one that says nothing:
+ * "written for you" is the claim the product makes, in the player's colour because
+ * it is the good outcome; "pre-approved" is the honest admission that the loop did
+ * not land one, in amber because it is a caveat rather than a failure. Round 1's
+ * bundled boss claims nothing and renders as an empty span.
+ */
+.hud-strategy .origin {
+  letter-spacing: 0.18em;
+  white-space: nowrap;
+}
+.hud-strategy .origin:empty { display: none; }
+.hud-strategy .origin[data-origin='approved'] { color: var(--player); }
+.hud-strategy .origin[data-origin='fallback'] { color: var(--slam); }
 .hud-strategy .name {
   font-size: 15px;
   font-weight: 700;
@@ -255,25 +273,34 @@ body {
   position: fixed;
   z-index: 30;
 }
+/*
+ * `align-items: flex-start`, not `center`, with the card centring itself by
+ * `margin: auto`. A centred flex item that is taller than its container overflows
+ * *both* ways and the top half becomes unreachable — the title and the tagline
+ * scrolled off the top of a 1280x800 projector the day this screen grew the "why"
+ * block and the fighter picker. `margin: auto` centres while there is room and
+ * gives up gracefully when there is not.
+ */
 #screen[data-screen='start'].active {
   background: var(--void);
-  align-items: center;
+  align-items: flex-start;
   overflow: auto;
 }
 
 .card.start {
   max-width: min(1220px, 96vw);
   width: 100%;
-  padding: 18px 26px 20px;
+  margin: auto;
+  padding: 12px 26px 14px;
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 
 .start-head { text-align: center; }
 .start-title {
-  font-size: 40px;
+  font-size: 32px;
   letter-spacing: 0.3em;
   margin: 0;
   color: var(--text);
@@ -283,66 +310,81 @@ body {
   letter-spacing: 0.32em;
   text-transform: uppercase;
   color: var(--boss);
-  margin: 4px 0 6px;
+  margin: 3px 0 0;
 }
-.card.start .start-head p.dim { max-width: 66ch; margin: 0 auto; }
 
+/*
+ * Section label. One rule across the card, the title at the left end and an
+ * optional caveat at the right — which is where "costumes only" lives, adjacent to
+ * "pick your fighter" instead of as a paragraph under the grids.
+ */
 .start-label {
-  font-size: 9.5px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 10px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--text);
+  opacity: 0.62;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 5px;
-  margin-bottom: 10px;
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+}
+.start-label-aside {
+  letter-spacing: 0.2em;
+  font-size: 9.5px;
+  opacity: 0.72;
+  text-align: right;
 }
 
-/* ---- the cast: three cards, and one of them is deliberately not like the others */
+/* ---- why this exists: three key points, and nothing else above the fold */
 
-.cast-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-
-.cast-card {
+.why-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: 12px;
-  row-gap: 2px;
-  align-items: start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.why {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   background: #0a0c12;
 }
-.cast-card .rm-portrait { grid-row: 1 / span 2; }
-.cast-card h3 {
-  margin: 0;
-  font-size: 15px;
-  letter-spacing: 0.14em;
+.why h4 {
+  /* Two lines' worth, always: card 2's title wraps and cards 1 and 3's do not, and
+   * three bodies that start on three different baselines read as three unrelated
+   * boxes rather than as one argument in three steps. */
+  min-height: 2.2em;
+  margin: 0 0 5px;
+  font-size: 12.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
-.cast-card p.cast-role {
+/* Tertiary text, one notch brighter than it was: at 0.84 the descriptions were
+ * legible on a monitor and grey mush on a projector. The hierarchy still holds —
+ * the accent titles are full-strength colour, this is white at 0.92. */
+.card.start .why p.why-text {
   margin: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--text);
-  opacity: 0.86;
+  opacity: 0.92;
 }
 
 /*
- * The Judge card. The whole argument of the project is that the thing with the
- * final say is *not* a model, so its card is not painted like the two that are: a
- * hard-cornered double border, a dashed inner rule, and the word said out loud.
+ * The Judge's point. The whole argument of the project is that the thing with the
+ * final say is *not* a model, so the middle point is not painted like the two that
+ * surround it: a hatched ground, and the word said out loud on its step below.
  */
-.cast-card[data-agent='judge'] {
+.why:nth-child(2) {
   border: 1px solid var(--accent);
   border-left: 3px double var(--accent);
-  outline: 1px solid rgba(239, 68, 68, 0.22);
-  outline-offset: 3px;
   background:
     repeating-linear-gradient(
       -45deg,
@@ -351,14 +393,85 @@ body {
     ),
     #0a0c12;
 }
+/*
+ * The DETERMINISTIC chip. Its own line under the step's title rather than inside it:
+ * "The Judge decides DETERMINISTIC" was one heading string and did not read as
+ * English. As a chip it is a label on the step, which is what it always meant.
+ */
 .cast-tag {
-  font-size: 8.5px;
+  display: inline-block;
+  margin: 0 0 5px;
+  font-size: 9px;
   letter-spacing: 0.2em;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border: 1px solid var(--accent);
   color: var(--accent);
   font-weight: 700;
 }
+
+/* ---- a fighter's face: the mascot crop, or the SVG stand-in under it */
+
+.rm-face {
+  position: relative;
+  display: block;
+  width: var(--face-size, 84px);
+  height: var(--face-size, 84px);
+  flex: none;
+}
+.rm-face-ph, .rm-face-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.rm-face-ph svg { display: block; width: 100%; height: 100%; }
+/* Same swap as `.rm-portrait-img`: the raster is invisible until it has loaded, so
+ * a missing file is a stand-in rather than a broken-image glyph for one frame. */
+.rm-face-img { opacity: 0; object-fit: contain; transition: opacity 140ms linear; }
+.rm-face-img[data-ok='1'] { opacity: 1; }
+
+/* ---- pick your fighter: two radio grids, cosmetic only */
+
+.pick-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.pick-side {
+  padding: 8px 12px 10px;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: #0a0c12;
+}
+.pick-side h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.pick-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pick-btn {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  /* The unselected state is dimmed rather than greyscaled: the four mascots are
+   * told apart by colour, and a greyscale row of four balls is a row of four balls. */
+  /* 0.55 was too dim to read the name of an unpicked mascot on a projector. */
+  opacity: 0.68;
+  transition: opacity 120ms linear, border-color 120ms linear;
+}
+.pick-btn:hover, .pick-btn:focus-visible { opacity: 0.9; border-color: var(--accent); }
+.pick-btn[data-on='1'] {
+  opacity: 1;
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+.pick-name {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
 
 /* ---- how a round works: four steps, left to right */
 
@@ -373,7 +486,7 @@ body {
 }
 .step {
   position: relative;
-  padding: 10px 12px 10px 14px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-top: 2px solid var(--accent);
   background: #0a0c12;
@@ -387,27 +500,50 @@ body {
   color: var(--text-dim);
   font-size: 11px;
 }
-.step-icon { display: block; width: 26px; height: 26px; margin-bottom: 6px; }
-.step-icon svg { display: block; width: 100%; height: 100%; }
+/*
+ * The step's mark: an agent portrait on steps 2-4, the player's chosen face on
+ * step 1. A row rather than the 26 px glyph slot this used to be.
+ */
+.step-icon { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.step-icon .rm-portrait, .step-icon .rm-face { flex: none; }
 .step h4 {
-  margin: 0 0 3px;
-  font-size: 12px;
+  margin: 0 0 4px;
+  font-size: 12.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
 }
+/* `01 — THE ANALYST`: the em dash and the dimmed digits are the stylesheet's, so
+ * the step data holds a number and a name and no punctuation. */
+.step-n {
+  opacity: 0.5;
+  letter-spacing: 0.18em;
+}
+.step-n::after {
+  content: ' — ';
+  letter-spacing: normal;
+}
 .card.start .step p.step-text {
   margin: 0;
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text);
-  opacity: 0.82;
+  opacity: 0.9;
 }
 
 /* ---- controls */
 
-.key-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
-.key { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
+.key-row { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  opacity: 0.7;
+}
 .key kbd {
   font-family: var(--font);
   font-size: 11px;
@@ -419,33 +555,48 @@ body {
   padding: 3px 7px;
 }
 .card.start p.start-tells {
-  margin: 9px 0 0;
-  font-size: 12px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
   line-height: 1.5;
-  color: var(--text-dim);
+  color: var(--text);
+  opacity: 0.82;
 }
 .card.start p.start-tells b { color: var(--slam); font-weight: 700; }
 
 /* ---- the footer, the box and the button */
 
+/*
+ * Three cells: the box, FIGHT, the seed. A grid with equal outer columns rather
+ * than `space-between`, so the button is centred on the *card* and does not drift
+ * when the left and right strings differ in length (they always do — the seed is
+ * nine digits some sessions and one the next).
+ */
 .start-foot {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 14px;
 }
-.card.start .start-foot p.dim { margin: 0; }
+.start-cta { display: flex; justify-content: center; }
+.card.start .start-foot p.start-seed {
+  margin: 0;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text);
+  opacity: 0.6;
+}
 
 .start-skip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 11.5px;
-  color: var(--text-dim);
+  color: var(--text);
+  opacity: 0.6;
   cursor: pointer;
+  justify-self: start;
 }
 .start-skip input {
   width: 14px;
@@ -453,24 +604,52 @@ body {
   accent-color: var(--player);
   cursor: pointer;
 }
-.start-skip:hover { color: var(--text); }
+.start-skip:hover { opacity: 1; }
 
 .card.start .btn {
   align-self: center;
   margin-top: 0;
-  font-size: 16px;
+  font-size: 15px;
   letter-spacing: 0.3em;
-  padding: 14px 46px;
+  padding: 11px 44px;
 }
 
 /*
- * Below the projector's 800 px: let the grids stack and the screen scroll rather
- * than squeezing four steps into 90 px each. The start screen is the one place a
- * scrollbar is acceptable — nothing here is time-critical.
+ * Narrower than the projector: reorganise rather than shrink. Each grid drops to a
+ * count that keeps its cell readable — four steps at 90 px wide is not a smaller
+ * version of the same screen, it is an unreadable one — and the screen is allowed
+ * to scroll, which it is the only screen here permitted to do.
+ *
+ * FIGHT stays in the footer band at every width, so it is never the thing below the
+ * fold: at the narrowest step the footer stacks with the button in the middle row.
  */
-@media (max-width: 980px), (max-height: 700px) {
-  .cast-row, .step-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1120px), (max-height: 720px) {
+  .why-row, .step-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .step + .step::before { content: none; }
-  .start-title { font-size: 30px; }
-  .card.start { gap: 12px; }
+  .start-title { font-size: 28px; }
+  .card.start { gap: 10px; }
+}
+
+@media (max-width: 760px) {
+  /* One column each: at this width two why-cards are two columns of six words. */
+  .why-row { grid-template-columns: minmax(0, 1fr); }
+  .pick-sides { grid-template-columns: minmax(0, 1fr); }
+  /* YOU and THE BOSS stack, and each keeps its own four faces in one row. */
+  .pick-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .start-foot {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    gap: 12px;
+  }
+  .start-skip { justify-self: center; }
+  .card.start .start-foot p.start-seed { text-align: center; }
+  /* The button first, so it is adjacent to the content rather than under two
+   * lines of metadata on the one layout where they are stacked. */
+  .start-cta { order: -1; }
+}
+
+@media (max-width: 520px) {
+  .step-row { grid-template-columns: minmax(0, 1fr); }
+  .start-label { flex-direction: column; gap: 4px; }
+  .start-label-aside { text-align: left; }
 }

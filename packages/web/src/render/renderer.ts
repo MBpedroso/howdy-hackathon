@@ -1,5 +1,12 @@
 /**
- * Canvas 2D renderer. Flat shapes, one palette, no images (spec §2.3).
+ * Canvas 2D renderer. Flat shapes, one palette — and exactly two images: the
+ * mascot faces the player picked for themselves and for the boss (`render/sprites.ts`,
+ * a documented departure from spec §2.3, recorded in `docs/SPEC.md` §13).
+ *
+ * The sprite is drawn *inside* the entity's collision circle and clipped to it, so
+ * nothing the player sees is bigger than what can be hit. Every tell, shot, minion
+ * and telegraph is still drawn, because the tells are the fairness contract and a
+ * picture cannot be relied on to arrive.
  *
  * Contract with the rest of the client:
  *  - it **reads** `GameState` and never writes to it;
@@ -23,7 +30,9 @@ import { ENGINE_CONSTANTS, TELEGRAPHS, type GameState } from '@rematch/engine';
 
 import { createEffectTracker, type Effect, type EffectTracker } from './effects.ts';
 import { alpha, PALETTE as C } from './palette.ts';
+import { preloadFighters, sprite } from './sprites.ts';
 import { computeViewport, type Viewport } from './viewport.ts';
+import { DEFAULT_BOSS_FIGHTER, DEFAULT_PLAYER_FIGHTER, FIGHTERS, type FighterId } from '../ui/fighters.ts';
 
 const ARENA = CONSTANTS.arena.w;
 const E = ENGINE_CONSTANTS;
@@ -41,6 +50,12 @@ export type Renderer = {
   viewport(): Viewport;
   /** Drop effect history — call when a round starts. */
   reset(): void;
+  /**
+   * Change who the two fighters look like. Cosmetic and it stops here: the
+   * renderer never writes to `GameState`, so a costume cannot reach the
+   * simulation, the replay hash or a strategy's view (`ui/fighters.ts`).
+   */
+  setFighters(fighters: { player: FighterId; boss: FighterId }): void;
 };
 
 /** Non-null 2D context. A separate function so `ctx` is non-nullable inside every
@@ -55,6 +70,14 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const ctx = context2d(canvas);
 
   const effects: EffectTracker = createEffectTracker();
+  let fighters: { player: FighterId; boss: FighterId } = {
+    player: DEFAULT_PLAYER_FIGHTER,
+    boss: DEFAULT_BOSS_FIGHTER,
+  };
+  // Start the four decodes now rather than on the first frame that wants one: the
+  // fight begins on a click and a face that pops in two seconds late is worse than
+  // one that was never there.
+  preloadFighters();
   let viewport: Viewport = computeViewport(canvas.width, canvas.height, ARENA, 1);
 
   function resize(): Viewport {
@@ -254,21 +277,61 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     }
   }
 
+  /**
+   * Draw a fighter's face inside its collision circle, or report that there was
+   * nothing to draw so the caller keeps its flat disc.
+   *
+   * Clipped to the circle on purpose. The crop includes gloves and an outstretched
+   * arm, and a sprite wider than the hitbox would make the fight lie about what can
+   * be hit — so the mascot's *ball* is scaled onto the circle and everything outside
+   * it is cut. The ball's place in the crop is per-fighter measured data
+   * (`ui/fighters.ts`, `Ball`), not the image centre: centring the image put
+   * Jupiter's face left of the boss and cropped Earth's at the chin.
+   *
+   * The face is drawn *unrotated*: these mascots face the viewer, and a spinning
+   * head reads as a bug rather than as aim. Facing stays the job of the tick each
+   * caller already draws.
+   */
+  function drawFace(id: FighterId, x: number, y: number, r: number, dim: number): boolean {
+    const img = sprite(id);
+    if (img === null) return false;
+    const ball = FIGHTERS[id].ball;
+    // Draw the image at the width that makes its ball exactly `r`, then offset so
+    // the ball's centre lands on the entity's centre.
+    const side = r / ball.r;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.clip();
+    if (dim < 1) ctx.globalAlpha = dim;
+    ctx.drawImage(img, x - ball.cx * side, y - ball.cy * side, side, side);
+    ctx.restore();
+    return true;
+  }
+
   function drawBoss(state: GameState): void {
     const b = state.boss;
     const r = E.boss.radius;
     const charging = b.chargeTicksLeft > 0;
 
     if (charging) disc(b.x, b.y, r + 16, alpha(C.boss, 0.2));
+    // The crimson disc goes down first either way: it is the colour language
+    // ("anything that can hurt you is warm") and it is what shows through the
+    // transparent corners of the crop.
     disc(b.x, b.y, r, C.boss);
-    disc(b.x, b.y, r - 9, alpha(C.void, 0.55));
+    // The dark inset is the *bare* boss's eye. With a face on, it would be a hole
+    // punched through the mascot, so it is drawn only when there is no face.
+    const faced = drawFace(fighters.boss, b.x, b.y, r, 1);
+    if (!faced) disc(b.x, b.y, r - 9, alpha(C.void, 0.55));
     ring(b.x, b.y, r + 2, alpha(C.boss, 0.8), 2);
 
-    // Facing tick.
+    // Facing tick. It starts at the rim rather than inside the body when a face is
+    // on, because a 3 px white line across the mascot's eyes reads as damage.
     ctx.strokeStyle = C.text;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(b.x + Math.cos(b.facing) * (r - 12), b.y + Math.sin(b.facing) * (r - 12));
+    const inner = faced ? r + 1 : r - 12;
+    ctx.moveTo(b.x + Math.cos(b.facing) * inner, b.y + Math.sin(b.facing) * inner);
     ctx.lineTo(b.x + Math.cos(b.facing) * (r + 9), b.y + Math.sin(b.facing) * (r + 9));
     ctx.stroke();
 
@@ -304,12 +367,19 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     const blinking = p.invulnTicks > 0 && state.tick % 8 < 4;
     const body = blinking ? alpha(C.player, 0.35) : C.player;
     disc(p.x, p.y, r, body);
+    // The blink is "that hit did nothing", and it has to survive having a face on
+    // top of it — so the face blinks with the body instead of covering it.
+    const pFaced = drawFace(fighters.player, p.x, p.y, r, blinking ? 0.4 : 1);
     ring(p.x, p.y, r + 3, alpha(dashing ? C.playerShot : C.player, 0.7), 2);
 
+    // Aim line. From the centre on a bare disc; from the rim over a face, for the
+    // same reason as the boss's tick — the player is only 12 px of radius, and a
+    // line through the middle of that is the whole sprite.
     ctx.strokeStyle = C.void;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
+    const pInner = pFaced ? r + 1 : 0;
+    ctx.moveTo(p.x + Math.cos(p.facing) * pInner, p.y + Math.sin(p.facing) * pInner);
     ctx.lineTo(p.x + Math.cos(p.facing) * (r + 6), p.y + Math.sin(p.facing) * (r + 6));
     ctx.stroke();
 
@@ -369,6 +439,11 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     },
     reset(): void {
       effects.reset();
+    },
+    setFighters(next: { player: FighterId; boss: FighterId }): void {
+      // Copied, not aliased: the caller holds a mutable object of its own and a
+      // shared reference would make "who is on screen" change without a call.
+      fighters = { player: next.player, boss: next.boss };
     },
   };
 }

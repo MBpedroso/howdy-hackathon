@@ -15,6 +15,18 @@ import type { RunnerStats } from '../game/runnerStats.ts';
 
 const MAX_TICKS = ENGINE_CONSTANTS.round.maxTicks;
 
+/**
+ * The provenance chip's words. A pure function so the one rule that matters can be
+ * asserted without a DOM: a strategy nobody approved this session must never read
+ * as one that was written for this player.
+ */
+export function originLabel(provenance: 'bundled' | 'approved' | 'fallback'): string {
+  if (provenance === 'approved') return 'written for you';
+  if (provenance === 'fallback') return 'pre-approved';
+  // Round 1. It ships with the client and claims nothing, so it says nothing.
+  return '';
+}
+
 export type HudInfo = {
   round: number;
   maxRounds: number;
@@ -25,6 +37,16 @@ export type HudInfo = {
   renderMs: number;
   /** `decide` counters, or `null` when the round does not track them. */
   runner?: RunnerStats | null;
+  /**
+   * Where this round's strategy came from (`app.ts`, `StrategyProvenance`).
+   *
+   * On screen it is one small word next to the boss's name, and it is the most
+   * honest label in the product: a boss the harness approved this session and one
+   * lifted from the pre-approved pool are otherwise identical here, and the claim
+   * being made — "it read your replay and rewrote itself" — is only true of one of
+   * them. A demo that cannot tell them apart is a demo that overclaims.
+   */
+  provenance?: 'bundled' | 'approved' | 'fallback';
 };
 
 export type Hud = {
@@ -125,6 +147,11 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const strategy = el('div', 'hud-strategy');
   const label = el('div', 'label');
   label.textContent = 'Boss strategy';
+  // The provenance chip lives on the label's line, right-aligned: it is metadata
+  // about the strategy, not part of its name.
+  const origin = el('span', 'origin');
+  origin.dataset.testid = 'boss-origin';
+  label.append(origin);
   const name = el('div', 'name');
   const rationale = el('div', 'rationale');
   strategy.append(label, name, rationale);
@@ -176,6 +203,12 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
         lastName = state.strategy.name;
         name.textContent = state.strategy.name;
         rationale.textContent = `“${state.strategy.rationale}”`;
+        // Round 1's boss ships with the client and claims nothing, so it says
+        // nothing. The other two both need saying, and the fallback one especially:
+        // it is the case where the product did *not* do what it promises.
+        const provenance = info.provenance ?? 'bundled';
+        origin.textContent = originLabel(provenance);
+        origin.dataset.origin = provenance;
       }
 
       // Small, deliberately technical: this is the determinism evidence. `?debug=1`

@@ -25,6 +25,7 @@
  * nothing else about the suite changes.
  */
 import { AGENTS, placeholderSvg, portraitUrl, type AgentId } from './cast.ts';
+import { FIGHTERS, fighterFaceSvg, fighterUrl, type FighterId } from './fighters.ts';
 
 export type PortraitOptions = {
   /** CSS pixels. The square is `size × size`. */
@@ -85,4 +86,47 @@ export function createPortrait(id: AgentId, options: PortraitOptions): HTMLEleme
 export function setPortraitDim(portrait: HTMLElement, dim: boolean): void {
   if (dim) portrait.dataset.dim = '1';
   else delete portrait.dataset.dim;
+}
+
+/**
+ * A fighter's face — the same placeholder-under-an-`<img>` trick as
+ * `createPortrait`, for the four mascots.
+ *
+ * Separate function rather than a branch inside `createPortrait` because a fighter
+ * is not an agent: it has no accent-driven "who is acting now" state, no `dim`, and
+ * its art is a transparent crop rather than a square on navy. What the two share is
+ * the failure behaviour, and that is the part worth keeping identical — the SVG
+ * stand-in is always present, the raster is layered over it and only shows on
+ * `load`, and a missing file removes the `<img>` and stops asking.
+ */
+export function createFighterFace(id: FighterId, size: number, baseUrl?: string): HTMLElement {
+  const fighter = FIGHTERS[id];
+  const wrap = document.createElement('span');
+  wrap.className = 'rm-face';
+  wrap.dataset.fighter = id;
+  wrap.style.setProperty('--accent', fighter.accent);
+  wrap.style.setProperty('--face-size', `${size}px`);
+
+  const placeholder = document.createElement('span');
+  placeholder.className = 'rm-face-ph';
+  // Static markup built from `fighters.ts`'s own constants — no external input.
+  placeholder.innerHTML = fighterFaceSvg(id);
+  wrap.append(placeholder);
+
+  const img = document.createElement('img');
+  img.className = 'rm-face-img';
+  img.alt = '';
+  img.decoding = 'async';
+  img.width = size;
+  img.height = size;
+  img.addEventListener('load', () => {
+    img.dataset.ok = '1';
+  });
+  img.addEventListener('error', () => {
+    img.remove();
+  });
+  img.src = fighterUrl(id, baseUrl);
+  wrap.append(img);
+
+  return wrap;
 }

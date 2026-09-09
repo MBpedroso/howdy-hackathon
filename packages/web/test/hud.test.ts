@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, type GameState } from '@rematch/engine';
-import { debugFooterEnabled, formatClock, formatRunnerLine } from '../src/ui/hud.ts';
+import { debugFooterEnabled, formatClock, formatRunnerLine, originLabel } from '../src/ui/hud.ts';
 import type { RunnerStats } from '../src/game/runnerStats.ts';
 
 describe('formatClock', () => {
@@ -100,5 +100,29 @@ describe('debugFooterEnabled', () => {
   it('treats the two ways of writing "no" as no, like `?interlude=0` does', () => {
     expect(debugFooterEnabled('?debug=0')).toBe(false);
     expect(debugFooterEnabled('?debug=false')).toBe(false);
+  });
+});
+
+/**
+ * The provenance chip.
+ *
+ * A boss the harness approved this session and a boss lifted from the pre-approved
+ * pool are indistinguishable in the fight otherwise — same panel, same name, same
+ * rationale — and only one of them supports the claim the product makes. The demo
+ * showing "written for you" over a pool pick would be the one place the product
+ * lies, so the mapping gets a test of its own.
+ */
+describe('originLabel', () => {
+  it('claims authorship only for a strategy the harness approved', () => {
+    expect(originLabel('approved')).toBe('written for you');
+  });
+
+  it('admits a pool pick, and never calls it authored', () => {
+    expect(originLabel('fallback')).toBe('pre-approved');
+    expect(originLabel('fallback')).not.toContain('for you');
+  });
+
+  it('says nothing for round 1, which claims nothing', () => {
+    expect(originLabel('bundled')).toBe('');
   });
 });

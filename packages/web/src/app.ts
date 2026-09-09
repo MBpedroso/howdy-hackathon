@@ -34,7 +34,7 @@ import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy
 import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
 import { createRenderer, type Renderer } from './render/renderer.ts';
 import { createHud, debugFooterEnabled, type Hud } from './ui/hud.ts';
-import { introDecision, readSkipIntro, writeSkipIntro } from './ui/intro.ts';
+import { introDecision, readFighter, readSkipIntro, writeFighter, writeSkipIntro } from './ui/intro.ts';
 import { createScreens, type Screens } from './ui/screens.ts';
 
 /** Spec §2.1: up to Round 5, then the win screen. */
@@ -58,10 +58,28 @@ export type RoundWonContext = {
    * Start the next round. `source` overrides the strategy — that is how a generated,
    * harness-approved `strategy.js` gets into the fight.
    */
-  next(source?: string): Promise<void>;
+  /**
+   * Start the next round. `provenance` says where the strategy came from and is
+   * cosmetic-but-honest: a boss the harness approved and a boss taken from the
+   * pre-approved pool are indistinguishable in the fight otherwise, and the whole
+   * claim of the product is that the one you are fighting was written for you.
+   */
+  next(source?: string, provenance?: StrategyProvenance): Promise<void>;
 };
 
 export type RoundWonHandler = (context: RoundWonContext) => void | Promise<void>;
+
+/**
+ * Where the round's strategy came from.
+ *
+ *  - `bundled` — the file that ships with the client. Round 1, always.
+ *  - `approved` — a model wrote it this session and the harness passed it.
+ *  - `fallback` — nothing was approved, so the pre-approved pool supplied one.
+ *
+ * The distinction is the difference between "the boss learned" and "the boss was
+ * replaced by one that already existed", and the fight has to be able to say which.
+ */
+export type StrategyProvenance = 'bundled' | 'approved' | 'fallback';
 
 export type AppOptions = {
   canvas: HTMLCanvasElement;
@@ -134,12 +152,25 @@ export function createApp(options: AppOptions): App {
   const interludeEnabled = params.get('interlude') !== '0';
 
   const renderer: Renderer = createRenderer(options.canvas);
+  /**
+   * The costumes, handed straight to the renderer. They go nowhere else:
+   * `startRound` and the engine never learn them, which is what keeps the replay
+   * hash and every recorded run valid across this feature (`ui/fighters.ts`).
+   *
+   * Held here rather than re-read from storage after each pick, because a write can
+   * fail — a tab with site data blocked throws on every access — and a pick that
+   * silently snapped back to the default would look like a broken button.
+   */
+  const fighters = { player: readFighter('player'), boss: readFighter('boss') };
+  renderer.setFighters(fighters);
   const hud: Hud = createHud(options.hud, { debugFooter: debugFooterEnabled(search) });
   const screens: Screens = createScreens(options.screen);
   const input: InputSource = createInputSource({ canvas: options.canvas, arenaSize: ARENA });
 
   let round: Round | null = null;
   let loop: Loop | null = null;
+  /** Where the round on screen got its strategy. See `StrategyProvenance`. */
+  let roundProvenance: StrategyProvenance = 'bundled';
   let booted = false;
   /** Published through `debug.interlude` while an interlude is on screen. */
   let interludeDebug: InterludeDebug | null = null;
@@ -176,6 +207,7 @@ export function createApp(options: AppOptions): App {
       tickMs: stats?.avgTickMs ?? 0,
       renderMs: stats?.avgRenderMs ?? 0,
       runner: current.runnerStats(),
+      provenance: roundProvenance,
     });
   }
 
@@ -186,7 +218,12 @@ export function createApp(options: AppOptions): App {
     round = null;
   }
 
-  async function startRound(index: number, source?: string, deterministic = false): Promise<void> {
+  async function startRound(
+    index: number,
+    source?: string,
+    deterministic = false,
+    provenance: StrategyProvenance = 'bundled',
+  ): Promise<void> {
     teardown();
     input.clear();
     renderer.reset();
@@ -195,6 +232,8 @@ export function createApp(options: AppOptions): App {
 
     const seed = roundSeed(sessionSeed, index);
     const text = source ?? bundledSource(strategyParam);
+    // A round with no supplied source is the bundled file whatever the caller said.
+    roundProvenance = source === undefined ? 'bundled' : provenance;
 
     try {
       round = await createRound({ index, seed, source: text, deterministic });
@@ -257,7 +296,8 @@ export function createApp(options: AppOptions): App {
       seed: finished.seed,
       source: finished.source,
       isFinal,
-      next: (nextSource?: string) => startRound(finished.index + 1, nextSource),
+      next: (nextSource?: string, nextProvenance?: StrategyProvenance) =>
+        startRound(finished.index + 1, nextSource, false, nextProvenance ?? 'bundled'),
     };
 
     await roundWon(context);
@@ -366,6 +406,16 @@ export function createApp(options: AppOptions): App {
         skipIntro: readSkipIntro(),
         onSkipIntro: (value) => {
           writeSkipIntro(value);
+        },
+        // Cosmetic, and it stops here: the picks are remembered and handed to the
+        // renderer, and never reach `startRound`, the engine or a strategy's view.
+        // See `ui/fighters.ts` for why that boundary is the whole design.
+        playerFighter: fighters.player,
+        bossFighter: fighters.boss,
+        onPickFighter: (which, id) => {
+          fighters[which] = id;
+          renderer.setFighters(fighters);
+          writeFighter(which, id);
         },
         onFight: () => {
           void startRound(startAt);

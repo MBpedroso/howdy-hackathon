@@ -24,13 +24,37 @@
  * interlude was designed against (`interlude.css`), and it has exactly one primary
  * action like everything else here.
  */
-import { AGENTS, CAST, iconSvg, type AgentIcon } from './cast.ts';
-import { createPortrait } from './portrait.ts';
+import { AGENTS, type AgentIcon, type AgentId } from './cast.ts';
+import { DEFAULT_BOSS_FIGHTER, DEFAULT_PLAYER_FIGHTER, FIGHTER_LIST, type FighterId } from './fighters.ts';
+import { createFighterFace, createPortrait } from './portrait.ts';
 
 export type PrimaryAction = { label: string; danger?: boolean; run: () => void };
 
-/** One of the four "how a round works" steps. */
-type Step = { n: string; icon: AgentIcon; accent: string; title: string; text: string };
+/**
+ * One of the four "how a round works" steps.
+ *
+ * `agent` is set on the three that an agent performs, and the step then wears that
+ * agent's portrait and accent instead of a flat icon. That is what let the separate
+ * "who rewrites the boss" cast row go: it was the same three faces and the same
+ * three names, one block higher up the screen. Step 1 is the player's, so it wears
+ * the fighter they picked.
+ *
+ * `text` is the step's own, not the agent's `role` from `cast.ts`, which it briefly
+ * was. The two surfaces have different budgets: the interlude header has a whole
+ * line for "Not an AI. Runs 200 simulated fights and rejects anything unfair or
+ * broken", and this card has room for the short half of it. `label` is the one
+ * extra word a step may carry as a chip — only the Judge has one, and it is the
+ * project's argument in a single word.
+ */
+type Step = {
+  n: string;
+  icon: AgentIcon;
+  accent: string;
+  title: string;
+  text: string;
+  agent?: AgentId;
+  label?: string;
+};
 
 export type StartOptions = {
   seed: number;
@@ -39,6 +63,11 @@ export type StartOptions = {
   skipIntro?: boolean;
   /** Called on every toggle. `app.ts` persists it; see `ui/intro.ts`. */
   onSkipIntro?: (value: boolean) => void;
+  /** The remembered fighter picks. See `ui/fighters.ts` — cosmetic, always. */
+  playerFighter?: FighterId;
+  bossFighter?: FighterId;
+  /** Called on every pick. `app.ts` persists it; see `ui/intro.ts`. */
+  onPickFighter?: (which: 'player' | 'boss', id: FighterId) => void;
 };
 
 export type Screens = {
@@ -85,35 +114,82 @@ const PLAYER_ACCENT = '#4de2b0';
  * The wording is the point: every step says what *happens to you*, and step 4 says
  * "rejects" before it says "approves", because a rejection is the thing the demo is
  * actually proving and the interlude will show several.
+ *
+ * Steps 2–4 take their body text from the agent's own `role` in `cast.ts` rather
+ * than restating it, so there is exactly one copy of "what the Analyst does" in the
+ * codebase and the start screen cannot drift from the interlude header.
  */
 const STEPS: readonly Step[] = [
   {
-    n: '1',
+    n: '01',
     icon: 'target',
     accent: PLAYER_ACCENT,
     title: 'You fight',
     text: 'Beat the boss inside 60 seconds. Every move you make is recorded.',
   },
   {
-    n: '2',
+    n: '02',
     icon: 'lens',
     accent: AGENTS.analyst.accent,
-    title: 'The Analyst reads',
-    text: 'It watches your replay and names your habits, out loud, as it types.',
+    title: 'The Analyst',
+    text: 'Reads your replay and identifies your habits.',
+    agent: 'analyst',
   },
   {
-    n: '3',
+    n: '03',
     icon: 'brackets',
     accent: AGENTS.coder.accent,
-    title: 'The Coder rewrites',
-    text: "It writes the boss's next strategy as real code, aimed at you.",
+    title: 'The Coder',
+    text: 'Rewrites the boss to counter you.',
+    agent: 'coder',
   },
   {
-    n: '4',
+    n: '04',
     icon: 'gate',
     accent: AGENTS.judge.accent,
-    title: 'The Judge decides',
-    text: 'It simulates the new boss and rejects it if it is unfair or broken. Then you fight what survived.',
+    title: 'The Judge',
+    // "The Judge decides DETERMINISTIC" was one string in the title, which does not
+    // read as English. The word is a chip of its own now.
+    label: 'DETERMINISTIC',
+    text: 'Runs 200 simulations and rejects unfair or broken behaviour.',
+    agent: 'judge',
+  },
+];
+
+/**
+ * Why the thing exists — three lines, above everything else on the screen.
+ *
+ * This block is aimed at someone who has thirty seconds and has never heard of the
+ * project: a judge opening the deployed URL, or a player wondering why a boss fight
+ * is explaining itself. It says what is unusual (the boss's code is rewritten
+ * mid-game), what stops that from being a disaster (a harness that is not a model),
+ * and why anyone should care (that is the argument, not a feature).
+ *
+ * Three, and short, on purpose. The screen already asks the player to read a
+ * four-step diagram, four control chips and two tells; a fourth paragraph of prose
+ * here would be the thing that makes people press FIGHT without reading any of it.
+ */
+const WHY: readonly { title: string; text: string; accent: string }[] = [
+  {
+    title: 'The boss writes itself',
+    text: 'No difficulty slider. Between rounds, AI reads your replay and rewrites the boss.',
+    accent: AGENTS.coder.accent,
+  },
+  {
+    // Was "Something that is not an AI has the final say", which is the same fact
+    // stated as a negation — and in the strongest position on the screen it read as
+    // "we do not trust AI", which is the opposite of the argument. The verifier
+    // being deterministic is not a caveat about the agent; it is what makes handing
+    // the agent executable code defensible. The mechanism still shows: the chip on
+    // step 04 says DETERMINISTIC and the third card draws the conclusion.
+    title: 'Every rewrite has to prove itself',
+    text: 'Every rewrite runs 200 simulated fights. Too strong, too weak, frozen or unsafe — rejected.',
+    accent: AGENTS.judge.accent,
+  },
+  {
+    title: 'That is the whole argument',
+    text: 'The agent gets real power — executable code. Deterministic checks decide what gets through.',
+    accent: PLAYER_ACCENT,
   },
 ];
 
@@ -128,6 +204,10 @@ export function createScreens(root: HTMLElement): Screens {
     // screen has a checkbox, and "tick the box" must not also mean "fight".
     const target = ev.target;
     if (ev.code === 'Space' && target instanceof HTMLElement && target.tagName === 'INPUT') return;
+    // The fighter buttons are the same case for *both* keys: a pick made from the
+    // keyboard would otherwise choose a costume and start the fight in one press,
+    // and Enter on a focused `<button>` is that button's by every convention.
+    if (target instanceof HTMLElement && target.closest('[data-nofight]') !== null) return;
     ev.preventDefault();
     const run = action.run;
     action = null;
@@ -145,9 +225,18 @@ export function createScreens(root: HTMLElement): Screens {
     run();
   });
 
+  /**
+   * `build` may set this to put the primary button somewhere other than the end of
+   * the card. Only the start screen does: its bottom band is skip-box | FIGHT |
+   * seed, and the button has to be the middle cell of that row rather than a line
+   * under it. Reset per render so no screen inherits another's slot.
+   */
+  let primarySlot: HTMLElement | null = null;
+
   function render(name: string, build: (card: HTMLElement) => void, primary: PrimaryAction | null): void {
     kind = name;
     action = primary;
+    primarySlot = null;
     root.replaceChildren();
     root.classList.add('active');
     root.dataset.screen = name;
@@ -168,7 +257,7 @@ export function createScreens(root: HTMLElement): Screens {
         action = null;
         run();
       });
-      card.append(btn);
+      (primarySlot ?? card).append(btn);
       queueMicrotask(() => btn.focus());
     }
 
@@ -196,11 +285,20 @@ export function createScreens(root: HTMLElement): Screens {
     return d;
   }
 
-  /** A small caps heading above one block of the start screen. */
-  function sectionLabel(text: string): HTMLElement {
+  /**
+   * A small caps heading above one block of the start screen, with an optional
+   * caveat pushed to the far end of the same rule.
+   */
+  function sectionLabel(text: string, aside?: string): HTMLElement {
     const d = document.createElement('div');
     d.className = 'start-label';
-    d.textContent = text;
+    d.append(document.createTextNode(text));
+    if (aside !== undefined) {
+      const note = document.createElement('span');
+      note.className = 'start-label-aside';
+      note.textContent = aside;
+      d.append(note);
+    }
     return d;
   }
 
@@ -224,7 +322,13 @@ export function createScreens(root: HTMLElement): Screens {
       );
     },
 
-    start({ seed, onFight, skipIntro, onSkipIntro }): void {
+    start({ seed, onFight, skipIntro, onSkipIntro, playerFighter, bossFighter, onPickFighter }): void {
+      // The live picks. Held here rather than read back out of the DOM so the
+      // "you" step's face and the two grids cannot disagree about who is selected.
+      const picked: Record<'player' | 'boss', FighterId> = {
+        player: playerFighter ?? DEFAULT_PLAYER_FIGHTER,
+        boss: bossFighter ?? DEFAULT_BOSS_FIGHTER,
+      };
       render(
         'start',
         (card) => {
@@ -233,76 +337,178 @@ export function createScreens(root: HTMLElement): Screens {
           // ------------------------------------------------------------ the title
           const head = document.createElement('header');
           head.className = 'start-head';
-          head.append(
-            heading('REMATCH', 'start-title'),
-            line('The boss that learns', 'start-tagline'),
-            line(
-              'Beat it once and it reads your replay, rewrites its own code, and comes back built for you. Five rounds.',
-              'dim',
-            ),
-          );
+          // No third line here any more: it used to say "beat it once and it reads
+          // your replay, rewrites its own code, and comes back built for you", which
+          // is the first of the three `WHY` points immediately below it. Two copies
+          // of the pitch cost the title its place on a 1280x800 projector.
+          head.append(heading('REMATCH', 'start-title'), line('The boss that learns · five rounds', 'start-tagline'));
           card.append(head);
 
-          // ------------------------------------------------------------- the cast
-          const cast = document.createElement('section');
-          cast.className = 'start-cast';
-          cast.dataset.testid = 'start-cast';
-          cast.append(sectionLabel('Who rewrites the boss'));
-          const cards = document.createElement('div');
-          cards.className = 'cast-row';
-          for (const agent of CAST) {
-            const item = document.createElement('article');
-            item.className = 'cast-card';
-            item.dataset.agent = agent.id;
-            item.dataset.testid = `cast-${agent.id}`;
-            item.style.setProperty('--accent', agent.accent);
-
-            item.append(createPortrait(agent.id, { size: 92 }));
-
-            const name = document.createElement('h3');
-            name.textContent = agent.name;
-            if (agent.deterministic === true) {
-              // The thesis, as a chip: the thing with the final say is not a model.
-              const tag = document.createElement('span');
-              tag.className = 'cast-tag';
-              tag.dataset.testid = 'cast-deterministic';
-              tag.textContent = 'DETERMINISTIC';
-              name.append(tag);
-            }
-            item.append(name, line(agent.role, 'cast-role'));
-            cards.append(item);
+          // -------------------------------------------------------------- the why
+          const why = document.createElement('section');
+          why.className = 'start-why';
+          why.dataset.testid = 'start-why';
+          why.append(sectionLabel('Why this exists'));
+          const points = document.createElement('ul');
+          points.className = 'why-row';
+          for (const point of WHY) {
+            const item = document.createElement('li');
+            item.className = 'why';
+            item.style.setProperty('--accent', point.accent);
+            const title = document.createElement('h4');
+            title.textContent = point.title;
+            item.append(title, line(point.text, 'why-text'));
+            points.append(item);
           }
-          cast.append(cards);
-          card.append(cast);
+          why.append(points);
+          card.append(why);
 
           // --------------------------------------------------- how a round works
+          // Doubles as the cast: steps 2–4 wear the agent's portrait, name and own
+          // `role` line, so the three faces are introduced here instead of in a
+          // second row that said the same thing. Step 1 wears the player's pick.
           const how = document.createElement('section');
           how.className = 'start-how';
           how.dataset.testid = 'start-how';
           how.append(sectionLabel('How a round works'));
           const steps = document.createElement('ol');
           steps.className = 'step-row';
+          /** Step 1's face, kept so a pick can repaint it without a re-render. */
+          let youFace: HTMLElement | null = null;
           for (const step of STEPS) {
             const item = document.createElement('li');
             item.className = 'step';
             item.style.setProperty('--accent', step.accent);
+            if (step.agent !== undefined) {
+              item.dataset.agent = step.agent;
+              // Kept from the cast row this section absorbed: the e2e suite reads
+              // `cast-<id>` to check each agent is introduced before the first fight.
+              item.dataset.testid = `cast-${step.agent}`;
+            }
+
             const icon = document.createElement('span');
             icon.className = 'step-icon';
-            // Static markup from `cast.ts`'s own constants; no external input.
-            icon.innerHTML = iconSvg(step.icon, step.accent);
+            if (step.agent !== undefined) {
+              icon.append(createPortrait(step.agent, { size: 60 }));
+            } else {
+              // The face alone. A crosshair glyph used to sit beside it, and between
+              // it, the number and the title the step said "this is the fight" three
+              // times — decoration, by the third telling.
+              youFace = createFighterFace(picked.player, 60);
+              icon.append(youFace);
+            }
+
+            // `01 — THE ANALYST`. The number is its own element so the rule that
+            // renders the em dash and dims the digits lives in CSS, not in a string.
             const title = document.createElement('h4');
-            title.append(document.createTextNode(step.title));
-            item.append(icon, title, line(step.text, 'step-text'));
+            const num = document.createElement('span');
+            num.className = 'step-n';
+            num.textContent = step.n;
+            title.append(num, document.createTextNode(step.title));
+            item.append(icon, title);
+
+            if (step.label !== undefined) {
+              // The thesis, as a chip on its own line: the thing with the final say
+              // is not a model. Its testid is unchanged — the e2e suite reads it.
+              const tag = document.createElement('span');
+              tag.className = 'cast-tag';
+              tag.dataset.testid = 'cast-deterministic';
+              tag.textContent = step.label;
+              item.append(tag);
+            }
+
+            item.append(line(step.text, 'step-text'));
             steps.append(item);
           }
-          how.append(steps, line('…and then the next round starts against whatever the Judge let through.', 'dim'));
+          // The "…and then the next round starts against whatever the Judge let
+          // through" line that used to close this section is gone: the ▸ arrows
+          // between the steps already read as a loop, and the line cost the title
+          // its last 20 px on the projector.
+          how.append(steps);
           card.append(how);
 
+          // ------------------------------------------------------ pick a fighter
+          const pick = document.createElement('section');
+          pick.className = 'start-pick';
+          pick.dataset.testid = 'start-pick';
+          // The caveat sits on the label's own line, right-aligned, rather than as a
+          // paragraph under the grids: a picker that looks like a class select is a
+          // picker that implies stats, so "no stats" has to be adjacent to the title
+          // — but it is a caveat, and the screen has no spare line for one.
+          pick.append(sectionLabel('Pick your fighter', 'Costumes only — the fight is identical'));
+          const sides = document.createElement('div');
+          sides.className = 'pick-sides';
+          for (const which of ['player', 'boss'] as const) {
+            const side = document.createElement('div');
+            side.className = 'pick-side';
+            side.dataset.side = which;
+            side.style.setProperty('--accent', which === 'player' ? PLAYER_ACCENT : AGENTS.boss.accent);
+
+            const label = document.createElement('h4');
+            label.textContent = which === 'player' ? 'You' : 'The boss';
+            side.append(label);
+
+            const row = document.createElement('div');
+            row.className = 'pick-row';
+            row.setAttribute('role', 'radiogroup');
+            row.setAttribute('aria-label', which === 'player' ? 'Your fighter' : "The boss's fighter");
+
+            const buttons: HTMLButtonElement[] = [];
+            for (const fighter of FIGHTER_LIST) {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'pick-btn';
+              btn.dataset.fighter = fighter.id;
+              btn.dataset.testid = `pick-${which}-${fighter.id}`;
+              // The screen's Enter/Space handler starts the fight from anywhere; a
+              // pick must not. See `onKey`, which skips anything flagged this way.
+              btn.dataset.nofight = '1';
+              btn.setAttribute('role', 'radio');
+              btn.setAttribute('aria-checked', String(picked[which] === fighter.id));
+              if (picked[which] === fighter.id) btn.dataset.on = '1';
+              btn.style.setProperty('--accent', fighter.accent);
+
+              const name = document.createElement('span');
+              name.className = 'pick-name';
+              name.textContent = fighter.name;
+              btn.append(createFighterFace(fighter.id, 64), name);
+              btn.title = fighter.tag;
+
+              btn.addEventListener('click', (ev) => {
+                // The whole overlay is the primary action's hit box, so a pick would
+                // otherwise also start the fight.
+                ev.stopPropagation();
+                picked[which] = fighter.id;
+                for (const other of buttons) {
+                  const on = other.dataset.fighter === fighter.id;
+                  other.setAttribute('aria-checked', String(on));
+                  if (on) other.dataset.on = '1';
+                  else delete other.dataset.on;
+                }
+                if (which === 'player' && youFace !== null) {
+                  const next = createFighterFace(fighter.id, 60);
+                  youFace.replaceWith(next);
+                  youFace = next;
+                }
+                onPickFighter?.(which, fighter.id);
+              });
+
+              buttons.push(btn);
+              row.append(btn);
+            }
+            side.append(row);
+            sides.append(side);
+          }
+          pick.append(sides);
+          card.append(pick);
+
           // --------------------------------------------------------- the controls
+          // No section label here any more. Four key chips and one sentence about
+          // the tells are self-evident, and the rule above them made this block
+          // compete for attention with the two that carry the argument.
           const controls = document.createElement('section');
           controls.className = 'start-controls';
           controls.dataset.testid = 'start-controls';
-          controls.append(sectionLabel('Controls'));
           const chips = document.createElement('div');
           chips.className = 'key-row';
           for (const { key, does } of KEYS) {
@@ -348,7 +554,15 @@ export function createScreens(root: HTMLElement): Screens {
           });
           label.append(box, document.createTextNode('skip this intro next time'));
 
-          foot.append(label, line(`Session seed ${seed} · press Enter to fight`, 'dim'));
+          // The bottom band is three cells: the box on the left, FIGHT in the middle,
+          // the seed on the right. The middle one is filled by `render`, which is what
+          // `primarySlot` is for — the button has to be *in* this row rather than on a
+          // line under it, or the three read as two unrelated things.
+          const slot = document.createElement('div');
+          slot.className = 'start-cta';
+          primarySlot = slot;
+
+          foot.append(label, slot, line(`Session seed ${seed} · press Enter to fight`, 'start-seed'));
           card.append(foot);
         },
         { label: 'FIGHT', run: onFight },

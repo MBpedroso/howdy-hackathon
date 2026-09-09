@@ -8,9 +8,14 @@
  * The start screen grew from "Click to fight" into the game's front door after a
  * playtest of the interlude: *"the player can't connect what's happening to who is
  * doing it."* So the screen names the three agents before the first fight, and the
- * assertions below are about that promise — three cast cards, the Judge visibly
- * marked as the one that is not a model, one round explained in four steps, and the
- * controls including the dash and the two tells.
+ * assertions below are about that promise — the Judge visibly marked as the one that
+ * is not a model, one round explained in four steps that carry the three faces, and
+ * the controls including the dash and the two tells.
+ *
+ * It then grew a second job (2026-09-08): saying *why the thing exists* to a judge
+ * who has thirty seconds and has never heard of the project, and letting the player
+ * choose a costume for both fighters. The costume is the part with a trap in it —
+ * see the last test in this file.
  */
 import { expect, test } from '@playwright/test';
 import { collectErrors, waitForBoot, waitForRound } from './helpers.ts';
@@ -89,20 +94,30 @@ test('introduces the three agents, and marks the one that is not an AI', async (
     // placeholder is the same element (see `src/ui/portrait.ts`).
     await expect(card.getByTestId(`portrait-${id}`)).toBeVisible();
   }
-  await expect(page.getByTestId('cast-analyst')).toContainText('Watches your replay');
+  await expect(page.getByTestId('cast-analyst')).toContainText('Reads your replay');
   await expect(page.getByTestId('cast-coder')).toContainText('Rewrites');
-  // The thesis: the thing with the final say is a deterministic harness.
-  await expect(page.getByTestId('cast-judge')).toContainText('Not an AI');
-  await expect(page.getByTestId('cast-judge')).toContainText('200 simulated fights');
+  // The thesis: the thing with the final say is a deterministic harness. It is said
+  // in full in the "why" block above and carried here by the chip plus the count.
+  await expect(page.getByTestId('cast-judge')).toContainText('200 simulations');
   await expect(page.getByTestId('cast-deterministic')).toHaveText('DETERMINISTIC');
+
+  // ------------------------------------------------------------------- the why
+  // Three key points, and the middle one is the project's argument. A judge who
+  // reads only this block should already know what is unusual here.
+  const why = page.getByTestId('start-why');
+  await expect(why.locator('.why')).toHaveCount(3);
+  await expect(why).toContainText('The boss writes itself');
+  await expect(why).toContainText('200 simulated fights');
 
   // -------------------------------------------------------- one round, in four
   const how = page.getByTestId('start-how');
   await expect(how.locator('.step')).toHaveCount(4);
   await expect(how).toContainText('You fight');
-  await expect(how).toContainText('The Analyst reads');
-  await expect(how).toContainText('The Coder rewrites');
-  await expect(how).toContainText('The Judge decides');
+  await expect(how).toContainText('The Analyst');
+  await expect(how).toContainText('The Coder');
+  await expect(how).toContainText('The Judge');
+  // Numbered, so the four read as a sequence and not as four unrelated cards.
+  await expect(how.locator('.step-n').first()).toHaveText('01');
 
   // The screen fades in over 140 ms (`@keyframes fade`), and a capture taken inside
   // that window is semi-transparent — which shows the arena and the HUD skeleton
@@ -153,4 +168,120 @@ test('starting the fight loads the strategy through QuickJS', async ({ page }) =
   await expect
     .poll(async () => page.evaluate(() => window.__rematch?.state?.tick ?? 0))
     .toBeGreaterThan(30);
+});
+
+/**
+ * The fighter picker, and the trap in it.
+ *
+ * The whole start overlay is the primary action's hit box — "click anywhere to
+ * fight" — which is exactly right until the screen grows eight buttons that are not
+ * that action. So the interesting assertion here is not that a pick highlights; it
+ * is that picking **twice** is still possible, i.e. that the first click did not
+ * start Round 1 underneath the menu. The same trap exists on the keyboard, where
+ * Enter on a focused button would otherwise choose a costume and start the fight in
+ * one press.
+ *
+ * The picks are cosmetic by construction (`src/ui/fighters.ts`), so nothing here
+ * asserts anything about the fight itself — that guarantee is checked structurally
+ * in `test/fighters.test.ts`, where it cannot be faked by a passing screenshot.
+ */
+test('picking a fighter for each side is remembered, and does not start the fight', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/?seed=424242');
+  await waitForBoot(page);
+
+  const pick = page.getByTestId('start-pick');
+  await expect(pick).toBeVisible();
+  // Four faces per side, and both sides present.
+  await expect(pick.locator('.pick-side[data-side="player"] .pick-btn')).toHaveCount(4);
+  await expect(pick.locator('.pick-side[data-side="boss"] .pick-btn')).toHaveCount(4);
+
+  const you = page.getByTestId('pick-player-neptune');
+  await you.click();
+  await expect(you).toHaveAttribute('aria-checked', 'true');
+  // The screen is still up: the click was a pick, not the primary action.
+  await expect(page.locator('#screen')).toHaveAttribute('data-screen', 'start');
+
+  // A second pick, on the other side. Reachable only because the first did not fight.
+  const boss = page.getByTestId('pick-boss-earth');
+  await boss.click();
+  await expect(boss).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('pick-boss-jupiter')).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('#screen')).toHaveAttribute('data-screen', 'start');
+
+  // Enter on a focused pick is that button's, not the screen's.
+  await page.getByTestId('pick-player-saturn').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('pick-player-saturn')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('#screen')).toHaveAttribute('data-screen', 'start');
+
+  expect(await page.evaluate(() => window.localStorage.getItem('rematch.fighter.player'))).toBe('saturn');
+  expect(await page.evaluate(() => window.localStorage.getItem('rematch.fighter.boss'))).toBe('earth');
+
+  // And they come back on the next visit.
+  await page.goto('/?seed=424242&intro=1');
+  await waitForBoot(page);
+  await expect(page.getByTestId('pick-player-saturn')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('pick-boss-earth')).toHaveAttribute('aria-checked', 'true');
+
+  expect(errors).toEqual([]);
+});
+
+/**
+ * The start screen at three widths.
+ *
+ * The brief for this screen (2026-09-08) asked for narrow layouts that *reorganise*
+ * rather than shrink — four steps squeezed into 90 px each is not a smaller version
+ * of the screen, it is an unreadable one. So the assertion is about column counts
+ * and about the one element that must never fall below the fold: FIGHT.
+ *
+ * Measured with `boundingBox`, not by reading CSS: the media queries are the
+ * implementation, and what matters is where the cards actually land.
+ */
+test('the start screen reorganises at narrow widths and keeps FIGHT in view', async ({ page }) => {
+  /** How many distinct left edges a row's children have = how many columns. */
+  const columns = async (selector: string): Promise<number> => {
+    const boxes = await page.locator(selector).evaluateAll((els) =>
+      els.map((el) => Math.round(el.getBoundingClientRect().left)),
+    );
+    return new Set(boxes).size;
+  };
+
+  await page.goto('/?seed=424242&intro=1');
+  await waitForBoot(page);
+
+  for (const [width, height, why, steps] of [
+    [1280, 800, 3, 4],
+    [1000, 820, 2, 2],
+    [700, 900, 1, 2],
+    [430, 900, 1, 1],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    // One frame for the media query to settle before anything is measured.
+    await page.waitForTimeout(120);
+
+    expect(await columns('.why-row > .why'), `why columns at ${width}px`).toBe(why);
+    expect(await columns('.step-row > .step'), `step columns at ${width}px`).toBe(steps);
+
+    // FIGHT is reachable without hunting for it: on screen, or at worst one short
+    // scroll from the bottom of a screen that is allowed to scroll.
+    const btn = page.getByTestId('primary');
+    await expect(btn).toBeVisible();
+    const box = await btn.boundingBox();
+    expect(box, `FIGHT has a box at ${width}px`).not.toBeNull();
+    if (box !== null) {
+      // Centred on the card at every width — it is the middle cell of the footer
+      // band, and it stays the middle cell when that band stacks.
+      const centre = box.x + box.width / 2;
+      expect(Math.abs(centre - width / 2), `FIGHT centred at ${width}px`).toBeLessThan(40);
+    }
+  }
+
+  // The two stacked layouts, for the record.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${ARTIFACTS}start-screen-narrow.png`, fullPage: true });
+  await page.setViewportSize({ width: 430, height: 900 });
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${ARTIFACTS}start-screen-phone.png`, fullPage: true });
 });

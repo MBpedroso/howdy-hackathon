@@ -19,6 +19,8 @@
  * degrades to "not remembered", which shows the intro: the safe direction.
  */
 
+import { DEFAULT_BOSS_FIGHTER, DEFAULT_PLAYER_FIGHTER, isFighterId, type FighterId } from './fighters.ts';
+
 /** The `localStorage` key. Namespaced, because the origin is shared with nothing. */
 export const SKIP_INTRO_KEY = 'rematch.skipIntro';
 
@@ -88,4 +90,46 @@ export function introDecision(options: { search?: string; remembered?: boolean }
 
   if (options.remembered === true) return { show: false, reason: 'remembered' };
   return { show: true, reason: 'first-time' };
+}
+
+/**
+ * The remembered fighter choices.
+ *
+ * Same storage discipline as `SKIP_INTRO_KEY` above and for the same reason: every
+ * read degrades to the default, because a game that will not boot because it could
+ * not remember a costume would be an absurd way to fail. Unknown or corrupted
+ * values are treated as absent — `isFighterId` is the only gate, so a stale id from
+ * an older build cannot put an undefined mascot on screen.
+ */
+export const PLAYER_FIGHTER_KEY = 'rematch.fighter.player';
+export const BOSS_FIGHTER_KEY = 'rematch.fighter.boss';
+
+/** Who the player picked last time, or the default. */
+export function readFighter(
+  which: 'player' | 'boss',
+  storage: StorageLike | null = defaultStorage(),
+): FighterId {
+  const fallback = which === 'player' ? DEFAULT_PLAYER_FIGHTER : DEFAULT_BOSS_FIGHTER;
+  if (storage === null) return fallback;
+  try {
+    const raw = storage.getItem(which === 'player' ? PLAYER_FIGHTER_KEY : BOSS_FIGHTER_KEY);
+    return isFighterId(raw) ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Remember a pick. Returns whether it persisted; the session works either way. */
+export function writeFighter(
+  which: 'player' | 'boss',
+  id: FighterId,
+  storage: StorageLike | null = defaultStorage(),
+): boolean {
+  if (storage === null) return false;
+  try {
+    storage.setItem(which === 'player' ? PLAYER_FIGHTER_KEY : BOSS_FIGHTER_KEY, id);
+    return true;
+  } catch {
+    return false;
+  }
 }
