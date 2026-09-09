@@ -288,10 +288,10 @@ body {
 }
 
 .card.start {
-  max-width: min(1220px, 96vw);
+  max-width: min(1320px, 96vw);
   width: 100%;
   margin: auto;
-  padding: 12px 26px 14px;
+  padding: 0 26px;
   text-align: left;
   display: flex;
   flex-direction: column;
@@ -315,7 +315,7 @@ body {
 
 /*
  * Section label. One rule across the card, the title at the left end and an
- * optional caveat at the right — which is where "costumes only" lives, adjacent to
+ * optional caveat at the right — which is where "cosmetics only" lives, adjacent to
  * "pick your fighter" instead of as a paragraph under the grids.
  */
 .start-label {
@@ -395,6 +395,58 @@ body {
   .card.start[data-intro]::after { content: none; }
 }
 
+/* ---- the composition: three bands on every beat
+ *
+ * The first cut let each beat stack its own content and centre the lot, which is
+ * how a web page is built and not how a game screen is: the dots and the button
+ * landed wherever the content happened to end, so they moved between beats, and a
+ * beat with less to say left a third of the viewport empty above it.
+ *
+ * Every beat is the same grid instead — a title band, a content band that takes
+ * whatever is left, and an action band pinned to the bottom. Roughly 15/70/15 at
+ * 1440x900, and the two outer bands give their padding back on a short viewport
+ * (`clamp` against `vh`) so the content band is the last thing to be squeezed.
+ */
+.card.start[data-intro] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  /* The overlay is `position: fixed` inset 0, so this is the viewport. */
+  min-height: 100%;
+}
+.intro-head {
+  padding: clamp(12px, 5vh, 58px) 0 0;
+  text-align: center;
+}
+.intro-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 2.6vh, 30px);
+  min-height: 0;
+  padding: clamp(10px, 2.4vh, 28px) 0;
+}
+.intro-foot {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 0 0 clamp(12px, 4vh, 44px);
+}
+/*
+ * The small-print row keeps a floor height on the two beats that have nothing to
+ * put in it, so the button does not jump vertically between beats. That jump was
+ * the single most website-like thing about the sequence.
+ */
+.intro-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  min-height: 15px;
+}
+
 /* ---- furniture: the progress dots */
 
 .intro-dots { display: flex; gap: 7px; align-items: center; }
@@ -407,8 +459,8 @@ body {
 .intro-dot[data-on='1'] { background: var(--player); box-shadow: 0 0 8px rgba(77, 226, 176, 0.6); }
 
 .card.start .intro-title {
-  margin: 0 0 14px;
-  font-size: 26px;
+  margin: 0;
+  font-size: clamp(22px, 2.5vw, 32px);
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--text);
@@ -417,11 +469,7 @@ body {
 
 /* ---- beat 1: the hook */
 
-.card.start[data-intro='hook'] {
-  align-items: center;
-  text-align: center;
-  gap: 0;
-}
+.card.start[data-intro='hook'] { text-align: center; }
 .hook-head { position: relative; z-index: 2; }
 .hook-kicker {
   font-size: 11px;
@@ -429,53 +477,64 @@ body {
   text-transform: uppercase;
   color: var(--text-dim);
 }
+/*
+ * Loud, but no longer the loudest: at `6.4vw` the type was twice the height of the
+ * mascots and the screen read as a headline with a picture under it. The artwork is
+ * the hero of a title screen, so the title gives room back and keeps the glow.
+ */
 .card.start .hook-title {
   margin: 6px 0 0;
-  /* The strongest thing on the screen, by a wide margin. */
-  font-size: clamp(34px, 6.4vw, 62px);
+  font-size: clamp(30px, 4.6vw, 52px);
   line-height: 1;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text);
   text-shadow: 0 0 22px rgba(255, 77, 109, 0.35);
 }
+/* The hook's content band: the art, then the promise. No gap — the mascots are
+ * meant to sit against the type above and the line below. */
+.hook-body { gap: 4px; padding-top: 0; }
 /*
- * The artwork. Pulled up under the title's baseline with a negative margin so the
- * mascots break the type's edge — the brief's "characters can slightly overlap the
- * UI boundaries" — and given a hard max height so it never pushes START off a short
- * viewport.
+ * The artwork, pulled up under the title's baseline so the mascots break the type's
+ * edge instead of sitting in a box.
+ *
+ * Sized by *both* axes rather than by width alone. `width: 100%` with a `max-height`
+ * gave the image a 1000x468 box to letterbox a 3:2 picture into, so the art rendered
+ * ~700 px wide with dead space either side and looked small on a screen that was
+ * mostly empty. `width: auto` against two maxima makes it as large as fits.
  */
 .hook-art {
   position: relative;
   z-index: 1;
-  width: min(860px, 94vw);
-  margin: -14px auto -8px;
+  margin: -18px auto 0;
   line-height: 0;
 }
 .hook-art-img {
   display: block;
-  width: 100%;
+  width: auto;
   height: auto;
-  max-height: min(52vh, 470px);
-  object-fit: contain;
+  max-width: min(1080px, 92vw);
+  /* The brief's 45-55% of the viewport, and the reason the band above gives up its
+   * padding first on a short screen. */
+  max-height: 52vh;
   opacity: 0;
-  transition: opacity 220ms linear;
+  transform: scale(0.985);
+  transition: opacity 260ms linear, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.hook-art[data-ok='1'] .hook-art-img { opacity: 1; }
+/* The one entrance animation in the sequence, and it is on the hero only: the
+ * mascots settle in as the art decodes. Everything else wipes with the card. */
+.hook-art[data-ok='1'] .hook-art-img { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .hook-art-img { transition: none; transform: none; }
+}
 .card.start p.hook-sub {
   position: relative;
   z-index: 2;
-  margin: 0 0 4px;
-  font-size: 13px;
+  margin: 0;
+  font-size: clamp(12px, 1.1vw, 15px);
   letter-spacing: 0.3em;
   text-transform: uppercase;
   color: var(--slam);
-}
-.hook-foot {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  margin: 14px 0 4px;
 }
 .intro-skip {
   border: 0;
@@ -492,101 +551,165 @@ body {
 
 /* ---- beat 2: the concept */
 
-.card.start[data-intro='concept'] { align-items: center; }
+/*
+ * The loop diagram. It belongs to the title band, directly under the heading, so
+ * the mechanic is stated before the three cards explain it.
+ *
+ * Read as a diagram rather than as three buttons: the nodes sit on one drawn rail,
+ * and the arrows are the same amber as the boss's tells because they are the same
+ * kind of information — "this leads to that".
+ */
 .concept-flow {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin-bottom: 18px;
+  gap: 0;
+  margin: clamp(14px, 2.4vh, 26px) auto 0;
+  position: relative;
+  width: fit-content;
+  max-width: 94vw;
+  flex-wrap: wrap;
+}
+.concept-flow::before {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+  z-index: 0;
 }
 .flow-node {
-  padding: 7px 16px;
+  position: relative;
+  z-index: 1;
+  padding: 11px 24px;
   border: 1px solid var(--border);
   border-top: 2px solid var(--player);
   background: #0a0c12;
-  font-size: 11.5px;
+  font-size: clamp(11px, 1vw, 13.5px);
   letter-spacing: 0.24em;
   text-transform: uppercase;
   color: var(--text);
 }
-.flow-arrow { color: var(--slam); font-size: 15px; }
+.flow-arrow {
+  position: relative;
+  z-index: 1;
+  color: var(--slam);
+  font-size: 19px;
+  padding: 0 14px;
+  background: var(--void);
+}
+/*
+ * The three cards are the beat's content, so they take the content band's width
+ * (~78% of a 1440 viewport) and the type is sized to be read from a couch rather
+ * than to fit. The left rule steps from dim to bright across the three: the boss
+ * is being narrowed down, and the progression should be visible before it is read.
+ */
 .concept-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
   margin: 0;
   padding: 0;
   list-style: none;
-  width: min(1000px, 94vw);
+  width: min(1180px, 92vw);
+  /* Enough height to read as a panel row rather than as three text blocks, and no
+   * more: at 40vh the card was twice its content and the emptiness moved inside it,
+   * where it looks like a loading state. Three sentences on a 1280x800 screen leave
+   * air somewhere — better above and below the row than inside the panels. */
+  min-height: min(27vh, 225px);
 }
 .concept-step {
-  padding: 16px 16px 18px;
+  padding: clamp(18px, 2.4vh, 28px) clamp(18px, 1.8vw, 26px);
   border: 1px solid var(--border);
   border-top: 2px solid var(--boss);
   background: #0a0c12;
+  position: relative;
+  /* Tall panel, content centred in it. Pushing the number to the top edge and the
+   * sentence to the bottom was tried first and moved the void from around the card
+   * to inside it, which is worse: an empty card looks like a loading state. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
+.concept-step:nth-child(1) { border-top-color: rgba(255, 77, 109, 0.4); }
+.concept-step:nth-child(2) { border-top-color: rgba(255, 77, 109, 0.7); }
 .concept-n {
   display: block;
-  font-size: 20px;
+  font-size: clamp(26px, 2.6vw, 38px);
   letter-spacing: 0.14em;
   color: var(--boss);
   opacity: 0.7;
 }
 .concept-step h4 {
-  margin: 6px 0 6px;
-  font-size: 14px;
+  margin: 10px 0 8px;
+  font-size: clamp(14px, 1.25vw, 17px);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text);
 }
 .card.start .concept-step p.concept-text {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: clamp(13px, 1.05vw, 15px);
+  line-height: 1.6;
   color: var(--text);
   opacity: 0.9;
 }
 
 /* ---- beat 3: the agents */
 
-.card.start[data-intro='agents'] { align-items: center; }
 .agent-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  width: min(1020px, 94vw);
+  gap: 26px;
+  width: min(1200px, 92vw);
+  min-height: min(34vh, 285px);
   /* The chain: Analyst feeds Coder, Coder passes through Judge. Drawn as arrows in
    * the gaps rather than as a separate diagram, so the cards *are* the flow. */
   position: relative;
 }
 .agent-card {
   position: relative;
-  padding: 14px 16px 16px;
+  padding: clamp(16px, 2.2vh, 24px) clamp(16px, 1.6vw, 24px);
   border: 1px solid var(--border);
   border-top: 2px solid var(--accent);
   background: #0a0c12;
+  /* Same panel composition as a concept step, so beats 2 and 3 read as one
+   * sequence: illustration, name, sentence, centred in a tall card. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
+/*
+ * The pipeline arrow. It sits in the gap, centred on the portrait's eye line, and
+ * it is drawn as a rule plus a head so it reads as a connection between two cards
+ * rather than as a glyph that happens to be between them.
+ */
 .agent-card + .agent-card::before {
   content: '→';
   position: absolute;
-  left: -13px;
-  top: 42px;
+  left: -26px;
+  width: 26px;
+  text-align: center;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--slam);
-  font-size: 15px;
+  font-size: 20px;
+  line-height: 1;
 }
-.agent-card .rm-portrait { margin-bottom: 8px; }
+.agent-card .rm-portrait { align-self: flex-start; margin-bottom: 0; }
 .agent-card h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
+  margin: 16px 0 6px;
+  font-size: clamp(14px, 1.25vw, 17px);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--accent);
 }
 .card.start .agent-card p.agent-role {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: clamp(13px, 1.05vw, 15px);
+  line-height: 1.6;
   color: var(--text);
   opacity: 0.9;
 }
@@ -596,14 +719,21 @@ body {
  */
 .agent-card[data-agent='judge'] {
   border: 1px solid var(--accent);
-  outline: 1px solid rgba(239, 68, 68, 0.22);
+  outline: 1px solid rgba(239, 68, 68, 0.18);
   outline-offset: 3px;
+  /* The stripes got wider and fainter as the card grew: at 6 px and 0.05 alpha on a
+   * card half this size they read as texture, and at this size as a warning label
+   * over the sentence that has to be read. */
   background:
-    repeating-linear-gradient(-45deg, rgba(239, 68, 68, 0.05) 0 6px, transparent 6px 12px),
+    repeating-linear-gradient(-45deg, rgba(239, 68, 68, 0.035) 0 9px, transparent 9px 18px),
     #0a0c12;
 }
 .cast-tag {
   display: inline-block;
+  /* The card is a flex column, so an inline-block child stretches to its width
+   * unless told otherwise — and a full-width DETERMINISTIC chip reads as a banner
+   * over the Judge's sentence rather than as a label on its name. */
+  align-self: flex-start;
   margin: 0 0 6px;
   font-size: 9px;
   letter-spacing: 0.2em;
@@ -613,8 +743,8 @@ body {
   font-weight: 700;
 }
 .card.start p.agent-closing {
-  margin: 16px 0 0;
-  font-size: 13px;
+  margin: 0;
+  font-size: clamp(13px, 1.1vw, 15px);
   letter-spacing: 0.06em;
   color: var(--text-dim);
   text-align: center;
@@ -623,13 +753,19 @@ body {
 
 /* ---- beat 4: the arena */
 
-.card.start[data-intro='arena'] { align-items: center; }
+/*
+ * The last beat is two jobs at once — the dramatic close and the game's setup — and
+ * the first cut gave them equal weight, so the promise was as tall as the picker
+ * and the picker was the smallest interactive thing on the screen. The statement
+ * keeps the top band and loses a third of its height; the picker becomes the
+ * content band and grows.
+ */
 .card.start .arena-title {
   display: grid;
-  gap: 2px;
+  gap: 0;
   margin: 0;
-  font-size: clamp(24px, 3.6vw, 40px);
-  line-height: 1.06;
+  font-size: clamp(21px, 2.7vw, 33px);
+  line-height: 1.14;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text);
@@ -637,23 +773,19 @@ body {
 }
 .card.start .arena-title span:last-child { color: var(--boss); }
 .card.start p.arena-sub {
-  margin: 8px 0 4px;
-  font-size: 12px;
+  margin: 10px 0 0;
+  font-size: clamp(11px, 0.95vw, 13px);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--text-dim);
   text-align: center;
 }
+/* The picker leads and the controls are reference material under it, so they are
+ * two blocks with air between rather than one stack of rows. */
+.arena-body { gap: clamp(16px, 3.4vh, 38px); }
 .card.start[data-intro='arena'] .start-pick,
 .card.start[data-intro='arena'] .start-controls {
-  width: min(1020px, 94vw);
-}
-.arena-foot {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  width: min(1180px, 92vw);
 }
 .card.start p.arena-hint {
   margin: 0;
@@ -662,52 +794,6 @@ body {
   text-transform: uppercase;
   color: var(--text);
   opacity: 0.62;
-}
-
-/* ---- pick your fighter: two radio grids, cosmetic only */
-
-.pick-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.pick-side {
-  padding: 8px 12px 10px;
-  border: 1px solid var(--border);
-  border-top: 2px solid var(--accent);
-  background: #0a0c12;
-}
-.pick-side h4 {
-  margin: 0 0 8px;
-  font-size: 12px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-.pick-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.pick-btn {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  padding: 6px 4px 5px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  cursor: pointer;
-  /* The unselected state is dimmed rather than greyscaled: the four mascots are
-   * told apart by colour, and a greyscale row of four balls is a row of four balls. */
-  opacity: 0.68;
-  transition: opacity 120ms linear, border-color 120ms linear;
-}
-.pick-btn:hover, .pick-btn:focus-visible { opacity: 0.9; border-color: var(--accent); }
-.pick-btn[data-on='1'] {
-  opacity: 1;
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-  color: var(--text);
-}
-.pick-name {
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
 }
 
 /* ---- a fighter's face: the mascot crop, or the SVG stand-in under it */
@@ -728,26 +814,26 @@ body {
 
 /* ---- pick your fighter: two radio grids, cosmetic only */
 
-.pick-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.pick-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .pick-side {
-  padding: 8px 12px 10px;
+  padding: clamp(10px, 1.6vh, 16px) clamp(12px, 1.4vw, 20px) clamp(12px, 1.8vh, 18px);
   border: 1px solid var(--border);
   border-top: 2px solid var(--accent);
   background: #0a0c12;
 }
 .pick-side h4 {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 12px;
+  font-size: clamp(12px, 1.05vw, 14px);
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--accent);
 }
-.pick-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pick-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .pick-btn {
   display: grid;
   justify-items: center;
-  gap: 4px;
-  padding: 6px 4px 5px;
+  gap: 6px;
+  padding: 10px 6px 8px;
   border: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
@@ -768,20 +854,19 @@ body {
   color: var(--text);
 }
 .pick-name {
-  font-size: 11px;
+  font-size: clamp(11px, 0.95vw, 12.5px);
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
-
 /* ---- controls */
 
-.key-row { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+.key-row { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
 .key {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 11.5px;
+  gap: 8px;
+  font-size: clamp(11.5px, 1vw, 13px);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text);
@@ -798,8 +883,8 @@ body {
   padding: 3px 7px;
 }
 .card.start p.start-tells {
-  margin: 8px 0 0;
-  font-size: 12.5px;
+  margin: 12px 0 0;
+  font-size: clamp(12.5px, 1.05vw, 14px);
   line-height: 1.5;
   color: var(--text);
   opacity: 0.82;
@@ -808,12 +893,23 @@ body {
 
 /* ---- the footer, the box and the button */
 
+/*
+ * One button across the sequence: START, NEXT and ENTER THE ARENA are the same
+ * component at the same size in the same slot, so the primary action never has to
+ * be looked for. The last one is a little larger because it is the last one.
+ */
 .card.start .btn {
   align-self: center;
   margin-top: 0;
   font-size: 15px;
   letter-spacing: 0.3em;
-  padding: 11px 44px;
+  padding: 12px 46px;
+  min-width: 260px;
+}
+.card.start[data-intro='arena'] .btn {
+  font-size: 17px;
+  padding: 14px 54px;
+  min-width: 300px;
 }
 
 /*
@@ -827,24 +923,28 @@ body {
  */
 @media (max-width: 1120px), (max-height: 760px) {
   .card.start { gap: 10px; }
-  .hook-title { font-size: clamp(28px, 7vw, 44px); }
-  .hook-art { margin-top: -8px; }
-  .hook-art-img { max-height: min(38vh, 320px); }
+  .card.start .hook-title { font-size: clamp(26px, 5.4vw, 40px); }
+  .hook-art { margin-top: -10px; }
+  .hook-art-img { max-height: 42vh; }
+  .agent-card .rm-portrait { margin-bottom: 8px; }
+  .intro-body { gap: 12px; }
 }
 
 @media (max-width: 860px) {
   /* Two beats stack their cards: three columns of six words is not a sentence. */
   .concept-row, .agent-row { grid-template-columns: minmax(0, 1fr); }
-  .agent-card + .agent-card::before { content: '↓'; left: 50%; top: -14px; }
+  .agent-row { gap: 18px; }
+  .agent-card + .agent-card::before { content: '↓'; left: 50%; width: auto; top: -15px; transform: none; }
   .pick-sides { grid-template-columns: minmax(0, 1fr); }
   /* YOU and THE BOSS stack, and each keeps its own four faces in one row. */
   .pick-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .concept-flow { flex-wrap: wrap; }
+  .concept-flow::before { content: none; }
 }
 
 @media (max-width: 520px) {
   .start-label { flex-direction: column; gap: 4px; }
   .start-label-aside { text-align: left; }
-  .arena-foot { flex-direction: column; gap: 6px; }
-  .card.start .btn { padding: 11px 26px; font-size: 13px; }
+  .intro-meta { flex-direction: column; gap: 6px; }
+  .card.start .btn,
+  .card.start[data-intro='arena'] .btn { padding: 11px 26px; font-size: 13px; min-width: 0; }
 }

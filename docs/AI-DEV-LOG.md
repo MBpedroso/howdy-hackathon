@@ -967,8 +967,9 @@ on screen:
   shared stylesheet outranks every bare class anyone writes later.
 - **`START` overlapped the dots and `SKIP INTRO`.** A margin, not a bug in anything.
 - **The hero's edge feather greyed Saturn's white head.** `scripts/prepare-hero.py`
-  dissolves the artwork's vignette into the page with a smoothstep on the alpha; at
-  `FEATHER = 0.14` the falloff reached inside the top mascot. 0.07 and regenerated.
+  dissolves the artwork's black ground into the page with a smoothstep on the alpha;
+  at `FEATHER = 0.14` the falloff reached inside the top mascot. Dropped to 0.07,
+  which turned out to be the other horn of the same dilemma — see the next entry.
 
 A "beat is visible and fits" assertion cannot see any of those. Looking at the four files
 is still the check that finds them, and it took one minute against a suite that takes 38 s.
@@ -978,6 +979,113 @@ is still the check that finds them, and it took one minute against a suite that 
 `cast.ts`'s Judge line was `"Not an AI. Runs 200 simulated fights…"`. "Not an AI" moved to
 the DETERMINISTIC chip on the same card, because the card was making the same claim twice
 while being the shortest thing on screen that has to land.
+
+## 2026-09-09 (later) — the same four screens, composed instead of centred
+
+A layout brief on the finished sequence: the direction is right, the proportions are
+not. Every beat centred its own content in the viewport, which is how a web page is
+built and not how a game screen is — the dots and the button landed wherever the
+content happened to end, so they moved between beats, and a beat with three sentences
+in it left a third of the screen empty above them. "It should not feel like a website
+with four centered informational sections."
+
+**Every beat is the same three-band grid now**: a title band, a content band that
+takes what is left, and an action band pinned to the bottom (`introFoot` in
+`ui/screens.ts`, `.intro-head` / `.intro-body` / `.intro-foot` in `styles.css`).
+Roughly 15/70/15 at 1440x900, and the outer bands are `clamp`ed against `vh` so they
+give their padding back before the content is squeezed. The consequence worth having
+is that START, NEXT and ENTER THE ARENA are the same component in the same place on
+all four screens, so the primary action is never looked for.
+
+Then the proportions inside the bands: the title gave room back to the artwork
+(`6.4vw` to `4.6vw`) and the artwork became the hero at ~52vh, the concept and agent
+rows went from ~69% to ~78% of the viewport width with body copy up from 12.5 px to
+15 px, and the arena's promise lost a third of its height so the fighter picker —
+the only interactive thing on the screen — could be the largest.
+
+### The artwork was letterboxing itself
+
+`.hook-art-img` was `width: 100%` with a `max-height`, which gives a 3:2 picture a
+1000x468 box to sit in: `object-fit: contain` then rendered it ~700 px wide with dead
+space either side. The art looked small on a screen that was mostly empty *because*
+the CSS was sizing the box and not the image. `width: auto` against two maxima fixed
+it in one line, and is the reason the enlargement was free.
+
+### The feather dilemma, resolved by keying it on brightness
+
+Enlarging the hero made its black ground's edge obvious — a visible rectangle on the
+page, the exact thing the feather exists to prevent. But the feather could not simply
+be widened: 0.14 had already been rejected for greying the top mascot's head. There
+is no width that avoids both, because the characters reach much closer to the frame
+than they look.
+
+So the ramp is combined with a brightness gate: anything that is not the black ground
+stays fully opaque whatever its distance from the edge, which frees the feather to be
+wide enough to actually dissolve (`FEATHER = 0.22`). Sound because the ground is
+(0, 0, 0) and the page is #07080c — once the edge is gone, nobody can tell where the
+art ends. Two byproducts: the first regeneration used the wrong file out of
+`~/Downloads` and produced a square hero, which is why the script now prints its
+output dimensions; and the alpha channel costs ~40 KB (897 -> 938 KB).
+
+### What "give the panels height" cost before it worked
+
+Three passes. `min-height: 40vh` on the concept row with the number pinned top and
+the sentence pinned bottom moved the emptiness from around the card to *inside* it,
+where it reads as a loading state. Centring the content in a 40vh card was no better.
+27vh with centred content is the version that ships: enough to read as a panel row,
+not enough to look hollow. Three sentences on a 1280x800 screen leave air somewhere,
+and above and below the row is the least bad place for it.
+
+Also fixed on the way through: `display: flex` on the agent cards stretched the
+DETERMINISTIC chip to the full card width, which turned a label on the Judge's name
+into a banner over its sentence (`align-self: flex-start`), and the picker CSS block
+was in the file twice — the second copy was the live one.
+
+### A second viewport in the suite
+
+The brief asked for balance at 1440x900 and the suite only knew about the 1280x800
+projector. The bands are sized in `vh`, so the two genuinely disagree: a taller
+viewport gives the content band its room back, and a beat that fits one can be wrong
+on the other. `e2e/boot.spec.ts` now walks the beats at both and keeps a screenshot
+per beat per size — `intro-N-<beat>.png` and `intro-wide-N-<beat>.png` — because the
+last three defects here were all things an assertion passed and a picture did not.
+
+## 2026-09-09 — a playtest finding: RETRY handed you the Round 1 boss
+
+Reported from play, on the third round: *"ele estava realmente bem difícil. Depois que
+eu perdi uma vez e iniciei de novo, parece que ele voltou pro nível mais fácil
+possível."* It had. `startRound` reads "no source supplied" as "use the bundled
+file", and the defeat screen's RETRY passed the round index alone:
+
+```ts
+onRetry: () => { void startRound(finished.index); }   // app.ts, until today
+```
+
+So dying on Round 3 and pressing RETRY restarted Round 3 against **Cornerbreaker**,
+the Round 1 boss and the easiest strategy that ships, while the HUD still said Round
+3. One line, and it quietly undid the loop the whole project argues for: the boss the
+agents wrote for you survived exactly one attempt and then evaporated — and it
+evaporated at the moment a player is most likely to be paying attention to how hard
+the boss is, having just been beaten by it.
+
+The fix passes what the round actually ran (`finished.source`) plus the provenance
+captured at defeat, so the retry is the same fight: same seed (`roundSeed` is a
+function of the session seed and the round index), same strategy, same "written for
+you" chip. `driveWith` had been doing exactly this since the AC 3 replay hook landed,
+three lines away, which is the annoying part.
+
+### The test, and why it is a timeout rather than a death
+
+`e2e/controls.spec.ts` now starts Round 3 against a probe boss that paces and never
+attacks, runs it to the tick limit, and asserts the strategy's name across the defeat
+screen and the retry. A timeout is `outcome !== 'playerWon'`, so it reaches the same
+screen a real death does without needing to lose a fight by hand. Checked against the
+bug before committing: the assertion reads `Cornerbreaker` where it should read
+`Retry Probe`.
+
+Which is also a note on the deferred `timeout = boss win` item — the outcome is
+already a loss for the player everywhere except in Gate 3's bookkeeping, and that
+asymmetry is what makes this test cheap to write.
 
 ## Open — dated placeholders
 

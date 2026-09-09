@@ -128,6 +128,36 @@ test('the intro fits the projector without scrolling on any beat', async ({ page
   }
 });
 
+/**
+ * The other desktop the intro is judged on.
+ *
+ * 1280x800 is the projector; 1440x900 is what the layout brief asked it to feel
+ * balanced at, and the two disagree — the bands are sized in `vh`, so a taller
+ * viewport gives the content band its room back and a beat that fits one can still
+ * be wrong on the other. Both sizes are asserted, and this one keeps its own
+ * screenshots so the composition can be looked at rather than only measured.
+ */
+test.describe('at 1440x900', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('every beat still fits, and is shot for review', async ({ page }) => {
+    await page.goto('/?seed=424242&intro=1');
+    await waitForBoot(page);
+    const beats = ['hook', 'concept', 'agents', 'arena'] as const;
+    for (const [i, beat] of beats.entries()) {
+      await expect(page.locator('#screen')).toHaveAttribute('data-intro', beat);
+      const overflow = await page.evaluate(() => {
+        const el = document.querySelector('#screen');
+        return el === null ? 0 : el.scrollHeight - el.clientHeight;
+      });
+      expect(overflow, `${beat} overflows by ${overflow}px`).toBeLessThan(8);
+      await page.waitForTimeout(320);
+      await page.screenshot({ path: `${ARTIFACTS}intro-wide-${i + 1}-${beat}.png` });
+      if (beat !== 'arena') await page.getByTestId('primary').click();
+    }
+  });
+});
+
 test('the concept and the agents beats explain the loop and who runs it', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/?seed=424242');

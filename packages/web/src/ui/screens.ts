@@ -231,7 +231,51 @@ export function createScreens(root: HTMLElement): Screens {
     skip: () => void;
   };
 
-  /** `● ● ○ ○` — where you are in the four. */
+  /**
+   * The bottom band, identical on all four beats: the dots, the action, then one
+   * line of small print.
+   *
+   * It exists because the first cut let every beat put its own furniture wherever
+   * its content happened to end, so the dots and the button moved between screens
+   * and the sequence read as four pages rather than one machine. The button is
+   * planted here through `primarySlot`, and the small-print row keeps a floor
+   * height even when a beat has nothing to say in it — otherwise the action jumps
+   * vertically on the two beats that do.
+   */
+  function introFoot(screen: IntroScreen, ctx: IntroCtx): HTMLElement {
+    const foot = document.createElement('footer');
+    foot.className = 'intro-foot';
+    foot.append(introDots(screen));
+
+    const slot = document.createElement('div');
+    slot.className = 'intro-primary';
+    foot.append(slot);
+    primarySlot = slot;
+
+    const meta = document.createElement('div');
+    meta.className = 'intro-meta';
+    if (screen === 'hook') {
+      // The secondary way out. A returning player should not have to sit through
+      // four beats, and should not have to hunt for the way past them either.
+      const skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'intro-skip';
+      skipBtn.dataset.testid = 'skip-intro';
+      skipBtn.dataset.nofight = '1';
+      skipBtn.textContent = 'Skip intro';
+      skipBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ctx.skip();
+      });
+      meta.append(skipBtn);
+    } else if (screen === 'arena') {
+      meta.append(line('Press Enter to start', 'arena-hint'), line(`Session seed ${ctx.seed}`, 'start-seed'));
+    }
+    foot.append(meta);
+    return foot;
+  }
+
+  /** `● ● ○ ○` — where you are in the four. Same slot on every beat. */
   function introDots(screen: IntroScreen): HTMLElement {
     const dots = document.createElement('div');
     dots.className = 'intro-dots';
@@ -269,7 +313,7 @@ export function createScreens(root: HTMLElement): Screens {
     const pick = document.createElement('section');
     pick.className = 'start-pick';
     pick.dataset.testid = 'start-pick';
-    pick.append(sectionLabel('Pick your fighter', 'Costumes only — the fight is identical'));
+    pick.append(sectionLabel('Pick your fighter', 'Cosmetics only — the fight is identical'));
     const sides = document.createElement('div');
     sides.className = 'pick-sides';
     for (const which of ['player', 'boss'] as const) {
@@ -305,7 +349,7 @@ export function createScreens(root: HTMLElement): Screens {
         const name = document.createElement('span');
         name.className = 'pick-name';
         name.textContent = fighter.name;
-        btn.append(createFighterFace(fighter.id, 64), name);
+        btn.append(createFighterFace(fighter.id, 100), name);
         btn.title = fighter.tag;
 
         btn.addEventListener('click', (ev) => {
@@ -368,14 +412,17 @@ export function createScreens(root: HTMLElement): Screens {
    *
    * Each branch is a screen and they share almost nothing on purpose — the point of
    * the sequence is that a beat is one idea, so a shared skeleton would only be a
-   * place for a second idea to creep back in. The progress dots and the primary
-   * button are the only furniture every screen carries, and the button comes from
-   * `render`.
+   * place for a second idea to creep back in.
+   *
+   * What every beat *does* share is the composition: a title band, a content band,
+   * and `introFoot`'s action band. The bands are the reason the dots and the button
+   * do not move between screens, which is what made the first cut read as four web
+   * pages instead of one attract sequence.
    */
   function buildIntro(card: HTMLElement, screen: IntroScreen, ctx: IntroCtx): void {
     if (screen === 'hook') {
       const head = document.createElement('header');
-      head.className = 'hook-head';
+      head.className = 'intro-head hook-head';
       const kick = document.createElement('div');
       kick.className = 'hook-kicker';
       kick.textContent = 'Howdy Hackathon';
@@ -407,32 +454,21 @@ export function createScreens(root: HTMLElement): Screens {
       sub.className = 'hook-sub';
       sub.textContent = 'Five rounds. One boss. It adapts.';
 
-      // The secondary way out, small and next to the dots — a returning player
-      // should not have to sit through four beats, and should not have to hunt for
-      // the way past them either.
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'intro-skip';
-      skipBtn.dataset.testid = 'skip-intro';
-      skipBtn.dataset.nofight = '1';
-      skipBtn.textContent = 'Skip intro';
-      skipBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        ctx.skip();
-      });
+      const body = document.createElement('div');
+      body.className = 'intro-body hook-body';
+      body.append(art, sub);
 
-      const foot = document.createElement('div');
-      foot.className = 'hook-foot';
-      foot.append(introDots(screen), skipBtn);
-      card.append(head, art, sub, foot);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
     if (screen === 'concept') {
+      const head = document.createElement('header');
+      head.className = 'intro-head';
       const title = document.createElement('h1');
       title.className = 'intro-title';
       title.textContent = 'The boss learns';
-      card.append(title, flowRow(CONCEPT_FLOW, 'concept-flow'));
+      head.append(title, flowRow(CONCEPT_FLOW, 'concept-flow'));
 
       const steps = document.createElement('ol');
       steps.className = 'concept-row';
@@ -447,15 +483,21 @@ export function createScreens(root: HTMLElement): Screens {
         item.append(n, h, line(step.text, 'concept-text'));
         steps.append(item);
       }
-      card.append(steps, introDots(screen));
+
+      const body = document.createElement('div');
+      body.className = 'intro-body';
+      body.append(steps);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
     if (screen === 'agents') {
+      const head = document.createElement('header');
+      head.className = 'intro-head';
       const title = document.createElement('h1');
       title.className = 'intro-title';
       title.textContent = 'Three agents. One fight.';
-      card.append(title);
+      head.append(title);
 
       const cards = document.createElement('div');
       cards.className = 'agent-row';
@@ -465,7 +507,10 @@ export function createScreens(root: HTMLElement): Screens {
         item.dataset.agent = agent.id;
         item.dataset.testid = `cast-${agent.id}`;
         item.style.setProperty('--accent', agent.accent);
-        item.append(createPortrait(agent.id, { size: 84 }));
+        // 84 px on the old single screen, where this was one block of six. It is a
+        // whole beat now and the illustration is the fastest way to tell the three
+        // apart, so it gets the room.
+        item.append(createPortrait(agent.id, { size: 112 }));
 
         const name = document.createElement('h3');
         name.textContent = `The ${agent.name.replace(/^The /, '')}`;
@@ -482,7 +527,6 @@ export function createScreens(root: HTMLElement): Screens {
         item.append(line(agent.role, 'agent-role'));
         cards.append(item);
       }
-      card.append(cards);
 
       const closing = document.createElement('p');
       closing.className = 'agent-closing';
@@ -490,7 +534,11 @@ export function createScreens(root: HTMLElement): Screens {
         document.createTextNode('The boss can change. '),
         strong('The Judge decides what gets through.'),
       );
-      card.append(closing, introDots(screen));
+
+      const body = document.createElement('div');
+      body.className = 'intro-body';
+      body.append(cards, closing);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
@@ -503,13 +551,19 @@ export function createScreens(root: HTMLElement): Screens {
       row.textContent = part;
       promise.append(row);
     }
-    card.append(promise, line('Every round makes the fight different.', 'arena-sub'));
-    card.append(fighterPicker(ctx), controlsBlock());
+    const head = document.createElement('header');
+    head.className = 'intro-head arena-head';
+    head.append(promise, line('Every round makes the fight different.', 'arena-sub'));
 
-    const foot = document.createElement('div');
-    foot.className = 'arena-foot';
-    foot.append(line('Press Enter to start', 'arena-hint'), line(`Session seed ${ctx.seed}`, 'start-seed'));
-    card.append(introDots(screen), foot);
+    // The picker is the beat's main interactive section and the controls are
+    // reference material under it, so they are two blocks with a gap rather than
+    // one stack — the first cut ran them together and the fight's four keys read as
+    // a fifth row of the fighter grid.
+    const body = document.createElement('div');
+    body.className = 'intro-body arena-body';
+    body.append(fighterPicker(ctx), controlsBlock());
+
+    card.append(head, body, introFoot(screen, ctx));
   }
 
   return {

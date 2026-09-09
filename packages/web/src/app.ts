@@ -267,12 +267,28 @@ export function createApp(options: AppOptions): App {
     const hash = finished.hash();
 
     if (finished.state.outcome !== 'playerWon') {
+      // Retry the round you lost, against the boss you lost to.
+      //
+      // This passed the index alone until 2026-09-09, and `startRound` reads "no
+      // source" as "the bundled file" — so dying on Round 3 and pressing RETRY
+      // restarted Round 3 against the *round-1* boss. Which is the easiest strategy
+      // in the game, silently, at the exact moment the player is being told they
+      // are retrying the hard one. A playtest caught it ("depois que eu perdi uma
+      // vez e iniciei de novo, parece que ele voltou pro nível mais fácil
+      // possível"), and it had been eating the whole point of a round the agents
+      // wrote: the adapted boss existed for one attempt and then evaporated.
+      //
+      // `finished.source` is the text the round actually ran, so the retry is the
+      // same fight — same seed (`roundSeed` is a function of the round index), same
+      // strategy, same provenance chip. It is the same thing `driveWith` does.
+      const source = finished.source;
+      const provenance = roundProvenance;
       screens.gameOver({
         round: finished.index,
         strategy: finished.state.strategy.name,
         rationale: finished.state.strategy.rationale,
         onRetry: () => {
-          void startRound(finished.index);
+          void startRound(finished.index, source, false, provenance);
         },
       });
       return;
