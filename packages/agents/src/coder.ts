@@ -55,6 +55,8 @@ export type CoderInput = {
    * this candidate is aimed.
    */
   bracket?: CoderBracket;
+  /** The measured player profile, already rendered. Same for every candidate of an attempt. */
+  profile?: string;
 };
 
 export type CoderResult = {
@@ -117,6 +119,7 @@ export async function runCoder(
       ...(input.rejection === undefined ? {} : { rejection: input.rejection }),
       ...(input.dial === undefined ? {} : { dial: input.dial }),
       ...(input.bracket === undefined ? {} : { bracket: input.bracket }),
+      ...(input.profile === undefined ? {} : { profile: input.profile }),
       ...(selfRetry === undefined ? {} : { selfRetry: { violations: selfRetry } }),
     });
     promptChars = promptSize(prompt);

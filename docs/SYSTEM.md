@@ -135,8 +135,11 @@ Return one of six actions. That is the entire output alphabet:
 
 Its inputs are the tick, the arena size, boss and player kinematics, live projectiles,
 and three summaries (`playerPosHeat` 8×8 summing to 1, `playerDashDirs` 8 bins,
-`playerShotsDuring` per primitive) — **cumulative from tick 0, not rolling**, which the
-contract's own comment calls them and which §13 delta 20 of the spec now records. It can keep an opaque `Memory` object between ticks
+`playerShotsDuring` per primitive) — **cumulative from tick 0, not rolling**, a property
+§13 delta 20 of the spec records and `harnessHints` (`packages/agents/src/context/prompts.ts`)
+warns the Coder about explicitly; the contract's own type comment
+(`packages/contract/src/types.ts`) is silent on cumulative-vs-rolling and should not be
+read as making the claim. It can keep an opaque `Memory` object between ticks
 and call a seeded `rand()`.
 
 ### What it cannot do

@@ -57,6 +57,7 @@ import {
 } from '@rematch/harness';
 import { runAnalyst } from './analyst.ts';
 import { runCoder, type CoderResult } from './coder.ts';
+import { renderPlayerProfile } from './context/playerProfile.ts';
 import { extractMeta } from './meta.ts';
 import type { AttemptLog, CandidateLog, Emit, FailureReason, RewriteEvent, RewriteResult } from './events.ts';
 import {
@@ -278,6 +279,15 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
     }
 
     // ------------------------------------------------------------ the attempts
+    /**
+     * The measured player profile (analysis item 7), rendered once for the whole
+     * run: it is a pure function of `input.summary`, which does not change across
+     * attempts or candidates, so computing it per `runCoder` call would spend
+     * cycles to produce the same string every time. Every candidate of every
+     * attempt gets the identical string — cache-safe, and consistent with the
+     * cached system prompt staying byte-identical (spec §6.3).
+     */
+    const profile = renderPlayerProfile(input.summary);
     let prevSource = input.prevSource;
     let rejection: CoderRejection | undefined;
     const candidateCount = Math.max(
@@ -361,6 +371,7 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
             ...(rejection === undefined ? {} : { rejection }),
             ...(dial === undefined ? {} : { dial }),
             ...(bracket === undefined || candidateCount <= 1 ? {} : { bracket }),
+            profile,
           },
           providers.coder,
           {
@@ -639,27 +650,66 @@ export function panelRate(gates: readonly GateResult[]): number | undefined {
 }
 
 /**
+ * The width, in panel win rate, of one "equally fair" bucket for `chooseCandidate`.
+ *
+ * Two approved candidates at panel 0.43 and 0.45 are not two different answers —
+ * they are the same answer measured twice. `harnessRules`' own arithmetic says why:
+ * each panel bot's rate is near-binary over its 25 matches, so the mean over four
+ * bots moves in steps of 0.25 divided by the ~8 phase-roll increments a `rand()`
+ * threshold can resolve, 0.25/8 ≈ 0.03 — distances inside that step are the
+ * measurement's own noise floor, not a real difference in how hard the boss is.
+ */
+const DIST_BUCKET = 0.03;
+
+/**
  * Which of an attempt's candidates the attempt is.
  *
  * A passing candidate always wins over a failing one. Between two passing
  * candidates the one nearest the middle of the round's band ships, because both are
- * fair and the middle one leaves the most room for the *next* round to get harder.
- * Between failing ones the nearest to the middle is the one the retry edits, for the
- * same reason the loop always fed the rejected file forward: a miss of 0.06 is a
- * better starting point than a miss of 0.40. Candidates the deadline skipped were
- * never measured and lose to any candidate that was.
+ * fair and the middle one leaves the most room for the *next* round to get harder —
+ * except that "nearest" is quantized to `DIST_BUCKET` first, and within one bucket
+ * the higher Mimic rate wins.
+ *
+ * That tie-break is analysis item 6: before it, a candidate at panel 0.43 / Mimic
+ * 0.31 beat one at 0.45 / Mimic 0.88 for no reason but array order — both are
+ * equally fair, and the selector was throwing away the only number that says "it
+ * countered you". A candidate whose Mimic rate could not be measured (no Gate 3
+ * result, or a `detail` shape `balanceRates` could not read) sorts as `-1`, below
+ * every measured rate, so an unmeasured file never beats a measured one it is tied
+ * with on fairness.
+ *
+ * Between failing candidates the nearest-bucket-then-Mimic order is the same: the
+ * one the retry edits should be both the closest miss and, among equally close
+ * misses, the one that already reads the player best. Candidates the deadline
+ * skipped were never measured and lose to any candidate that was.
+ *
+ * K=1 is unaffected: a single log has nothing to compare against and is returned
+ * unchanged, exactly as before.
  */
 export function chooseCandidate(logs: readonly CandidateLog[], bandMid: number): CandidateLog {
-  const rank = (log: CandidateLog): [number, number, number] => [
-    log.approved ? 0 : 1,
-    log.skipped === true || log.gates.length === 0 ? 1 : 0,
-    log.panel === undefined ? Number.POSITIVE_INFINITY : Math.abs(log.panel - bandMid),
-  ];
+  const rank = (log: CandidateLog): [number, number, number, number] => {
+    const dist = log.panel === undefined ? Number.POSITIVE_INFINITY : Math.abs(log.panel - bandMid);
+    const mimic = balanceRates(log.gates.find((g) => g.gate === 3))?.mimic ?? -1;
+    return [
+      log.approved ? 0 : 1,
+      log.skipped === true || log.gates.length === 0 ? 1 : 0,
+      Number.isFinite(dist) ? Math.round(dist / DIST_BUCKET) : Number.POSITIVE_INFINITY,
+      -mimic,
+    ];
+  };
   let best = logs[0] as CandidateLog;
   let bestRank = rank(best);
   for (const log of logs.slice(1)) {
     const r = rank(log);
-    if (r[0] < bestRank[0] || (r[0] === bestRank[0] && (r[1] < bestRank[1] || (r[1] === bestRank[1] && r[2] < bestRank[2])))) {
+    let less = false;
+    for (let i = 0; i < r.length; i += 1) {
+      if (r[i]! < bestRank[i]!) {
+        less = true;
+        break;
+      }
+      if (r[i]! > bestRank[i]!) break;
+    }
+    if (less) {
       best = log;
       bestRank = r;
     }

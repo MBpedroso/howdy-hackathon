@@ -1087,6 +1087,113 @@ Which is also a note on the deferred `timeout = boss win` item — the outcome i
 already a loss for the player everywhere except in Gate 3's bookkeeping, and that
 asymmetry is what makes this test cheap to write.
 
+## 2026-09-09 (later still) — three items off the learning-signal analysis
+
+`docs/ANALYSIS-learning-signal-2026-09-09.md` ranked seven ways to teach the boss
+about the player better; three of the cheapest three shipped today (items 6, 1, 7),
+all hash-safe, none touching `state.ts` / `step.ts` / `view.ts` and none an LLM
+call.
+
+### #6 — `chooseCandidate` stops discarding the Mimic number
+
+`chooseCandidate` (`loop.ts`) ranked approved candidates by `|panel − bandMid|`
+alone, so a candidate at panel 0.43 / Mimic 0.31 beat one at 0.45 / Mimic 0.88 for
+no reason but array order — both are equally fair and the selector was throwing
+away the only number that says "it countered you". The band-mid distance is now
+quantized to 0.03 buckets first (the panel rate's own noise floor: near-binary
+per-bot rates over 25 matches mean the panel mean moves in steps of
+0.25/8 ≈ 0.03, per `harnessRules`' arithmetic), and Mimic rate (descending) breaks
+ties inside a bucket. K=1 is untouched — a single log has nothing to rank against.
+Four cases covered in `test/chooseCandidate.test.ts` (new file; the function had
+no dedicated test before): approved beats rejected regardless of Mimic, same
+bucket picks the higher Mimic, different buckets pick the nearer band-mid even
+against a lower Mimic, and an unmeasured Mimic (`-1`) never beats a measured one.
+
+**Measured against history, honestly**: a parallel audit
+(`packages/harness/scripts/choice-audit.ts`, run against all 39 committed
+artifacts — 130 runs, 118 multi-candidate attempts) found the tie-break's
+precondition — two *approved* candidates in the same attempt — **never occurred**
+in the corpus: 94 attempts approved zero candidates, 24 approved exactly one, none
+approved two or more. So the rule changed zero historical choices; it is not that
+it agreed with the old one, it never had anything to compare. Among the 24
+singular approvals, Mimic ranged 0.71–1.00 (median 0.97) — consistent with
+candidates rarely landing close enough in band-mid distance *and* both passing for
+the tie-break to ever fire, at least under the fixed low/mid/high dial spread that
+produced this corpus. It is kept anyway: the cost is near zero, `blendDials`'
+bisection mode can put two candidates in-band together in a way the fixed spread
+mostly didn't, and the corpus predates the rule so it cannot rule that case out.
+Reproduce with `node --experimental-strip-types scripts/choice-audit.ts` from
+`packages/harness/`.
+
+### #1 — the Coder is told how to keep a recent window, not just that it should
+
+`harnessHints` already warned that `playerPosHeat` is cumulative and never
+decays (2026-09-04, the frozen-boss fix). It never said what to do about it
+beyond "keep moving". The new bullet is mechanical, per the file's own rule about
+adjectival dials producing near-identical files (`prompts.ts`, `DIALS`'s
+comment): push the player's cell index every ~10 ticks into a ~60-entry ring
+(600 ticks = 10 s at 60 ticks/s) and aim at the ring's centroid instead of the
+lifetime peak. `harnessHints` grew from 894 to 1256 characters (budget raised
+900 → 1300 in its own doc comment and in `context.test.ts`, on purpose rather
+than by drift); the Coder's system prompt grew to 13233 characters (bound raised
+13000 → 13500 in the same two places). Both stay well inside the ~13.5 KB cached
+prefix and the growth is paid for explicitly, not by cutting another line —
+see the function's doc comment for why that trade was made this time.
+
+This is the prompt half of open question Q2. The free half — can a strategy
+*afford* the pattern at all — is `packages/harness/test/fixtures/rolling-window.js`,
+a hand-written strategy that actually runs the ring buffer (fixed-length, `head`
+wraps rather than growing) and aims `slam`/`burst` at the centroid while patrolling
+(never `idle`-resting, straight-legged, same reasoning as `round2-candidate.js`'s
+note 5). It is not tuned to any fairness band on purpose — `test/rollingWindow.test.ts`
+asserts only Gates 1, 2 and 4, plus a direct memory reading:
+
+```
+$ pnpm harness packages/harness/test/fixtures/rolling-window.js --gates 1,2,4
+✓ Gate 1 static 5ms
+✓ Gate 2 fuzz 67ms
+✓ Gate 4 perf 91ms       (p99 = 0.064 ms, budget 2 ms — 31x headroom)
+APPROVED — 3 gates passed
+```
+
+(`--round 2 --matches 60` alone stops at Gate 3 — FAIR 0.00, too easy, as
+expected and as the analysis said it might — because `runGates` stops at the
+first failure by design, so Gate 4 needs its own `--gates` list to be seen in
+the same invocation; both runs are in the record.) Gate 2's own sequence pass
+measured the serialized memory at 210 bytes against the 4096-byte cap — 60
+small integers and two counters, nowhere near it. Whether a *model* writes this
+pattern reliably is still the open half of Q2 and stays spend-gated; this only
+bounds the mechanics.
+
+### #7 — the Coder gets a machine-readable player profile, not just prose to retype
+
+Analysis item 7: the Coder previously re-typed coordinates out of the Analyst's
+JSON ("cell 57 ≈ x=150, y=750" becomes a constant by hand), and a transcription
+slip there is a NaN or an off-by-a-cell waiting for Gate 2 or FAIR to find.
+`packages/agents/src/context/playerProfile.ts` (new file) renders a compact JSON
+block — top ~4 hot cells as `{x, y, share}`, dash `{total, dominantAngleRad,
+dominantShare}` (bin 0 = +x, counter-clockwise, TAU/8 per bin — `engine.dirBin`'s
+convention), `playerShotsDuring`, and `durations.ticks` — reusing `rankHotCells`
+(factored out of `renderSummary.ts`'s `renderHotCells` today, so the Analyst's
+prose and the Coder's JSON can never disagree about which cell is "hottest").
+`rewrite()` computes it once per call from `input.summary` and passes the
+identical string to every one of an attempt's K candidates — cache-safe, and
+consistent with the ~13.5 KB system prompt staying byte-identical.
+`coderPrompt` renders it as "# PLAYER PROFILE" right after "# THE ANALYST ON THIS
+PLAYER" and before the previous-source / bracket blocks; the rejection block is
+still the last thing in the message (spec §6.3), confirmed by test. A typical
+profile renders at ~540 characters; the Coder's user message grew from ~3.5 KB
+to ~4.1–4.4 KB across a first attempt and a retry — comfortably inside the same
+13.5 KB-per-part bound.
+
+### Verification
+
+`pnpm verify` — green. See the handoff for the exact count; the two harness gate
+suites (`gates.test.ts`, `rollingWindow.test.ts`) and the full `agents` suite
+(230 tests, up from 221) all pass, and the denial test in `context.test.ts` was
+extended to run with the profile block actually present rather than only proving
+the denial for a prompt shape the loop no longer sends.
+
 ## Open — dated placeholders
 
 Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck

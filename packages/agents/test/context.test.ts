@@ -14,11 +14,14 @@ import {
   dialFor,
   harnessHints,
   harnessRules,
+  playerProfile,
   promptSize,
+  rankHotCells,
   renderBotRates,
   renderCandidateTable,
   renderDashRose,
   renderHeatGrid,
+  renderPlayerProfile,
   renderShotsDuring,
   renderSummary,
   renderTimeline,
@@ -66,7 +69,15 @@ function engineExportNames(): string[] {
 const GENERIC_WORDS = new Set(['replay']);
 
 describe('the Coder is denied the engine', () => {
-  const prompt = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('cornerbreaker'), round: 2 });
+  // The player profile (analysis item 7) is real wiring now, not a hypothetical
+  // future field — the denial has to hold with it present, or the denial test
+  // would be checking a prompt the loop never actually sends.
+  const prompt = coderPrompt({
+    analysis: ANALYSIS,
+    prevSource: readGood('cornerbreaker'),
+    round: 2,
+    profile: renderPlayerProfile(cannedSummary('camper-a')),
+  });
   const text = [prompt.system, ...prompt.messages.map((m) => m.content)].join('\n');
 
   it('mentions no engine export name', () => {
@@ -157,18 +168,26 @@ describe('prompt sizes', () => {
   });
 
   it('keeps the Coder prompt inside 13k per part, first attempt and retry', () => {
-    const first = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('orbiter'), round: 2 });
+    // With the player profile included: `rewrite()` sends it on every call
+    // (loop.ts), so a bound measured without it would not be the bound the loop
+    // actually has to respect.
+    const profile = renderPlayerProfile(summary);
+    const first = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('orbiter'), round: 2, profile });
     const retry = coderPrompt({
       analysis: ANALYSIS,
       prevSource: readGood('orbiter'),
       round: 2,
+      profile,
       rejection: { gate: 'balance', gateNumber: 3, reason: '0.91 vs panel — too hard', attempt: 1 },
     });
     for (const prompt of [first, retry]) {
-      // 13k, not 12k: the harness-hints section (~0.9k) bought a measurable win
-      // rate for a fixed, cacheable cost. Anything past this is a budget review.
-      expect(prompt.system.length).toBeLessThan(13_000);
-      expect(prompt.messages[0]!.content.length).toBeLessThan(13_000);
+      // 13.5k, not 13k: `harnessHints` grew from ~0.9k to ~1.25k on 2026-09-09
+      // (analysis item 1 — the mem rolling-window hint) on top of the ~0.9k it
+      // already spent on 2026-09-04's cumulative-heat warning. Both bought a
+      // measurable win rate for a fixed, cacheable cost. Anything past this is a
+      // budget review.
+      expect(prompt.system.length).toBeLessThan(13_500);
+      expect(prompt.messages[0]!.content.length).toBeLessThan(13_500);
     }
     // The retry only adds the rejection block; it must not balloon the context.
     expect(promptSize(retry) - promptSize(first)).toBeLessThan(600);
@@ -183,6 +202,102 @@ describe('prompt sizes', () => {
       rejection: { gate: 'fuzz', gateNumber: 2, reason: 'threw', attempt: 1 },
     });
     expect(a.system).toBe(b.system);
+  });
+});
+
+describe('playerProfile — analysis item 7', () => {
+  const summary = cannedSummary('camper-a');
+
+  it('reuses rankHotCells rather than re-deriving the cell math', () => {
+    const expected = rankHotCells(summary.history.playerPosHeat, 800, 800, 4).map((c) => ({
+      x: c.x,
+      y: c.y,
+      share: Math.round(c.share * 10_000) / 10_000,
+    }));
+    expect(playerProfile(summary).hotCells).toEqual(expected);
+  });
+
+  it('reports at most 4 hot cells, hottest first', () => {
+    const cells = playerProfile(summary).hotCells;
+    expect(cells.length).toBeLessThanOrEqual(4);
+    for (let i = 1; i < cells.length; i += 1) {
+      expect(cells[i]!.share).toBeLessThanOrEqual(cells[i - 1]!.share);
+    }
+  });
+
+  it('sums the dash total from playerDashDirs, and reports 0/0 when there were none', () => {
+    const p = playerProfile(summary);
+    const total = summary.history.playerDashDirs.reduce((a, b) => a + b, 0);
+    expect(p.dashes.total).toBe(total);
+    expect(p.dashes.dominantAngleRad).toBeGreaterThanOrEqual(0);
+    expect(p.dashes.dominantAngleRad).toBeLessThan(Math.PI * 2);
+
+    const noDashes = { ...summary, history: { ...summary.history, playerDashDirs: [0, 0, 0, 0, 0, 0, 0, 0] } };
+    const p2 = playerProfile(noDashes);
+    expect(p2.dashes).toEqual({ total: 0, dominantAngleRad: 0, dominantShare: 0 });
+  });
+
+  it('places bin 0 at angle 0 (+x) and steps TAU/8 per bin, counter-clockwise', () => {
+    // Bin 4 is `renderDashRose`'s `COMPASS[4]` ('W'), directly opposite +x — the
+    // same 8-bin indexing the dash rose already renders, so bin 4 should land at
+    // exactly half a turn (π radians).
+    const westOnly = { ...summary, history: { ...summary.history, playerDashDirs: [0, 0, 0, 0, 9, 0, 0, 0] } };
+    const p = playerProfile(westOnly);
+    // `round4` rounds to 4 decimal places, so the match is to that precision.
+    expect(p.dashes.dominantAngleRad).toBeCloseTo((4 * Math.PI * 2) / 8, 4);
+    expect(p.dashes.dominantShare).toBe(1);
+  });
+
+  it('carries playerShotsDuring and durations.ticks straight through, unrounded', () => {
+    const p = playerProfile(summary);
+    expect(p.playerShotsDuring).toEqual(summary.history.playerShotsDuring);
+    expect(p.durations.ticks).toBe(summary.durations.ticks);
+  });
+
+  it('renders as the JSON.stringify of the same value', () => {
+    expect(renderPlayerProfile(summary)).toBe(JSON.stringify(playerProfile(summary), null, 2));
+  });
+});
+
+describe('the PLAYER PROFILE section of the Coder prompt', () => {
+  const profile = renderPlayerProfile(cannedSummary('camper-a'));
+
+  it('is absent when no profile is given', () => {
+    const content = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2 }).messages[0]!.content;
+    expect(content).not.toContain('PLAYER PROFILE');
+  });
+
+  it('sits right after THE ANALYST and before the code, on a first attempt', () => {
+    const content = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('idle'),
+      round: 2,
+      profile,
+    }).messages[0]!.content;
+    expect(content).toContain('# PLAYER PROFILE (measured — embed the numbers you aim with as constants, do not retype them from prose)');
+    expect(content).toContain(profile);
+    const analystAt = content.indexOf('# THE ANALYST ON THIS PLAYER');
+    const profileAt = content.indexOf('# PLAYER PROFILE');
+    const codeAt = content.indexOf('# THE STRATEGY THAT JUST LOST');
+    expect(analystAt).toBeGreaterThanOrEqual(0);
+    expect(analystAt).toBeLessThan(profileAt);
+    expect(profileAt).toBeLessThan(codeAt);
+  });
+
+  it('is the same string across a bracketed retry, and the rejection stays last', () => {
+    const reason = '0.55 vs panel — too hard';
+    const content = coderPrompt({
+      analysis: ANALYSIS,
+      prevSource: readGood('idle'),
+      round: 2,
+      profile,
+      rejection: { gate: 'balance', gateNumber: 3, reason, attempt: 1 },
+    }).messages[0]!.content;
+    expect(content).toContain(profile);
+    // Spec §6.3: the harness's sentence is still the last thing in the context,
+    // profile block included.
+    expect(content.indexOf('PLAYER PROFILE')).toBeLessThan(content.indexOf(reason));
+    expect(content.indexOf(reason)).toBeGreaterThan(content.length - 400);
   });
 });
 
@@ -241,12 +356,25 @@ describe('harnessRules', () => {
 describe('harnessHints', () => {
   const hints = harnessHints(3);
 
-  it('stays inside its 900-character budget', () => {
+  it('stays inside its 1300-character budget', () => {
     // It rides in the cached system prompt ahead of the analysis; a page of tactics
-    // would start competing with the contract for attention.
+    // would start competing with the contract for attention. Raised from 900 to
+    // 1300 on 2026-09-09 (analysis item 1) to fit the mem rolling-window hint —
+    // paid for deliberately, not drifted into (see the function's doc comment).
     for (const round of [2, 3, 4, 5] as const) {
-      expect(harnessHints(round).length).toBeLessThanOrEqual(900);
+      expect(harnessHints(round).length).toBeLessThanOrEqual(1300);
     }
+  });
+
+  it('tells the Coder how to keep a recent window in mem, not just the lifetime map', () => {
+    // Analysis item 1: the cumulative heat map alone cannot tell "still camping"
+    // from "left ten seconds ago" — mem is the only place a strategy can build the
+    // distinction, so the hint has to say *how*, mechanically, not just that it can.
+    expect(hints).toContain("Push the player's cell index");
+    expect(hints).toContain('ring of ~60 entries');
+    expect(hints).toContain('~10 ticks');
+    expect(hints).toContain('centroid');
+    expect(hints).toContain('`mem`');
   });
 
   it('names the five levers the harness actually measured', () => {
@@ -566,9 +694,11 @@ describe('parallel candidates', () => {
       dial: dialFor(1, 3)!,
     });
     const without = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2 });
-    // Byte-identical system prompts across candidates: the ~13 KB prefix is cached.
+    // Byte-identical system prompts across candidates: the ~13.5 KB prefix is
+    // cached (see 'keeps the Coder prompt inside 13k per part', above, for why
+    // 13.5k and not 13k since 2026-09-09).
     expect(withDial.system).toBe(without.system);
-    expect(withDial.system.length).toBeLessThan(13_000);
+    expect(withDial.system.length).toBeLessThan(13_500);
     expect(withDial.messages[0]!.content).toContain('# YOUR AIM POINT: BALANCED');
     expect(withDial.messages[0]!.content).toContain('meta.name` must end with');
   });

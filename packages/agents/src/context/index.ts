@@ -1,6 +1,7 @@
 export {
   TIMELINE_BUDGET,
   cellCentre,
+  rankHotCells,
   renderDashRose,
   renderHeatGrid,
   renderHotCells,
@@ -8,10 +9,13 @@ export {
   renderShotsDuring,
   renderSummary,
   renderTimeline,
+  type HotCell,
   type RenderSummaryOptions,
 } from './renderSummary.ts';
 
 export { contractDoc, cutSubsection, markdownSection, stripBlockComments } from './contractDoc.ts';
+
+export { playerProfile, renderPlayerProfile, type PlayerProfile } from './playerProfile.ts';
 
 export {
   ADAPT_DIALS,

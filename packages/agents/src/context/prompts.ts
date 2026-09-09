@@ -233,12 +233,22 @@ What this means for how you write:
  * denial test in `test/context.test.ts` holds it to that — a hint that leaked an
  * engine identifier would fail the build.
  *
- * Kept under 900 characters on purpose. It sits in the cached system prompt in
- * front of the analysis, and a page of tactics would start to compete with the
- * contract for the model's attention. The heat-map line grew on 2026-09-04 to say
- * that `playerPosHeat` is *cumulative and never decays* — the sentence the frozen
- * Round 2 boss needed, since it parked on a cell the player had left twenty seconds
- * earlier — and four other lines were tightened to pay for it.
+ * Was kept under 900 characters through 2026-09-04; now under 1300. It sits in the
+ * cached system prompt in front of the analysis, and a page of tactics would start
+ * to compete with the contract for the model's attention, so the ceiling is a
+ * deliberate one, raised deliberately rather than drifted into. The heat-map line
+ * grew on 2026-09-04 to say that `playerPosHeat` is *cumulative and never decays* —
+ * the sentence the frozen Round 2 boss needed, since it parked on a cell the player
+ * had left twenty seconds earlier — and four other lines were tightened to pay for
+ * it. It grew again on 2026-09-09 (analysis item 1,
+ * `docs/ANALYSIS-learning-signal-2026-09-09.md`) with the *constructive* half of
+ * that same warning: a strategy that only knows the cumulative map can name the
+ * player's habit but not tell a camper who is still camping from one who left ten
+ * seconds ago, because nothing in the contract hands it a recent window — `mem` is
+ * the only place a strategy can build one, so the hint now says how. This growth
+ * was not paid for by cutting another line, unlike 09-04's: item 1 is ranked #2 of
+ * seven interventions specifically because it is prompt-only, and a page of tactics
+ * un-earning its keep is a worse failure mode than 400 extra cached bytes.
  */
 export function harnessHints(round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
@@ -257,6 +267,11 @@ Measured on strategies that passed Gate 3:
 - \`history.playerPosHeat\` is where the player *lives*: cumulative over the round
   and never decaying, so its hottest cell may be one they left 20 s ago. Aim there,
   then keep moving — never park on it.
+- \`view.player.x/y\` is live, every non-telegraph tick: keep your own recent picture
+  in \`mem\` instead of trusting the lifetime map alone. Push the player's cell index
+  every ~10 ticks into a ring of ~60 entries and aim slams and bursts at the ring's
+  centroid, not the lifetime peak — the lifetime map is the habit, the ring is
+  whether they're still in it.
 - Round ${round}'s band is ${formatBand(round)}; aim at its middle, ${((lo + hi) / 2).toFixed(2)}.`;
 }
 
@@ -827,6 +842,16 @@ export type CoderContext = {
    * between these two files, so both have to be in the context.
    */
   bracket?: CoderBracket;
+  /**
+   * The measured player profile (`playerProfile.ts`'s `renderPlayerProfile`),
+   * already rendered — hot cells, dominant dash angle, shots-during, round length
+   * — as fenced JSON. Analysis item 7: the same numbers as the Analyst's prose,
+   * offered as data so the Coder embeds them rather than retyping them. Identical
+   * across an attempt's K candidates (`rewrite()` computes it once), so it lives
+   * here in the message and not the cached system prompt, same reason `bracket`
+   * and `rejection` do.
+   */
+  profile?: string;
 };
 
 export function coderPrompt(ctx: CoderContext): Prompt {
@@ -927,6 +952,20 @@ export function coderPrompt(ctx: CoderContext): Prompt {
   parts.push(nameRule(takenNames(ctx), ctx.dial?.nameSuffix), '');
 
   parts.push('# THE ANALYST ON THIS PLAYER', '', '```json', JSON.stringify(ctx.analysis, null, 2), '```', '');
+
+  if (ctx.profile !== undefined) {
+    // Right after the Analyst's reading and before the code, same as the Analyst
+    // block above: both are *evidence*, and the rejection sentence still has to
+    // stay the last thing in the context (spec §6.3).
+    parts.push(
+      '# PLAYER PROFILE (measured — embed the numbers you aim with as constants, do not retype them from prose)',
+      '',
+      '```json',
+      ctx.profile,
+      '```',
+      '',
+    );
+  }
 
   if (ctx.bracket !== undefined) {
     // Both endpoints, not just the better one: an interpolation needs two points,
