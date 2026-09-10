@@ -140,6 +140,91 @@ body {
   font-style: italic;
 }
 
+/*
+ * The "it learned" interstitial (`ui/roundBanner.ts` times it,
+ * `ui/roundBannerView.ts` renders it). Shown over the arena *before* the round's
+ * simulation starts stepping — see that module's doc for why — so
+ * `pointer-events: none` here is belt-and-suspenders rather than the load-bearing
+ * "must not block input" it was when this sat over a live fight: nothing is
+ * playable yet for it to block. It fades out in place rather than flying anywhere;
+ * `.hud-strategy` still carries the same name and rationale for the rest of the
+ * round once this closes.
+ */
+.round-banner {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  z-index: 4;
+  pointer-events: none;
+  max-width: 58%;
+  padding: 13px 20px;
+  text-align: center;
+  background: rgba(7, 8, 12, 0.85);
+  border: 1px solid var(--boss);
+  border-top: 3px solid var(--boss);
+  box-shadow: 0 0 30px rgba(255, 77, 109, 0.28);
+  transform: translateX(-50%);
+}
+.round-banner-kicker {
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--slam);
+}
+.round-banner-name {
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--boss);
+}
+.round-banner-rationale {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--text);
+  opacity: 0.92;
+}
+.round-banner.entering {
+  animation: round-banner-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* `roundBannerView.ts`'s `DISMISS_FADE_MS` — keep the two in step by hand. */
+.round-banner.leaving {
+  animation: round-banner-out 280ms ease-in both;
+}
+@keyframes round-banner-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-16px) scale(0.96); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes round-banner-out {
+  from { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  to { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(0.97); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .round-banner.entering, .round-banner.leaving { animation: none; }
+}
+
+/*
+ * "YOUR HABIT" — the caption over a habit-cell highlight (`render/habitHighlight.ts`
+ * draws the cell itself, on canvas; this is the three words over it, in DOM for the
+ * same crispness reason as the rest of the HUD). Positioned in JS, in arena-scaled
+ * CSS pixels, over the drawn cell's centre — see `ui/habitCaption.ts`.
+ */
+.habit-caption {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--boss);
+  text-shadow: 0 0 6px rgba(7, 8, 12, 0.95), 0 0 2px rgba(7, 8, 12, 0.95);
+  white-space: nowrap;
+}
+
 .hud-foot {
   position: absolute;
   right: 14px;

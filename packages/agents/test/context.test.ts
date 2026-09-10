@@ -5,6 +5,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  ADAPT_DIALS,
+  adaptDials,
   analystPrompt,
   bracketHint,
   cellCentre,
@@ -181,13 +183,14 @@ describe('prompt sizes', () => {
       rejection: { gate: 'balance', gateNumber: 3, reason: '0.91 vs panel — too hard', attempt: 1 },
     });
     for (const prompt of [first, retry]) {
-      // 13.5k, not 13k: `harnessHints` grew from ~0.9k to ~1.25k on 2026-09-09
+      // 14k, not 13k: `harnessHints` grew from ~0.9k to ~1.25k on 2026-09-09
       // (analysis item 1 — the mem rolling-window hint) on top of the ~0.9k it
-      // already spent on 2026-09-04's cumulative-heat warning. Both bought a
-      // measurable win rate for a fixed, cacheable cost. Anything past this is a
-      // budget review.
-      expect(prompt.system.length).toBeLessThan(13_500);
-      expect(prompt.messages[0]!.content.length).toBeLessThan(13_500);
+      // already spent on 2026-09-04's cumulative-heat warning, then to ~1.7k the
+      // same day (later) for the slam-reachability bullet a playtest bought. All
+      // three earned a measurable behaviour change for a fixed, cacheable cost.
+      // Anything past this is a budget review.
+      expect(prompt.system.length).toBeLessThan(14_000);
+      expect(prompt.messages[0]!.content.length).toBeLessThan(14_000);
     }
     // The retry only adds the rejection block; it must not balloon the context.
     expect(promptSize(retry) - promptSize(first)).toBeLessThan(600);
@@ -356,13 +359,14 @@ describe('harnessRules', () => {
 describe('harnessHints', () => {
   const hints = harnessHints(3);
 
-  it('stays inside its 1300-character budget', () => {
+  it('stays inside its 1800-character budget', () => {
     // It rides in the cached system prompt ahead of the analysis; a page of tactics
-    // would start competing with the contract for attention. Raised from 900 to
-    // 1300 on 2026-09-09 (analysis item 1) to fit the mem rolling-window hint —
-    // paid for deliberately, not drifted into (see the function's doc comment).
+    // would start competing with the contract for attention. Raised 900 -> 1300 on
+    // 2026-09-09 (analysis item 1, the mem rolling-window hint) and 1300 -> 1800 the
+    // same day (later, the slam-reachability bullet a playtest bought) — paid for
+    // deliberately both times, not drifted into (see the function's doc comment).
     for (const round of [2, 3, 4, 5] as const) {
-      expect(harnessHints(round).length).toBeLessThanOrEqual(1300);
+      expect(harnessHints(round).length).toBeLessThanOrEqual(1800);
     }
   });
 
@@ -375,6 +379,24 @@ describe('harnessHints', () => {
     expect(hints).toContain('~10 ticks');
     expect(hints).toContain('centroid');
     expect(hints).toContain('`mem`');
+    // The mem-window's aim point should carry the same "aim where they can be"
+    // framing as the reachability bullet below, not just the lifetime-vs-recent one.
+    expect(hints).toContain('led by `vx`/`vy` across a slam');
+  });
+
+  it('states the slam-reachability arithmetic a playtest found missing (2026-09-09, later)', () => {
+    // Matt's report: the boss slammed the player's habit cell while the player was
+    // far away — "even dashing toward it he'd only get halfway there". A slam
+    // telegraphs 40 ticks (0.667s) and hits once; a player's best-case travel in
+    // that window is one 10-tick dash (110px) plus 30 ticks of running (108px) =
+    // 218px, and the slam's own hit radius is 110px, so ~328px is the honest
+    // "cannot possibly land" line — the hint rounds both numbers for readability.
+    expect(hints).toContain('telegraphs for 40 ticks');
+    expect(hints).toContain('~0.67s');
+    expect(hints).toContain('~220px');
+    expect(hints).toContain('~330px');
+    expect(hints).toContain('~110px reach');
+    expect(hints).toContain('slam where they can BE');
   });
 
   it('names the five levers the harness actually measured', () => {
@@ -413,6 +435,40 @@ describe('harnessHints', () => {
     for (const needle of ['tick(', 'step(', 'cloneState', 'ENGINE_CONSTANTS', 'projectiles[', 'GameState']) {
       expect(hints).not.toContain(needle);
     }
+  });
+});
+
+describe("ADAPT_DIALS 'place' — reach-conditional slam (2026-09-09, later, playtest)", () => {
+  const place = ADAPT_DIALS.find((d) => d.name === 'place')!;
+  const ground = ADAPT_DIALS.find((d) => d.name === 'ground')!;
+
+  it('no longer commits the slam unconditionally', () => {
+    // The exact phrase a playtest found: a slam that lands on ground the player
+    // could never reach in time reads as the boss missing on purpose, not pressure.
+    expect(place.instruction).not.toContain('whether or not the player is');
+  });
+
+  it('gates the habit-cell slam on reach, and leads the live player otherwise', () => {
+    expect(place.instruction).toContain('close enough to reach');
+    expect(place.instruction).toContain('history.playerPosHeat');
+    // Mechanical, not adjectival — same lead formula `orbiter.js` already uses for
+    // its own slam, so the pattern is one the harness has already measured works.
+    expect(place.instruction).toContain('player.x + player.vx * 40');
+    expect(place.instruction).toContain('player.y + player.vy * 40');
+  });
+
+  it("'ground' is unchanged in substance and says why it needs no reach gate", () => {
+    // Spawn/minion denial has no telegraph-then-resolve gap to be out of reach for,
+    // so it does not need the fix `place` needed — the instruction now says so.
+    expect(ground.instruction).toContain('does not need');
+    expect(ground.instruction).toContain('`spawn` toward the hottest cell');
+    expect(ground.instruction).toContain('history.playerPosHeat');
+  });
+
+  it("adaptDials still produces three distinct, correctly-suffixed candidates", () => {
+    const dials = adaptDials(3);
+    expect(dials.map((d) => d.name)).toEqual(['place', 'ground', 'timing']);
+    expect(new Set(dials.map((d) => d.nameSuffix)).size).toBe(3);
   });
 });
 
@@ -694,11 +750,11 @@ describe('parallel candidates', () => {
       dial: dialFor(1, 3)!,
     });
     const without = coderPrompt({ analysis: ANALYSIS, prevSource: readGood('idle'), round: 2 });
-    // Byte-identical system prompts across candidates: the ~13.5 KB prefix is
+    // Byte-identical system prompts across candidates: the ~13.7 KB prefix is
     // cached (see 'keeps the Coder prompt inside 13k per part', above, for why
-    // 13.5k and not 13k since 2026-09-09).
+    // 14k and not 13k since 2026-09-09).
     expect(withDial.system).toBe(without.system);
-    expect(withDial.system.length).toBeLessThan(13_500);
+    expect(withDial.system.length).toBeLessThan(14_000);
     expect(withDial.messages[0]!.content).toContain('# YOUR AIM POINT: BALANCED');
     expect(withDial.messages[0]!.content).toContain('meta.name` must end with');
   });

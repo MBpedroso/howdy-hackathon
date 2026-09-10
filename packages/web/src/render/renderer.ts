@@ -29,6 +29,8 @@ import { CONSTANTS } from '@rematch/contract';
 import { ENGINE_CONSTANTS, TELEGRAPHS, type GameState } from '@rematch/engine';
 
 import { createEffectTracker, type Effect, type EffectTracker } from './effects.ts';
+import { createHabitHighlightTracker, type HabitHighlight, type HabitHighlightTracker } from './habitHighlight.ts';
+import type { HotCell } from './habitCells.ts';
 import { alpha, PALETTE as C } from './palette.ts';
 import { preloadFighters, sprite } from './sprites.ts';
 import { computeViewport, type Viewport } from './viewport.ts';
@@ -56,6 +58,18 @@ export type Renderer = {
    * simulation, the replay hash or a strategy's view (`ui/fighters.ts`).
    */
   setFighters(fighters: { player: FighterId; boss: FighterId }): void;
+  /**
+   * The current round's habit cells — the previous round's top habit cells
+   * (`render/habitCells.ts`), or `[]` when there is none (round 1, a retry). Call
+   * once per round, before the first `draw`.
+   */
+  setHabitCells(cells: readonly HotCell[]): void;
+  /**
+   * The habit-cell highlight `draw` last drew, if any — `app.ts` reads this right
+   * after `draw` to position the "YOUR HABIT" DOM caption (`ui/habitCaption.ts`)
+   * over the same cell, in the same frame.
+   */
+  activeHabitHighlight(): { x: number; y: number } | null;
 };
 
 /** Non-null 2D context. A separate function so `ctx` is non-nullable inside every
@@ -70,6 +84,9 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const ctx = context2d(canvas);
 
   const effects: EffectTracker = createEffectTracker();
+  const habitHighlights: HabitHighlightTracker = createHabitHighlightTracker();
+  let habitCells: readonly HotCell[] = [];
+  let lastHabitHighlight: { x: number; y: number } | null = null;
   let fighters: { player: FighterId; boss: FighterId } = {
     player: DEFAULT_PLAYER_FIGHTER,
     boss: DEFAULT_BOSS_FIGHTER,
@@ -200,6 +217,30 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     ctx.fill();
 
     ctx.restore();
+  }
+
+  // ---------------------------------------------------- habit-cell highlight
+
+  /**
+   * "It knows your ground": a subtle pulsing outline over one cell of the floor
+   * grid, drawn while a `HabitHighlight` (`habitHighlight.ts`) is alive. Floor
+   * decoration — drawn right after `drawFloor`, so the boss, minions and
+   * projectiles all render on top of it rather than under a highlight.
+   */
+  function drawHabitHighlight(h: HabitHighlight, tick: number): void {
+    const age = tick - h.born;
+    const life = 1 - Math.min(1, Math.max(0, age / h.ttl));
+    if (life <= 0) return;
+    const half = ARENA / GRID_CELLS / 2;
+    const { x, y } = h.cell;
+    // Two pulses over the highlight's lifetime — "flags something", not "flickers".
+    const pulse = 0.6 + 0.4 * Math.sin((age / h.ttl) * Math.PI * 4);
+
+    ctx.fillStyle = alpha(C.boss, 0.1 * pulse * life);
+    ctx.fillRect(x - half, y - half, half * 2, half * 2);
+    ctx.strokeStyle = alpha(C.boss, (0.35 + 0.4 * pulse) * life);
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(x - half, y - half, half * 2, half * 2);
   }
 
   // ---------------------------------------------------------------- effects
@@ -398,6 +439,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   function draw(state: GameState): void {
     effects.sync(state);
+    habitHighlights.sync(state, habitCells);
     const tick = state.tick;
     const shake = effects.shake(tick);
 
@@ -410,6 +452,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     ctx.setTransform(viewport.scale, 0, 0, viewport.scale, jitterX * viewport.scale, jitterY * viewport.scale);
 
     drawFloor();
+
+    const habit = habitHighlights.current(tick);
+    lastHabitHighlight = habit === null ? null : { x: habit.cell.x, y: habit.cell.y };
+    if (habit !== null) drawHabitHighlight(habit, tick);
 
     const tg = state.boss.telegraph;
     if (tg !== null) {
@@ -439,11 +485,19 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     },
     reset(): void {
       effects.reset();
+      habitHighlights.reset();
+      lastHabitHighlight = null;
     },
     setFighters(next: { player: FighterId; boss: FighterId }): void {
       // Copied, not aliased: the caller holds a mutable object of its own and a
       // shared reference would make "who is on screen" change without a call.
       fighters = { player: next.player, boss: next.boss };
+    },
+    setHabitCells(cells: readonly HotCell[]): void {
+      habitCells = cells;
+    },
+    activeHabitHighlight(): { x: number; y: number } | null {
+      return lastHabitHighlight;
     },
   };
 }

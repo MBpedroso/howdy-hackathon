@@ -233,7 +233,7 @@ What this means for how you write:
  * denial test in `test/context.test.ts` holds it to that — a hint that leaked an
  * engine identifier would fail the build.
  *
- * Was kept under 900 characters through 2026-09-04; now under 1300. It sits in the
+ * Was kept under 900 characters through 2026-09-04; now under 1800. It sits in the
  * cached system prompt in front of the analysis, and a page of tactics would start
  * to compete with the contract for the model's attention, so the ceiling is a
  * deliberate one, raised deliberately rather than drifted into. The heat-map line
@@ -249,6 +249,16 @@ What this means for how you write:
  * was not paid for by cutting another line, unlike 09-04's: item 1 is ranked #2 of
  * seven interventions specifically because it is prompt-only, and a page of tactics
  * un-earning its keep is a worse failure mode than 400 extra cached bytes.
+ *
+ * A third bullet was added 2026-09-09 (later), from a playtest rather than the
+ * analysis: `ADAPT_DIALS`'s `place` dial told the Coder to slam the hottest cell
+ * "whether or not the player is standing in it right now", and a slam that lands
+ * on ground the player could never reach in time is not pressure, it is a boss
+ * that reads as broken (Matt: dashing straight at the telegraphed spot, he still
+ * only closed half the distance). The bullet states the reachability arithmetic as
+ * a measured fact of the engine — telegraph length, best-case travel, blast radius
+ * — once, so both `place`'s instruction and the mem-window bullet's "lead it" can
+ * point at it instead of restating the numbers.
  */
 export function harnessHints(round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
@@ -267,11 +277,17 @@ Measured on strategies that passed Gate 3:
 - \`history.playerPosHeat\` is where the player *lives*: cumulative over the round
   and never decaying, so its hottest cell may be one they left 20 s ago. Aim there,
   then keep moving — never park on it.
+- A \`slam\` telegraphs for 40 ticks (~0.67s) and then hits once, at one point: even
+  sprinting with a dash, a player covers at most ~220px in that time, so aiming past
+  ~330px away (that travel plus the slam's own ~110px reach) is a guaranteed miss —
+  slam where they can BE when it resolves, not just where they have been; \`spawn\` or
+  \`burst\` to punish ground they have already left.
 - \`view.player.x/y\` is live, every non-telegraph tick: keep your own recent picture
   in \`mem\` instead of trusting the lifetime map alone. Push the player's cell index
   every ~10 ticks into a ring of ~60 entries and aim slams and bursts at the ring's
-  centroid, not the lifetime peak — the lifetime map is the habit, the ring is
-  whether they're still in it.
+  centroid — led by \`vx\`/\`vy\` across a slam's telegraph, same reason as above — not
+  the lifetime peak; the lifetime map is the habit, the ring is whether they're still
+  in it.
 - Round ${round}'s band is ${formatBand(round)}; aim at its middle, ${((lo + hi) / 2).toFixed(2)}.`;
 }
 
@@ -477,20 +493,38 @@ export const DIALS: readonly { name: string; instruction: string; aim: CoderDial
  * refused by ACTIVE rather than by the Mimic rate, and the instruction is right for
  * that too: a frozen boss that is otherwise in band needs its pressure moved
  * somewhere, not scaled.
+ *
+ * `place`'s instruction was rewritten 2026-09-09 (later) after a playtest: "commit
+ * it there whether or not the player is standing in it" told the Coder to slam the
+ * habit cell unconditionally, and a slam telegraphs for 40 ticks and hits once, at
+ * one point — a player who was never going to be within reach when it lands cannot
+ * be threatened by it, so an unconditional habit-slam reads as the boss missing on
+ * purpose (Matt's report: dashing straight at it, he still only closed half the
+ * distance). See `harnessHints`' reachability bullet for the arithmetic; `place`
+ * now spends the slam only when the player can still be caught, and leads the live
+ * player otherwise. `ground` is untouched on purpose: a minion does not need the
+ * player to already be near it, so denying the habit ground by occupying it has no
+ * reachability problem to fix.
  */
 export const ADAPT_DIALS: readonly { name: string; instruction: string }[] = [
   {
     name: 'place',
     instruction: [
-      'Change only WHERE. Put every `slam` on the hottest cell of',
-      '`history.playerPosHeat` and commit it there whether or not the player is',
-      'standing in it right now, so the ground they live on is the dangerous ground.',
+      'Change only WHERE. A `slam` telegraphs for 40 ticks and then hits once, at one',
+      'point — see the reachability numbers in WHAT THE HARNESS HAS LEARNED. If the',
+      'player is already in (or close enough to reach) the hottest cell of',
+      '`history.playerPosHeat`, commit the slam there. Otherwise the habit cell is out',
+      'of reach this tick: lead the live player instead — aim at',
+      '`player.x + player.vx * 40` and `player.y + player.vy * 40` — and use',
+      '`spawn`/`burst` to make the habit cell itself costly, rather than slamming',
+      'ground nobody can be standing on.',
     ].join('\n'),
   },
   {
     name: 'ground',
     instruction: [
-      'Change only WHO holds the space. `spawn` toward the hottest cell of',
+      'Change only WHO holds the space. Unlike a `slam`, a minion does not need the',
+      'player to already be near it when it appears: `spawn` toward the hottest cell of',
       '`history.playerPosHeat` and keep the minion between the player and it, so',
       'returning to their favourite ground costs them something every time.',
     ].join('\n'),

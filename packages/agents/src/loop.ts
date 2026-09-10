@@ -130,12 +130,32 @@ export const CANDIDATE_GATE_RESERVE_MS = 5_000;
  * rather than waited on.
  */
 export const STRAGGLER_GRACE_MS = 6_000;
+export const STRAGGLER_ENV = 'REMATCH_STRAGGLER_MS';
 
 /** `REMATCH_CANDIDATES=3`. Clamped to 1..`MAX_CANDIDATES`; anything unparseable is the default. */
 export function resolveCandidates(env: Record<string, string | undefined> = process.env): number {
   const raw = Number(env[CANDIDATES_ENV]);
   if (!Number.isFinite(raw) || raw < 1) return DEFAULT_CANDIDATES;
   return Math.min(MAX_CANDIDATES, Math.trunc(raw));
+}
+
+/**
+ * `REMATCH_STRAGGLER_MS=30000`. The 6 s default is tuned to the API providers'
+ * tail (Coder p50 7.7 s, worst 36.7 s — see `STRAGGLER_GRACE_MS` above), and it is
+ * exactly wrong for `claude-cli`, where a *healthy* call is ~18 s: the first reply
+ * lands, the 6 s grace expires, and the attempt's other two candidates are cut
+ * while still streaming normally. Measured on the first live claude-cli smoke run
+ * (2026-09-09, `artifacts/server/rewrite-2026-09-09T18-03-48-701Z.json`): four
+ * attempts produced 8 candidate files instead of 12, and the amputated attempts
+ * are the ones whose bisection repeated a 0.19 file three times — fewer measured
+ * points per attempt is a blinder search, which is the exact failure K exists to
+ * fix. Anything unparseable or non-positive keeps the default; the cap stops a
+ * typo'd value from letting one straggler eat the whole deadline.
+ */
+export function resolveStragglerMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env[STRAGGLER_ENV]);
+  if (!Number.isFinite(raw) || raw <= 0) return STRAGGLER_GRACE_MS;
+  return Math.min(60_000, Math.trunc(raw));
 }
 
 export type RewriteProviders = {
@@ -166,6 +186,13 @@ export type RewriteInput = {
   harnessOpts?: RunGatesOptions;
   maxAttempts?: number;
   deadlineMs?: number;
+  /**
+   * How long an attempt waits for its slower candidates once the first lands.
+   * Defaults to `resolveStragglerMs()` (`REMATCH_STRAGGLER_MS`, else the 6 s
+   * `STRAGGLER_GRACE_MS`). Raise it for providers whose healthy calls are slower
+   * than the API tail the default was measured on — `claude-cli` most of all.
+   */
+  stragglerMs?: number;
   /** Caller-side cancellation (the SSE connection dropped, the player left). */
   signal?: AbortSignal;
   analystMaxTokens?: number;
@@ -288,6 +315,7 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
      * cached system prompt staying byte-identical (spec §6.3).
      */
     const profile = renderPlayerProfile(input.summary);
+    const stragglerMs = input.stragglerMs ?? resolveStragglerMs();
     let prevSource = input.prevSource;
     let rejection: CoderRejection | undefined;
     const candidateCount = Math.max(
@@ -347,14 +375,16 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
               : blendDials(candidateCount, bracket, input.round);
 
       // The straggler cut: one controller per attempt, chained to the run's, armed
-      // for `STRAGGLER_GRACE_MS` the moment the first candidate lands.
+      // for `stragglerMs` (default `STRAGGLER_GRACE_MS`, overridable for slow
+      // providers via `REMATCH_STRAGGLER_MS` — see `resolveStragglerMs`) the
+      // moment the first candidate lands.
       const attemptAbort = new AbortController();
       const onRunAbort = (): void => attemptAbort.abort();
       controller.signal.addEventListener('abort', onRunAbort, { once: true });
       let straggler: NodeJS.Timeout | undefined;
       const armStraggler = (): void => {
         if (straggler !== undefined || candidateCount <= 1) return;
-        straggler = setTimeout(() => attemptAbort.abort(), STRAGGLER_GRACE_MS);
+        straggler = setTimeout(() => attemptAbort.abort(), stragglerMs);
         (straggler as unknown as { unref?: () => void }).unref?.();
       };
 

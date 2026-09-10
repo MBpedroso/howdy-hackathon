@@ -64,7 +64,13 @@ export type Phase = Beat | 'done';
 
 /** Spec AC 5's outer bound: the safety-valve skip appears at 50 s, not before. */
 export const SKIP_AFTER_MS = 50_000;
-/** After `done`, the next round starts on its own this long later. */
+/**
+ * This module's own fallback when nobody passes `autoFightMs` at all — kept for a
+ * caller that constructs `createInterludeUi` directly. `interlude/index.ts`
+ * (the app's real caller) always passes an explicit value now — `0` by default,
+ * for real play — so this constant is not what a human player sees any more; see
+ * `InterludeHandlerOptions.autoFightMs`'s doc for the actual default policy.
+ */
 export const AUTO_FIGHT_MS = 3000;
 
 /**

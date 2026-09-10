@@ -121,9 +121,10 @@ export type InterludeHandlerOptions = {
   /** Defaults to 45 000 (spec AC 5). */
   deadlineMs?: number;
   /**
-   * 0 disables the post-`done` auto-continue. Defaults to `?autofight=` if the URL
-   * says (the e2e suite passes `?autofight=0` so it can assert before the screen
-   * goes away), else the UI's 3 s.
+   * `0` disables the post-`done` auto-continue — the default for real play, so a
+   * human always gets the FIGHT button rather than the screen moving on by itself.
+   * Defaults to `?autofight=<seconds>` if the URL says so (every automated flow —
+   * this suite's own specs, the mock/recorded e2e paths — opts back in that way).
    */
   autoFightMs?: number;
   /** Called whenever the debug snapshot changes, so `app.ts` can publish it. */
@@ -193,15 +194,22 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
         : { source: options.source, kind: 'mock' as SourceKind, speed: options.resolve?.mock?.speed ?? 1 };
     resolvedKind = resolved.kind;
 
-    // `?autofight=0` holds the finished interlude open. It is a test and demo
-    // affordance, not a game setting: on stage the 3 s auto-continue is what keeps
-    // the demo moving without anyone touching the keyboard.
+    // Manual by default: a human player gets FIGHT and nothing else, always — a
+    // playtest ("ele já foi pro próximo round sozinho") found the 3 s auto-continue
+    // moving on before the player had read the verdict, let alone the boss's new
+    // name. `?autofight=<seconds>` opts back into the old auto-continue (`0`
+    // explicitly disables it, same as the default) for the flows that want it: the
+    // mock/recorded e2e paths and this suite's own specs, which all already pass
+    // it. `?autostart=1` alone does *not* imply auto-continue any more — the two
+    // params are independent, and nothing in this codebase's automated flows was
+    // relying on the old implicit default (every one of them already sets
+    // `autofight` explicitly).
     const search = options.resolve?.search ?? (typeof location === 'undefined' ? '' : location.search);
     const params = new URLSearchParams(search);
     const autofightParam = params.get('autofight');
     const autoFightMs =
       options.autoFightMs ??
-      (autofightParam === null ? undefined : Math.max(0, Number(autofightParam) === 0 ? 0 : Number(autofightParam) * 1000));
+      (autofightParam === null ? 0 : Math.max(0, Number(autofightParam) === 0 ? 0 : Number(autofightParam) * 1000));
     // `?deadline=<ms>` shortens the AC 5 deadline. The e2e suite uses it to prove
     // the fallback path for real rather than by stubbing the UI, and it is the only
     // way to see that path on a machine where everything works.
@@ -249,7 +257,11 @@ export function createInterludeHandler(options: InterludeHandlerOptions = {}): R
       // Set only for the boot probe's "reachable, but no working provider" outcome
       // (spec: still SSE, badge says so) — every other path keeps `KIND_LABEL`'s default.
       ...(resolved.note === undefined ? {} : { provenance: resolved.note }),
-      ...(autoFightMs === undefined || Number.isNaN(autoFightMs) ? {} : { autoFightMs }),
+      // `autoFightMs` is always a number by construction above; the guard is only
+      // for a malformed `?autofight=` value (`Number('x') * 1000` is `NaN`), which
+      // falls back to `createInterludeUi`'s own default rather than passing `NaN`
+      // through as a real timeout.
+      ...(Number.isNaN(autoFightMs) ? {} : { autoFightMs }),
       onFight: () => goToNextRound(nextSource),
       onSkip: () => {
         // The 50 s safety valve: whatever the stream is doing, stop and fight.

@@ -1194,6 +1194,221 @@ suites (`gates.test.ts`, `rollingWindow.test.ts`) and the full `agents` suite
 extended to run with the profile block actually present rather than only proving
 the denial for a prompt shape the loop no longer sends.
 
+## 2026-09-09 (yet again) — the learning is real; the fight didn't say so
+
+Reported from play: *"não sinto que ele aprendeu"* — I don't feel that it learned.
+The rewrite the whole project argues for (Analyst → Coder, between rounds) is real,
+and it already produces the single most honest artifact the product has: a boss
+with a new name and a `meta.rationale` written about *this* player's habits
+("You never leave the left wall, so the spawns land there now"). None of that was
+wrong. What was wrong is where it lived — entirely in the interlude, a 25-second
+screen the player watches once and then leaves behind. The fight itself, the part
+being played, showed the same sentence in one small HUD panel (`hud-strategy`,
+bottom-left, ~11px italic) that nothing on screen ever points at. The claim was
+true and unfelt.
+
+Two presentation changes, `packages/web` only — no engine, contract, sandbox,
+harness, agents or server file touched, so nothing here can move the replay hash
+or a fairness gate by a pixel. `test/*.test.ts`'s "read-only presentation" checks
+(the `fighters.test.ts` pattern) now cover both new modules by inspecting
+`game/round.ts`, `game/strategy.ts`, `game/loop.ts` and `game/seeds.ts` for the
+import and finding nothing.
+
+**The round-start banner.** When a round starts against a strategy the loop
+actually wrote (`provenance === 'approved'` — the same test `originLabel` in
+`ui/hud.ts` already makes for the "written for you" chip), a banner opens over the
+live arena for ~4 s and then collapses toward the HUD panel that keeps saying the
+same thing: the boss's new name, and its `rationale`, verbatim. `ui/roundBanner.ts`
+is a pure timing reducer — `armed → visible → leaving → hidden`, ticks not
+milliseconds, in `interlude/castStatus.ts`'s `reduceCast` style — so the whole
+sequence is asserted in Node with no DOM; `ui/roundBannerView.ts` is the thin DOM
+half. `pointer-events: none` throughout: the fight is live under it, and
+`e2e/interlude.spec.ts` now asserts the fight is still ticking with the banner on
+screen rather than merely that the banner exists. It says nothing for Round 1's
+bundled boss or a pre-approved fallback pick, same as the chip — a banner over a
+strategy nobody wrote for this session would be the one place the product lies.
+
+One bug caught by writing the reducer's own test, not by playing: a single large
+tick jump (`app.ts`'s `fastForward`, used by the replay/e2e hooks, renders once
+after simulating many ticks synchronously) could land the state in `leaving` and
+never advance to `hidden`, because the first version stepped one phase per call.
+Fixed by computing the phase directly from elapsed ticks instead of from the
+current phase — order-independent, so one call covering the whole window lands in
+the right place regardless of how many ticks it skipped.
+
+**"It knows your ground."** The app already holds the previous round's
+`ReplaySummary` — it is exactly what `context.summary` hands the interlude for the
+rewrite request, so `app.ts` forwards that same object into the next
+`startRound()` call and nowhere else. `render/habitCells.ts` ranks that summary's
+`playerPosHeat` into the top 3 cells the player actually lived in last round,
+mirroring `rankHotCells`/`cellCentre` in
+`packages/agents/src/context/renderSummary.ts` by hand (`web` cannot import
+`@rematch/agents`) rather than by sharing code. `render/habitHighlight.ts` tails
+`state.events` the same way `render/effects.ts` already does, and the moment a
+`bossSlamStart` telegraph or a `bossSpawn` lands inside one of those cells, the
+renderer pulses a subtle outline over that floor cell in the boss's accent for
+about a second, with a small DOM "YOUR HABIT" caption positioned over it
+(`ui/habitCaption.ts` — text is DOM, not canvas, for the same crispness reason the
+HUD is). Retries and Round 1 pass `null` for the previous summary on purpose
+(`startRound`'s new parameter is omitted there, not defaulted around), so the
+feature is silent exactly where there is nothing honest to say — no previous round
+to have read.
+
+### What this deliberately does not do
+
+No gameplay changed: the boss's decisions, the fairness gates and the replay hash
+are all unaware either feature exists. No new claim was invented — both features
+surface data the loop already produces (`meta.rationale`, the position heat map)
+rather than adding narration on top of it. The habit highlight never triggers on
+a charge telegraph (only slam and spawn have a single target point that can sit
+inside a cell), and it only ever shows the *previous* round's habit, never
+re-reading the live one — showing a player's current position back at them in
+real time would be a different, noisier feature.
+
+### Matt playtested it, liked it, and found two more things
+
+Two adjustments, same day, same file set (`packages/web` only, still no sim
+touched):
+
+**1. The interlude was still moving on by itself.** The FIGHT button existed, but
+`createInterludeHandler`'s `autoFightMs` defaulted to `undefined`, which
+`interlude/ui.ts`'s `createInterludeUi` reads as its own `AUTO_FIGHT_MS` (3 s):
+after `done`, the screen counted down and continued on its own whether or not
+anyone had read the verdict. Every automated flow already passed
+`?autofight=0` explicitly (the whole e2e suite, the mock and recorded demo paths),
+which is what made the fix a one-line default flip rather than a feature to build:
+`interlude/index.ts` now resolves no-param to `0` (disabled) instead of
+`undefined`, so a human player always gets the button and nothing in this
+codebase's own automated flows needed to change to keep working. `?autofight=<n>`
+still opts back in for whoever wants the old countdown.
+
+**2. The banner was in the wrong place.** Matt, in his own words: *"Ao clicar,
+coloque na tela aquele quadrado que mostra o que o boss aprendeu, por uns 3-4
+segundos. Depois feche e comece o jogo."* — on click, put the box that shows what
+the boss learned on screen for 3-4 seconds, then close it and start the fight.
+Not an overlay on a live round any more; a pre-fight interstitial the player
+closes into the fight. That moved the reducer's clock from ticks to wall time —
+while the interstitial is up the round has not taken a single tick, so there is no
+tick clock yet to measure against, the same category of timing the interlude's own
+`setTimeout` deadlines already use. `roundBanner.ts`'s phases collapsed from
+`visible → leaving` (over live ticks) to one `holding` phase timed by `nowMs`
+(`BANNER_HOLD_MS = 3500`); `app.ts` gates `loop.start()` on `banner.isHolding()`
+and runs a small dedicated `requestAnimationFrame` ticker to drive `banner.update`
+while nothing else is producing frames yet — cancelled in `teardown()` so a round
+torn down mid-hold (a retry, `driveWith`, a fast reopen) cannot leave a stale
+callback pointed at a `loop` a *later* round now owns. `round.state.tick` is 0
+throughout the hold and the eventual `loop.start()` still begins at tick 0 like
+every other round, so nothing about determinism moved.
+
+Auditing "does anything assume stepping starts immediately on round entry" (the
+brief's own ask) turned up two real edges, both fixed before either shipped:
+
+- **Retrying an approved boss must not reopen the reveal.** `roundProvenance`
+  alone used to decide both the HUD's "written for you" chip *and* whether the
+  banner armed — correct for the chip (a retry should still say so) and wrong for
+  the banner (a retry replays the fight the player just lost, not a new one the
+  loop wrote; reopening a 3.5 s reveal every death would turn it into friction, not
+  a moment). `startRound` gained `showLearnedBanner`, passed `true` only from the
+  interlude's own `next()` — the one call site that is always a genuine win→next
+  transition — so a retry keeps the chip without the interstitial.
+- **`fastForward` (the debug/e2e "skip to the end" hook) must skip the
+  interstitial too**, not race it: it simulates synchronously regardless of
+  whether `loop.start()` was ever called, so calling it while a round was still
+  holding would run the fight to its outcome behind a banner that was still on
+  screen, with the hold ticker left dangling into the next screen. It now cancels
+  the ticker and force-dismisses the banner first — "skip to the end" already
+  means past this too.
+
+Both were caught by reasoning through the call sites before playing, and the
+second one is now `e2e/interlude.spec.ts`'s "retrying a round the interstitial
+already opened for does not reopen it".
+
+### What this still deliberately does not do
+
+Everything the first cut promised, unchanged: no gameplay moved, no new claim
+invented, the habit highlight still only ever shows the previous round's pattern.
+Added by this pass: the interstitial's hold is real wall-clock time, spent before
+the round's *own* clock starts rather than borrowed from it — a slow machine gets
+the same ~3.5 s pause and then the same fair fight, not a shorter fight to make up
+the difference.
+
+### Verification
+
+`pnpm --filter @rematch/web` typecheck, lint (repo-wide, scoped away from `web`)
+and test are green; **262 web unit tests** (up from 222 at the top of this entry,
+261 after the first pass, +1 net here — the reducer's tests were rewritten for the
+`holding` phase rather than only added to) plus one new structural/behavioural
+Playwright spec (**27 specs total**, `e2e/interlude.spec.ts`'s new retry case
+included) pass against the production build. `round-banner.png` and
+`interlude-round2-boss.png` in `artifacts/web/` were re-shot and now show the
+interstitial at tick 0 (timer frozen at `1:00`, no boss movement) and the same
+arena mid-fight once it has closed. `pnpm verify` (all seven packages) is green.
+
+## 2026-09-09 (and again) — a slam is not a threat where the player cannot be
+
+Reported from play, on a round that reached ADAPT mode: the boss slammed the
+player's habit cell while the player was on the other side of the arena — Matt's
+report, verbatim: *"even dashing toward it he'd only get halfway there."* The
+instruction that produced this was `ADAPT_DIALS`'s `place` dial
+(`packages/agents/src/context/prompts.ts`): *"Put every `slam` on the hottest cell
+… and commit it there whether or not the player is standing in it right now."*
+Unconditionally, on purpose — that line shipped 2026-09-09 (later still), the same
+day, to fix the *opposite* problem (a boss that wouldn't touch the habit cell at
+all). It overcorrected: a `slam` telegraphs once and hits once, at one point, and a
+telegraph aimed somewhere the player structurally cannot reach before it resolves
+is not pressure, it is the boss missing on purpose, and the Mimic (which keeps
+walking back into its own hot cells) rewarded exactly that while a real human
+punished it for free.
+
+**The arithmetic, verified against the engine rather than trusted from the report**
+(`packages/engine/src/constants.ts`, `packages/contract/src/types.ts`): a slam's
+telegraph is `CONSTANTS.telegraphs.slam` = 40 ticks = 0.667 s. In that window a
+player's best-case straight-line travel is one dash (`dashSpeed` 11 px/tick x
+`dashTicks` 10 = 110 px, matching the constant's own "~110 px of travel" comment)
+plus the remaining 30 ticks at `speed` 3.6 px/tick (108 px) = **218 px**, and a slam
+resolves against `d <= E.slam.radius` — no player-radius padding
+(`step.ts`, the `'slam'` case) — where `E.slam.radius` = **110 px**. So **218 + 110
+= 328 px** (rounded to ~220 px / ~330 px in the prompt) is the honest "cannot
+possibly land" line: nobody, however skilled, can be hit by a slam aimed farther
+than that from where they currently stand, because the best case already falls
+short.
+
+**The fix, three places, `packages/agents` only:**
+
+- `ADAPT_DIALS`'s `place` now gates the habit-cell slam on reach — in it, or close
+  enough to still be there when it resolves — and leads the *live* player
+  otherwise (`player.x + player.vx * 40`, `player.y + player.vy * 40`, the same
+  formula `orbiter.js` already uses for its own slam lead), spending `spawn`/
+  `burst` to make the habit ground costly instead of slamming it empty. `ground`
+  needed no equivalent fix and now says why: a minion has no telegraph-then-resolve
+  gap to be caught out of reach by.
+- `harnessHints` gained the reachability arithmetic above as a measured game fact —
+  numbers only, no engine identifier, so the denial test holds it to the same
+  standard as every other line. Budget raised 1300 → 1800 characters (system prompt
+  ~13.7 KB), the same "pay for it, don't drift into it" rule as every earlier raise.
+- The mem rolling-window bullet (2026-09-09, later still) picked up one clause:
+  lead the ring's centroid by the player's live velocity across a slam's telegraph,
+  for the same reason — a recent-position target is still just a point in space
+  until something says how far ahead of it to aim.
+
+### Verification
+
+`pnpm --filter @rematch/agents test` — 235 tests, all green (up from 230: four new
+`ADAPT_DIALS`/`harnessHints` assertions plus the reachability numbers pinned in
+`context.test.ts`, in a new describe block named for the playtest). `pnpm --filter
+@rematch/agents exec tsc -p tsconfig.json --noEmit` — clean. `pnpm verify` —
+green, 79 s, 1113 tests across all seven packages (contract 206, engine 91,
+sandbox 100, web 262, harness 139, agents 235, server 80); lint clean.
+
+While this was in flight, two other streams landed unrelated work in the same
+checkout — a `REMATCH_STRAGGLER_MS` env override in `loop.ts` for the `claude-cli`
+provider's slower healthy-call tail, and the round-banner / habit-highlight
+features logged just above — neither touches a line this entry changed, and both
+are reflected in the test counts above. This entry also restores the "## Open —
+dated placeholders" heading immediately below, which one of those edits dropped
+while inserting its own entry ahead of it — a markdown slip, not a decision to
+close the section; its placeholders are unchanged.
+
 ## Open — dated placeholders
 
 Listed with what would close them, so each gap stays legible. AC 6 is kept here, struck

@@ -32,9 +32,12 @@ import type { RunnerStats } from './game/runnerStats.ts';
 import { formatSeed, resolveSessionSeed, roundSeed } from './game/seeds.ts';
 import { bundledSource, sandboxFactory, SandboxLoadError } from './game/strategy.ts';
 import { createInterludeHandler, type InterludeDebug } from './interlude/index.ts';
+import { habitCellsFromSummary } from './render/habitCells.ts';
 import { createRenderer, type Renderer } from './render/renderer.ts';
+import { createHabitCaption, type HabitCaption } from './ui/habitCaption.ts';
 import { createHud, debugFooterEnabled, type Hud } from './ui/hud.ts';
 import { introDecision, readFighter, readSkipIntro, writeFighter, writeSkipIntro } from './ui/intro.ts';
+import { createRoundBanner, type RoundBanner } from './ui/roundBannerView.ts';
 import { createScreens, type Screens } from './ui/screens.ts';
 
 /** Spec §2.1: up to Round 5, then the win screen. */
@@ -164,6 +167,12 @@ export function createApp(options: AppOptions): App {
   const fighters = { player: readFighter('player'), boss: readFighter('boss') };
   renderer.setFighters(fighters);
   const hud: Hud = createHud(options.hud, { debugFooter: debugFooterEnabled(search) });
+  // Both mount into the HUD root, appended after `createHud`'s own `replaceChildren`
+  // so neither is wiped by it. Both are cosmetic-only entrances over an existing
+  // readout — the banner over `hud-strategy`, the caption over the boss's own
+  // telegraph — and neither ever reaches `GameState` or a strategy's view.
+  const banner: RoundBanner = createRoundBanner(options.hud);
+  const habitCaption: HabitCaption = createHabitCaption(options.hud);
   const screens: Screens = createScreens(options.screen);
   const input: InputSource = createInputSource({ canvas: options.canvas, arenaSize: ARENA });
 
@@ -174,6 +183,42 @@ export function createApp(options: AppOptions): App {
   let booted = false;
   /** Published through `debug.interlude` while an interlude is on screen. */
   let interludeDebug: InterludeDebug | null = null;
+  /**
+   * The banner's own `requestAnimationFrame` ticker, live only while the pre-fight
+   * interstitial is holding (`banner.isHolding()`) — the sim is not stepping yet,
+   * so nothing else is driving a frame loop that could advance it. Tracked so
+   * `teardown()` can cancel a stale one: without this, tearing a round down mid-hold
+   * (a retry, `driveWith`, a fast window-close-reopen) would leave a callback
+   * pointing at a `banner`/`loop` that a *later* round now owns, and it would call
+   * that later round's `loop.start()` on a delay nobody asked for.
+   */
+  let holdTicker: number | null = null;
+
+  function cancelHoldTicker(): void {
+    if (holdTicker !== null) {
+      cancelAnimationFrame(holdTicker);
+      holdTicker = null;
+    }
+  }
+
+  /**
+   * Drives the banner's `update()` while the round it belongs to has not started
+   * stepping — see `roundBanner.ts`'s module doc for why this is wall-clock rather
+   * than tick-based. Ends by calling `loop.start()` itself: that is the one and
+   * only place a held round's first tick gets scheduled.
+   */
+  function runHoldTicker(): void {
+    const step = (): void => {
+      holdTicker = null;
+      banner.update(performance.now());
+      if (banner.isHolding()) {
+        holdTicker = requestAnimationFrame(step);
+        return;
+      }
+      loop?.start();
+    };
+    holdTicker = requestAnimationFrame(step);
+  }
 
   function fitStage(): void {
     const viewport = renderer.resize();
@@ -198,6 +243,17 @@ export function createApp(options: AppOptions): App {
 
   function render(current: Round): void {
     renderer.draw(current.state);
+
+    // The "YOUR HABIT" caption stays one drawn frame behind the highlight it
+    // labels by construction — both read off the same `draw()` call.
+    const habit = renderer.activeHabitHighlight();
+    if (habit === null) habitCaption.hide();
+    else habitCaption.show(habit.x, habit.y, renderer.viewport().cssSize, ARENA);
+    // A no-op once the pre-fight interstitial has closed (`banner`'s own state is
+    // `hidden` for the rest of the round) — see `runHoldTicker` for who drives this
+    // call while the round has not started stepping yet.
+    banner.update(performance.now());
+
     const stats = loop?.stats();
     hud.update(current.state, {
       round: current.index,
@@ -212,6 +268,7 @@ export function createApp(options: AppOptions): App {
   }
 
   function teardown(): void {
+    cancelHoldTicker();
     loop?.dispose();
     loop = null;
     round?.dispose();
@@ -223,11 +280,34 @@ export function createApp(options: AppOptions): App {
     source?: string,
     deterministic = false,
     provenance: StrategyProvenance = 'bundled',
+    /**
+     * The just-finished round's `ReplaySummary` — the same object `context.summary`
+     * hands the interlude for the rewrite request — so this round's habit-cell
+     * highlight (`render/habitCells.ts`) knows where the player used to live.
+     * `null` for round 1 and for every retry (`onRetry` below omits it on purpose):
+     * a retry replays the fight the player just lost, not a new one the loop wrote
+     * off a fresh replay, so "it knows your ground" has nothing new to show.
+     */
+    prevSummary: ReplaySummary | null = null,
+    /**
+     * Whether *this* round transition is the moment to open the pre-fight "it
+     * learned" interstitial (`ui/roundBanner.ts`). `false` for round 1, a retry,
+     * `driveWith` and the debug hook — a retry in particular replays the fight the
+     * player just lost against the boss they already met, so re-opening the
+     * interstitial every time they die would be the annoying-friction version of
+     * the same bug `prevSummary` already avoids for the habit-cell highlight, not
+     * a repeat of the reveal. Only the interlude's own `next()` (below) passes
+     * `true`, and only when the strategy it is handing off really is one the loop
+     * wrote (`banner.start` still re-checks `provenance === 'approved'` itself).
+     */
+    showLearnedBanner = false,
   ): Promise<void> {
     teardown();
     input.clear();
     renderer.reset();
     hud.reset();
+    banner.reset();
+    habitCaption.hide();
     screens.loading(index === 1 ? 'Loading the boss' : `Round ${index}`);
 
     const seed = roundSeed(sessionSeed, index);
@@ -246,6 +326,15 @@ export function createApp(options: AppOptions): App {
       return;
     }
 
+    renderer.setHabitCells(habitCellsFromSummary(prevSummary, ARENA, ARENA));
+    // `banner.reset()` above already leaves it `hidden`; only a genuine win->next
+    // transition (`showLearnedBanner`) is allowed to arm it, so a retry keeps the
+    // HUD's "written for you" chip (from `roundProvenance` alone, below) without
+    // reopening the reveal.
+    if (showLearnedBanner) {
+      banner.start(performance.now(), roundProvenance, round.state.strategy.name, round.state.strategy.rationale);
+    }
+
     const current = round;
     loop = createLoop({
       round: current,
@@ -259,7 +348,15 @@ export function createApp(options: AppOptions): App {
 
     screens.hide();
     render(current);
-    loop.start();
+    // A round with a strategy the loop wrote holds here on a pre-fight interstitial
+    // (spec: Matt's playtest, `docs/AI-DEV-LOG.md` 2026-09-09) — `banner.start` just
+    // above only *arms* it for `provenance === 'approved'`, so `isHolding()` is the
+    // single source of truth for whether `loop.start()` happens now or after the
+    // hold. `round.state.tick` stays 0 throughout: nothing here steps the sim, so
+    // the input log the eventual `loop.start()` begins recording still starts at
+    // tick 0, same as any other round — the delay is entirely host-side UI time.
+    if (banner.isHolding()) runHoldTicker();
+    else loop.start();
   }
 
   async function handleOutcome(finished: Round): Promise<void> {
@@ -313,7 +410,13 @@ export function createApp(options: AppOptions): App {
       source: finished.source,
       isFinal,
       next: (nextSource?: string, nextProvenance?: StrategyProvenance) =>
-        startRound(finished.index + 1, nextSource, false, nextProvenance ?? 'bundled'),
+        // `summary` is this round's — exactly what was just handed to the interlude
+        // as `context.summary` (the rewrite request's `summary` field) — so the
+        // *next* round's habit-cell highlight reads the replay the loop actually
+        // wrote the new boss against. `true`: this is the one call site that is
+        // always a genuine win->next transition, never a retry, so it is the only
+        // place the pre-fight interstitial is allowed to open.
+        startRound(finished.index + 1, nextSource, false, nextProvenance ?? 'bundled', summary, true),
     };
 
     await roundWon(context);
@@ -399,6 +502,19 @@ export function createApp(options: AppOptions): App {
       loop?.setInput(logInputProvider(log));
     },
     fastForward(maxTicks = ENGINE_CONSTANTS.round.maxTicks): number {
+      // `loop.fastForward` simulates synchronously regardless of whether
+      // `loop.start()` was ever called, so a round still holding on the pre-fight
+      // interstitial would otherwise run to completion *behind* a banner that is
+      // still on screen, with its `requestAnimationFrame` ticker left dangling
+      // (harmless once the round ends — `loop.start()`'s own `ended` guard makes
+      // its eventual call a no-op — but a stray frame or two of a banner floating
+      // over the outcome screen for no reason). Skipping straight past it here
+      // matches what `fastForward` means everywhere else it is used: skip to the
+      // end, now.
+      if (banner.isHolding()) {
+        cancelHoldTicker();
+        banner.reset();
+      }
       return loop?.fastForward(maxTicks) ?? 0;
     },
     renderFrame(): void {

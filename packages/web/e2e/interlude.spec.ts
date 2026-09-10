@@ -15,7 +15,12 @@
  * conference wifi.
  *
  * `?speed=20` compresses the mock's ~25 s to ~1.3 s. `?autofight=0` holds the
- * finished screen open so the assertions run before it hands over.
+ * finished screen open so the assertions run before it hands over — which is also
+ * the real-play default now (a 2026-09-09 playtest finding; see
+ * `docs/AI-DEV-LOG.md`): nothing advances past a finished interlude without an
+ * explicit click, here or in front of a player. Clicking FIGHT then opens a brief
+ * pre-fight interstitial (the same "boss learned" banner, moved off the live fight
+ * by a second playtest finding) before Round 2's simulation takes its first tick.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -204,21 +209,78 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await page.getByTestId('il-beat-trial').screenshot({ path: `${ARTIFACTS}interlude-cast-judge.png` });
 
   // -------------------------------------------------- and then: round 2
+  // Manual by default (a 2026-09-09 playtest finding — see `docs/AI-DEV-LOG.md`):
+  // nothing advances until this click. If the interlude's own auto-continue were
+  // still armed, `il-root` would already be gone by the time the test gets here.
+  await expect(page.getByTestId('il-root')).toBeVisible();
   await page.getByTestId('il-fight').click();
   await expect(page.getByTestId('il-root')).toHaveCount(0);
   await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
 
   // The payoff, and the only assertion that cannot be faked: the HUD reads the
   // strategy name out of the loaded QuickJS module, so Round 2 really is being
-  // driven by the source the interlude said was approved.
+  // driven by the source the interlude said was approved. True immediately — the
+  // HUD panel is drawn from the round's first (static) frame, before the
+  // interstitial below ever opens.
   await expect(page.locator('.hud-strategy .name')).toHaveText('Warden');
   await expect(page.locator('.hud-round')).toContainText('Round 2');
   await expect(page.locator('.hud-strategy .rationale')).toContainText('where you live');
-  await expect.poll(async () => page.evaluate(() => window.__rematch?.state?.tick ?? 0)).toBeGreaterThan(30);
+
+  // The mission this feature exists for: the interlude already said the boss was
+  // rewritten for this player, and the fight itself said so only in a small HUD
+  // panel nobody reads mid-combat. This is that claim again, said once more, loudly
+  // — but now as a pre-fight interstitial rather than something layered over the
+  // live fight (a second 2026-09-09 playtest finding moved it here; see the log).
+  // The simulation must not have taken a single tick while it is up.
+  const banner = page.getByTestId('round-banner');
+  await expect(banner).toBeVisible();
+  await expect(page.getByTestId('round-banner-name')).toHaveText('Warden');
+  await expect(page.getByTestId('round-banner-rationale')).toContainText('where you live');
+  expect(await page.evaluate(() => window.__rematch?.state?.tick ?? -1)).toBe(0);
+  await page.locator('#stage').screenshot({ path: `${ARTIFACTS}round-banner.png` });
+
+  // It closes on its own — nothing to click — and only then does the round start
+  // stepping. Waited for on the real wall clock (~3.5 s): unlike the old
+  // over-the-fight version, this timing no longer depends on how fast the sim
+  // itself is ticking, so there is nothing flaky to work around here.
+  await expect(banner).toBeHidden({ timeout: 8_000 });
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.state?.tick ?? 0)).toBeGreaterThan(0);
 
   await page.locator('#stage').screenshot({ path: `${ARTIFACTS}interlude-round2-boss.png` });
 
   expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+});
+
+test('retrying a round the interstitial already opened for does not reopen it', async ({ page }) => {
+  // The interstitial's whole reason to exist is a one-time reveal ("the boss
+  // learned"); reopening it every time the player dies and retries would turn a
+  // reveal into friction. `startRound`'s `showLearnedBanner` is what this guards —
+  // a retry keeps the HUD's "written for you" chip (same `roundProvenance`) but
+  // must never re-arm the banner.
+  await winRound1(page, 'agent=mock&speed=20&autofight=0');
+  await page.waitForFunction(() => window.__rematch?.interlude?.state.done === true, undefined, { timeout: 30_000 });
+  await page.getByTestId('il-fight').click();
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
+
+  // Skip straight past the interstitial — `debug.fastForward` is documented to do
+  // exactly that — and run Round 2 out with no player input, which loses it
+  // (timeout or a hit either way count as `outcome !== 'playerWon'`).
+  await page.evaluate(() => window.__rematch?.fastForward());
+  const screen = page.locator('#screen');
+  await expect(screen).toHaveAttribute('data-screen', 'gameOver');
+  await expect(screen).toContainText('Warden');
+
+  await page.getByTestId('primary').click();
+  await expect.poll(async () => page.evaluate(() => window.__rematch?.round ?? 0)).toBe(2);
+  expect(await page.evaluate(() => window.__rematch?.state?.strategy.name)).toBe('Warden');
+
+  // The chip still says the fight is against a strategy the loop wrote...
+  await expect(page.getByTestId('boss-origin')).toHaveText('written for you');
+  // ...but the reveal itself does not come back, on this retry or the next couple
+  // of frames after it (giving any wrongly-armed interstitial a chance to appear).
+  await expect(page.getByTestId('round-banner')).toBeHidden();
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId('round-banner')).toBeHidden();
 });
 
 test('each beat is legible on its own — the demo screenshots', async ({ page }) => {
