@@ -1,6 +1,7 @@
 export {
   TIMELINE_BUDGET,
   cellCentre,
+  rankHotCells,
   renderDashRose,
   renderHeatGrid,
   renderHotCells,
@@ -8,15 +9,19 @@ export {
   renderShotsDuring,
   renderSummary,
   renderTimeline,
+  type HotCell,
   type RenderSummaryOptions,
 } from './renderSummary.ts';
 
 export { contractDoc, cutSubsection, markdownSection, stripBlockComments } from './contractDoc.ts';
 
+export { playerProfile, renderPlayerProfile, type PlayerProfile } from './playerProfile.ts';
+
 export {
   ADAPT_DIALS,
   ARCHETYPES,
   DIALS,
+  DIAL_ORDER,
   analystPrompt,
   adaptDials,
   blendDials,
@@ -26,6 +31,7 @@ export {
   dialFor,
   harnessHints,
   harnessRules,
+  incumbentAnchor,
   nameRule,
   promptSize,
   renderBotRates,
@@ -34,11 +40,13 @@ export {
   takenNames,
   type Analysis,
   type AnalystContext,
+  type AnalystRetryContext,
   type BotRates,
   type CandidateOutcome,
   type CoderBracket,
   type CoderContext,
   type CoderDial,
+  type CoderIncumbent,
   type CoderRejection,
   type PlayerArchetype,
   type Prompt,

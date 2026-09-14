@@ -251,6 +251,28 @@ describe('probeHealth', () => {
     await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({ useServer: true, fallbackOnly: true });
   });
 
+  it('carries the deadlineMs the server advertises, so the client can adopt it', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, hasApiKey: true, provider: 'claude-cli', deadlineMs: 90_000 }), { status: 200 }),
+      );
+    await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({
+      useServer: true,
+      fallbackOnly: false,
+      deadlineMs: 90_000,
+    });
+  });
+
+  it('omits deadlineMs when the server advertises nothing usable, rather than passing NaN on', async () => {
+    for (const deadlineMs of [undefined, null, 0, -1, 'soon', Number.NaN]) {
+      const body = deadlineMs === undefined ? { ok: true, hasApiKey: true } : { ok: true, hasApiKey: true, deadlineMs };
+      const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+      const result = await probeHealth('', fetchMock as unknown as typeof fetch);
+      expect(result, String(deadlineMs)).toEqual({ useServer: true, fallbackOnly: false });
+    }
+  });
+
   it('reports useServer: false on a non-2xx response', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('nope', { status: 500 }));
     await expect(probeHealth('', fetchMock as unknown as typeof fetch)).resolves.toEqual({

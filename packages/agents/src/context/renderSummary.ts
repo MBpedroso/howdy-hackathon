@@ -60,6 +60,33 @@ export function cellCentre(cell: number, arenaW: number, arenaH: number): { x: n
   };
 }
 
+export type HotCell = { cell: number; share: number; x: number; y: number };
+
+/**
+ * The top `count` hottest cells — share descending, cell index ascending to break
+ * a tie deterministically — each resolved to its arena centre.
+ *
+ * Factored out of `renderHotCells` so the cell math (which cells count, and what
+ * coordinates they map to) lives exactly once. `renderHotCells` renders it as
+ * prose for the Analyst; `playerProfile.ts`'s `renderPlayerProfile` serializes the
+ * same ranking as JSON for the Coder (analysis item 7,
+ * `docs/ANALYSIS-learning-signal-2026-09-09.md`), and the two must never be able
+ * to quietly disagree about which cell is "hottest".
+ */
+export function rankHotCells(
+  heat: readonly number[],
+  arenaW: number,
+  arenaH: number,
+  count = 4,
+): HotCell[] {
+  return heat
+    .map((share, cell) => ({ cell, share }))
+    .filter((c) => c.share > 0)
+    .sort((a, b) => b.share - a.share || a.cell - b.cell)
+    .slice(0, count)
+    .map((c) => ({ cell: c.cell, share: c.share, ...cellCentre(c.cell, arenaW, arenaH) }));
+}
+
 /** `(x=650, y=750) 41% of the round` — the cells worth naming, hottest first. */
 export function renderHotCells(
   heat: readonly number[],
@@ -67,17 +94,13 @@ export function renderHotCells(
   arenaH: number,
   count = 4,
 ): string {
-  const ranked = heat
-    .map((share, cell) => ({ cell, share }))
-    .filter((c) => c.share > 0)
-    .sort((a, b) => b.share - a.share || a.cell - b.cell)
-    .slice(0, count);
+  const ranked = rankHotCells(heat, arenaW, arenaH, count);
   if (ranked.length === 0) return '  (no position samples)';
   return ranked
-    .map((c) => {
-      const { x, y } = cellCentre(c.cell, arenaW, arenaH);
-      return `  cell ${c.cell} (col ${c.cell % GRID}, row ${(c.cell - (c.cell % GRID)) / GRID}) ~ x=${x}, y=${y} — ${(c.share * 100).toFixed(1)}% of the round`;
-    })
+    .map(
+      (c) =>
+        `  cell ${c.cell} (col ${c.cell % GRID}, row ${(c.cell - (c.cell % GRID)) / GRID}) ~ x=${c.x}, y=${c.y} — ${(c.share * 100).toFixed(1)}% of the round`,
+    )
     .join('\n');
 }
 

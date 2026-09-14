@@ -4,18 +4,34 @@
  * strong, a boss that beats the Mimic proves it learned something about *you*.
  *
  * It is constructed from a `ReplaySummary` — the same compressed object the Analyst
- * agent reads, and nothing more. Three channels, one per field the summary carries:
+ * agent reads, and nothing more. Four channels, one per field (group) the summary
+ * carries:
  *
  *  | Summary field         | Mimicked behaviour |
  *  |-----------------------|--------------------|
  *  | `history.playerPosHeat` (8x8) | where it walks: a target cell sampled in proportion to the human's dwell time |
  *  | `history.playerDashDirs` (8)  | which way it dashes, and how often (`player.dashes / ticks`) |
  *  | `history.playerShotsDuring`   | when it shoots: biased towards the primitives the human shot during |
+ *  | `player.shots` vs `boss.damageTaken` | how well it shoots: the aimer's `accuracy`, see `accuracyFromSummary` |
  *
  * A camper summary (dwell concentrated in one corner cell, dashes in one or two
  * bins) and a rusher summary (dwell spread through the middle, dashes everywhere)
  * therefore produce visibly different play, which `test/bots.test.ts` asserts by
  * measuring both — the Mimic is worthless as an oracle if it collapses to one bot.
+ *
+ * ## What is deliberately *not* a channel: dodge quality
+ *
+ * `player.damageTaken` (how much the human got hit) looks like an obvious fourth
+ * channel, feeding the survival-floor thresholds below — but the summary has no
+ * companion field for "how much the boss threw at them". `boss.primitives` counts
+ * *uses* of each primitive, not projectiles: a `burst` can be a 3-shot cone or an
+ * 8-shot ring (`ENGINE_CONSTANTS.burst.ringCount`, contract §4.3 delta 3), a `slam`
+ * either lands or doesn't, and minion contact damage is folded into the same
+ * `damageTaken` total. Two humans with identical dodge skill would score
+ * differently here purely because one fought a burst-heavy boss and the other a
+ * slam-heavy one — the ratio measures the boss, not the player. That is exactly
+ * the speculative-mapping case the calibration work was warned off of, so the
+ * survival floor stays the fixed floor it already was.
  */
 import {
   activePrimitives,
@@ -50,8 +66,84 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+/** Accuracy used when a summary carries no evidence at all (`player.shots === 0`) — the fixed value every Mimic used before this file could derive one. */
+const NO_EVIDENCE_ACCURACY = 0.72;
+
+/**
+ * The two calibrated points `BASE_AIM_ERROR`'s own doc comment already commits to:
+ * at `accuracy = 0.7` "roughly half [the] shots" land at typical range, and at
+ * `accuracy = 0.85` "the whole aim cone lands on the boss" — effectively a 100%
+ * hit rate. Read as `(hitRate, accuracy)` pairs, they are the only two data points
+ * the codebase has already reviewed and shipped an interpretation for.
+ */
+const ANCHOR_LO = { hitRate: 0.5, accuracy: 0.7 };
+const ANCHOR_HI = { hitRate: 1.0, accuracy: 0.85 };
+
+/**
+ * Sane bounds on the derived accuracy, so a degenerate summary (zero shots, or a
+ * hand-edited fixture with a hit count above its own shot count) cannot hand the
+ * aimer a 0 (uniform-random) or 1 (laser-perfect) value. They are exactly what the
+ * line through the two anchors above produces at `hitRate` 0 and 1, so they are a
+ * restatement of that line's own range rather than a second, independent choice.
+ */
+const MIN_ACCURACY = ANCHOR_LO.accuracy - ANCHOR_LO.hitRate * ((ANCHOR_HI.accuracy - ANCHOR_LO.accuracy) / (ANCHOR_HI.hitRate - ANCHOR_LO.hitRate)); // 0.55
+const MAX_ACCURACY = ANCHOR_HI.accuracy; // 0.85
+
+/**
+ * Map a measured hit rate onto the aimer's `accuracy` with a straight line through
+ * `ANCHOR_LO` and `ANCHOR_HI`.
+ *
+ * The physically literal way to do this is to invert `makeAimer`'s geometry: it
+ * rotates the aimed angle by a value uniform in `±spread` where `spread =
+ * BASE_AIM_ERROR * (1 - accuracy)`, a shot lands when that error falls inside the
+ * boss's angular half-width at some reference range, so hit rate is
+ * `min(1, halfAngle / spread)` — which *does* reduce to the anchors above at
+ * `halfAngle ≈ 0.093 rad` (the boss at ~300 px, the range `BASE_AIM_ERROR`'s
+ * comment itself uses). That was the first version of this function, and it was
+ * wrong in a way only measurement caught (§5 Q3, `scripts/mimic-calibration.ts`):
+ * inverting `min(1, halfAngle / spread)` has a pole as `hitRate → 0`, so a
+ * genuinely low hit rate — which the `camper-round1` fixture has, 0.355, real
+ * long-range camping data — drives `accuracy` down far enough that the Mimic
+ * could no longer reliably kill even a boss that never attacks within the round's
+ * 3600-tick clock (measured: 95% boss "wins", all by timeout, against `idle.js`).
+ * A camper who plays worse than a target that stands still is not the weaker
+ * player the calibration is supposed to model — it is a bug wearing the shape of
+ * one, the same failure mode the survival floor's own comment warns about for the
+ * dodge channel. A straight line through the same two anchors has no pole: it is
+ * bounded to `[MIN_ACCURACY, MAX_ACCURACY]` for any `hitRate` in `[0, 1]` by
+ * construction, so the explicit clamp below is a documented invariant rather than
+ * a rescue. It is a cruder fit far from the anchors, which is the honest price of
+ * not blowing up there.
+ */
+function accuracyFromHitRate(hitRate: number): number {
+  const slope = (ANCHOR_HI.accuracy - ANCHOR_LO.accuracy) / (ANCHOR_HI.hitRate - ANCHOR_LO.hitRate);
+  const raw = ANCHOR_LO.accuracy + slope * (hitRate - ANCHOR_LO.hitRate);
+  return Math.min(MAX_ACCURACY, Math.max(MIN_ACCURACY, raw));
+}
+
+/**
+ * The player's real aim, from the summary alone. `boss.damageTaken` is hit count
+ * times the fixed per-hit damage (`ENGINE_CONSTANTS.projectile.player.damage` — an
+ * exported constant, read here rather than assumed, so this keeps working if it
+ * ever stops being 1), and `player.shots` is every shot fired, hit or miss — so
+ * their ratio is the hit rate the human's engagement actually produced.
+ *
+ * `shots === 0` means no evidence either way, so it falls back to
+ * `NO_EVIDENCE_ACCURACY` rather than dividing by zero. The rate is also clamped to
+ * `[0, 1]` before it reaches `accuracyFromHitRate`: a caller can hand this a
+ * summary where `boss.damageTaken` was left untouched while `player.shots` was
+ * edited down (a fixture built to test trigger discipline in isolation does
+ * exactly this), which would otherwise read as a hit rate above 1.
+ */
+export function accuracyFromSummary(summary: ReplaySummary): number {
+  const shots = summary.player.shots;
+  if (shots <= 0) return NO_EVIDENCE_ACCURACY;
+  const hits = summary.boss.damageTaken / E.projectile.player.damage;
+  return accuracyFromHitRate(clamp01(hits / shots));
+}
+
 export function makeMimic(summary: ReplaySummary, opts: BotOptions = {}): PlayerBot {
-  const aimer = makeAimer(opts.accuracy ?? 0.72);
+  const aimer = makeAimer(opts.accuracy ?? accuracyFromSummary(summary));
   const heat = summary.history.playerPosHeat;
   const dashDirs = summary.history.playerDashDirs;
   const shotsDuring = summary.history.playerShotsDuring;

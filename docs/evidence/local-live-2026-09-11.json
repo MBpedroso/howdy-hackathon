@@ -1,0 +1,47 @@
+{
+ "note": "First local interlude after the 2026-09-11 fixes (straggler grace scaled to call latency, completion-order judging, balanced-first dial order, first-attempt incumbent anchor; web adopts the server-advertised 90 s deadline). REMATCH_PROVIDER=claude-cli, Sonnet, effort low. Recorded by a Playwright spec that wins Round 1 with the committed scripted replay and lets the live loop run. Compare the three 45 s runs of 16:18\u201316:21 UTC the same day in artifacts/server (one candidate judged each, all fallback).",
+ "when": "2026-09-11T16:48:42.696Z",
+ "round": 1,
+ "budgetSent": 90000,
+ "wallMs": 80516,
+ "verdictKind": "approved",
+ "verdictText": "\u2713 APPROVED \u2014 45%Cistern I is fair, and it countered you \u2014 this is what you fight next45% vs the reference panel \u00b7 78% vs a bot built from your own replay",
+ "banner": "",
+ "clock": "80.6s",
+ "attempts": 2,
+ "gate3": [
+  {
+   "attempt": 1,
+   "candidate": 2,
+   "ok": false,
+   "reason": "0.00 vs panel \u2014 too easy (band 0.35\u20130.50 for round 2; Camper 0.00, Kiter 0.00, Rusher 0.00, Dodger 0.00); 0.00 vs Mimic \u2014 aim for >= 0.70, or 0.73 to beat the boss you are replacing (0.63) (not blocking)"
+  },
+  {
+   "attempt": 1,
+   "candidate": 1,
+   "ok": false,
+   "reason": "0.78 vs panel \u2014 too hard (band 0.35\u20130.50 for round 2; Camper 0.52, Kiter 0.88, Rusher 1.00, Dodger 0.72)"
+  },
+  {
+   "attempt": 2,
+   "candidate": 2,
+   "ok": false,
+   "reason": "0.56 vs panel \u2014 too hard (band 0.35\u20130.50 for round 2; Camper 0.60, Kiter 0.80, Rusher 0.36, Dodger 0.48); 0.64 vs Mimic \u2014 aim for >= 0.70, or 0.73 to beat the boss you are replacing (0.63) (not blocking)"
+  },
+  {
+   "attempt": 2,
+   "candidate": 1,
+   "ok": false,
+   "reason": "0.54 vs panel \u2014 too hard (band 0.35\u20130.50 for round 2; Camper 0.60, Kiter 0.68, Rusher 0.16, Dodger 0.72)"
+  },
+  {
+   "attempt": 2,
+   "candidate": 0,
+   "ok": true,
+   "reason": ""
+  }
+ ],
+ "fallback": null,
+ "eventCount": 2191,
+ "errors": []
+}

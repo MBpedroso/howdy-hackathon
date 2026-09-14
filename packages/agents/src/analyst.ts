@@ -25,10 +25,32 @@
  * to the outermost balanced object, fall back to the *prose* for `observations` if
  * the block omits them, and only retry when there is genuinely nothing usable —
  * once, with the parse error appended.
+ *
+ * ## Two ways to have nothing usable
+ *
+ * `parseAnalysis`'s failure carries a `kind` because "nothing usable" is not one
+ * failure. A reply with a JSON block that does not parse, or parses into the wrong
+ * shape, is noise — the model made a mistake and showing it back tends to anchor
+ * the retry on that mistake (`analystPrompt`'s retry branch does not echo it).
+ * But a reply that streamed 1900 clean characters of real analysis and then simply
+ * never opened a fence (live, 2026-09-10:
+ * `artifacts/server/rewrite-2026-09-10T16-53-53-446Z.json`, claude-cli/sonnet) is
+ * not a mistake to correct, it is unfinished work — the prose the player already
+ * watched *is* the analysis, just not in the shape the Coder needs. `kind:
+ * 'no-json'` marks that case so the retry can become an extraction task instead
+ * of a rewrite: the prose is included verbatim and the replay summary is not
+ * re-sent, because there is nothing left to derive, only to restate.
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
-import { analystPrompt, promptSize, ARCHETYPES, type Analysis, type PlayerArchetype } from './context/prompts.ts';
+import {
+  analystPrompt,
+  promptSize,
+  ARCHETYPES,
+  type Analysis,
+  type AnalystRetryContext,
+  type PlayerArchetype,
+} from './context/prompts.ts';
 import { collect, type LLMProvider, type LLMUsage } from './provider.ts';
 
 export type AnalystInput = {
@@ -86,7 +108,7 @@ export async function runAnalyst(
   let calls = 0;
   let promptChars = 0;
   const usage: LLMUsage = { inputTokens: 0, outputTokens: 0 };
-  let firstError: string | undefined;
+  let retry: AnalystRetryContext | undefined;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const prompt = analystPrompt(
@@ -95,7 +117,7 @@ export async function runAnalyst(
         round: input.round,
         ...(input.prevMeta === undefined ? {} : { prevMeta: input.prevMeta }),
       },
-      firstError,
+      retry,
     );
     promptChars = promptSize(prompt);
 
@@ -126,13 +148,21 @@ export async function runAnalyst(
         usage,
         promptChars,
         ms: now() - started,
-        ...(firstError === undefined ? {} : { parseError: firstError }),
+        ...(retry === undefined ? {} : { parseError: retry.error }),
       };
     }
-    firstError = parsed.error;
+    // `kind: 'no-json'` (live 2026-09-10, `artifacts/server/rewrite-2026-09-10T16-53-53-446Z.json`):
+    // usable prose, no fence anywhere — pass the raw reply so the retry can
+    // extract from it instead of re-analysing. The streamed deltas would
+    // reassemble the same string the hard way: `analysisGate` only caps them at
+    // a fence, and this reply had none, so `done.text` already *is* the prose.
+    retry = {
+      error: parsed.error,
+      ...(parsed.kind === 'no-json' ? { prose: done.text } : {}),
+    };
   }
 
-  throw new Error(`the Analyst returned nothing usable after 2 attempts: ${firstError ?? 'unknown'}`);
+  throw new Error(`the Analyst returned nothing usable after 2 attempts: ${retry?.error ?? 'unknown'}`);
 }
 
 // ------------------------------------------------------------------ streaming
@@ -183,7 +213,17 @@ export function analysisGate(onDelta: (delta: string) => void): (delta: string) 
 
 // -------------------------------------------------------------------- parsing
 
-export type ParseResult = { ok: true; analysis: Analysis } | { ok: false; error: string };
+/**
+ * `'no-json'`: neither `extractFencedJson` nor the balanced-brace fallback found
+ * anything at all — the reply may still have real, usable prose (that is exactly
+ * the failure this distinction exists for: see `AnalystRetryContext`). `'invalid'`
+ * covers every other rejection — a JSON blob was found and it failed to parse, or
+ * parsed into the wrong shape — which is noise a retry should not be shown.
+ */
+export type ParseFailureKind = 'no-json' | 'invalid';
+export type ParseResult =
+  | { ok: true; analysis: Analysis }
+  | { ok: false; error: string; kind: ParseFailureKind };
 
 /**
  * The fenced JSON block of a reply, if there is one.
@@ -278,17 +318,18 @@ export function parseAnalysis(text: string): ParseResult {
   const fenced = extractFencedJson(text);
   const json = extractJsonObject(fenced ?? text);
   if (json === undefined) {
-    return { ok: false, error: 'no JSON object was found in the reply' };
+    // The one `kind` that isn't noise — see `AnalystRetryContext`.
+    return { ok: false, error: 'no JSON object was found in the reply', kind: 'no-json' };
   }
 
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch (err) {
-    return { ok: false, error: `the JSON object did not parse: ${(err as Error).message}` };
+    return { ok: false, error: `the JSON object did not parse: ${(err as Error).message}`, kind: 'invalid' };
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return { ok: false, error: 'the top-level JSON value was not an object' };
+    return { ok: false, error: 'the top-level JSON value was not an object', kind: 'invalid' };
   }
 
   const raw = value as Record<string, unknown>;
@@ -308,6 +349,7 @@ export function parseAnalysis(text: string): ParseResult {
         Array.isArray(observations) && observations.some((o) => typeof o !== 'string')
           ? 'observations must be an array of strings'
           : 'no observations: give 3 to 6 prose sentences before the JSON block, or an observations array inside it',
+      kind: 'invalid',
     };
   }
 
@@ -316,12 +358,13 @@ export function parseAnalysis(text: string): ParseResult {
     return {
       ok: false,
       error: `playerArchetype was ${JSON.stringify(archetype)}; it must be one of ${ARCHETYPES.join(', ')}`,
+      kind: 'invalid',
     };
   }
 
   const counterPlan = raw['counterPlan'];
   if (typeof counterPlan !== 'string' || counterPlan.trim().length === 0) {
-    return { ok: false, error: 'counterPlan must be a non-empty string' };
+    return { ok: false, error: 'counterPlan must be a non-empty string', kind: 'invalid' };
   }
 
   return {

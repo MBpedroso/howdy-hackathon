@@ -78,3 +78,28 @@ test('charge telegraph is on screen and readable', async ({ page }) => {
 
   await page.locator('#stage').screenshot({ path: `${ARTIFACTS}telegraph-charge.png` });
 });
+
+test('minions wear the boss’s face, smaller and violet', async ({ page }) => {
+  await page.goto(`/?seed=${fixture.sessionSeed}&autostart=1`);
+  await waitForRound(page);
+  await armReplay(page, fixture.log);
+
+  // Step until at least one minion is out of its materialization grace, so the frame
+  // shows the armed look (face + violet wash), not the hollow one.
+  const tick = await page.evaluate(() => {
+    const api = window.__rematch;
+    if (api === undefined) throw new Error('no debug api');
+    for (let i = 0; i < 1200; i += 1) {
+      const minions = api.state?.minions ?? [];
+      if (minions.length > 0 && minions.some((m) => m.hitCooldown <= 90)) {
+        api.renderFrame();
+        return api.state?.tick ?? -1;
+      }
+      if (api.fastForward(1) === 0) break;
+    }
+    return -1;
+  });
+  expect(tick).toBeGreaterThan(0);
+
+  await page.locator('#stage').screenshot({ path: `${ARTIFACTS}fight-minions.png` });
+});

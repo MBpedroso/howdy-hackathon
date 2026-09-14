@@ -5,7 +5,7 @@ boss's strategy to counter you. A second, deterministic verifier refuses to ship
 rewrite until it proves the fight is still fair — and you watch it happen, rejections
 included.
 
-**Status: `pnpm verify` green — 997 tests + 19 e2e. Deployed URL: pending.**
+**Status: `pnpm verify` green — 1309 tests + 36 e2e. Live: [rematch-beryl-eta.vercel.app](https://rematch-beryl-eta.vercel.app) — static web, interlude replays a real recorded run (zero-spend decision, see *Deploy*). The live loop runs locally.**
 
 ## 60-second demo
 
@@ -15,8 +15,10 @@ open 'http://localhost:5173/?agent=recorded&autostart=1'
 ```
 
 **No API key needed, and nothing here spends money.** That URL replays a **real** run of
-the model — `gpt-5.4-mini`, 2026-09-03: three candidate strategies rejected by the balance
-gate, then one approved on the next attempt — from a JSON asset committed to this repo.
+the model — `claude-cli` / `sonnet`, 2026-09-11: the Coder's counter measured 0.78 against
+the panel, too hard for the round's band, and the Judge's deterministic calibration
+throttled it to 0.49 in one step and approved it ("Silo I", 44 s) — from a JSON asset
+committed to this repo.
 Round 2 then really loads that approved strategy through QuickJS.
 
 There are three interlude sources and the footer badge always names the one on screen, so
@@ -24,12 +26,12 @@ you never have to guess what you are watching:
 
 | URL | Badge | What it is |
 |---|---|---|
-| `?agent=recorded` | `RECORDED RUN · gpt-5.4-mini · 2026-09-03` | **real** past model output, replayed from disk. Free, offline |
+| `?agent=recorded` | `RECORDED RUN · sonnet · 2026-09-11` | **real** past model output, replayed from disk. Free, offline |
 | `?agent=mock` | `MOCK` | hand-scripted, timed from real measurements. Free, offline |
 | `?agent=sse` | `LIVE` | the server running the loop right now. Needs a key; spends tokens |
 
-Three runs are recorded (`?run=mimic-camper` · `dodger-a` · `kiter-a`) so the fight is not
-the same twice. With no key at all, `?agent=sse` answers in fallback-only mode and says so
+Five runs are recorded (`?run=silo-r2-calibrated` · `cistern-r3-calibrated` · `mimic-camper`
+· `dodger-a` · `kiter-a`) so the fight is not the same twice. With no key at all, `?agent=sse` answers in fallback-only mode and says so
 on screen — nothing is ever fabricated. Details in
 [`packages/web/README.md`](packages/web/README.md#recorded-runs--the-demo-videos-source).
 
@@ -135,6 +137,38 @@ seeds, tick+render ms, and the sandbox runner's call/idle/violation counts. It i
 default as of 2026-09-08, because the numbers that read as *evidence* to one half of a
 jury read as an unfinished screen to the other.
 
+## Deploy
+
+**What is live:** the static web app alone, on Vercel —
+[rematch-beryl-eta.vercel.app](https://rematch-beryl-eta.vercel.app). Its interlude
+replays a real `claude-cli`/`sonnet` run from disk and says so on screen: `RECORDED RUN ·
+sonnet · 2026-09-11`, calibration strip included. No server, no key, no spend.
+Verified from outside on 2026-09-11: the scripted player wins Round 1 on the published
+site, the interlude opens on the recorded run, zero requests leave for any `/api/` or
+external host (`artifacts/web/deployed-interlude-recorded.png`).
+
+**How:** [`vercel.json`](vercel.json) builds `packages/web` with the build-time env
+`VITE_DEFAULT_AGENT=recorded` (`src/interlude/source.ts`), which makes "no `?agent=` on
+a deployed host" resolve to the recorded source. The URL still wins: `?agent=mock` and
+`?agent=sse` behave as documented in the *Environment* table.
+
+**Why not the live loop on the live URL:** the split deployment — server on Fly.io,
+web on Vercel — was built, smoke-tested, deployed, and ran one real rewrite on
+2026-09-10 (Analyst 9 s, Coder 3 candidates, Gates 1–2 passed) until Fly's no-card trial
+stopped the machine after five minutes, mid-Gate-3
+([`docs/evidence/prod-run-2026-09-10-trial-cut.json`](docs/evidence/prod-run-2026-09-10-trial-cut.json)).
+Keeping it up costs about US$ 10 through the judging window; the free serverless
+alternative caps Gate 3 at ~60 matches and weakens the verifier the project argues for.
+The human chose zero spend and an honest recording over a weakened Judge. The paid path
+stays in the repo and works: [`Dockerfile`](Dockerfile), [`fly.toml`](fly.toml)
+(`fly deploy --ha=false` after `fly secrets set OPENAI_API_KEY=…`), then set
+`VITE_API_BASE` on Vercel and drop `VITE_DEFAULT_AGENT`.
+
+**The live loop, locally:** `pnpm dev` with `REMATCH_PROVIDER=claude-cli` (no key, no
+bill — it drives the installed `claude` binary) is how recordings are made and how the
+loop is played for the demo. `pnpm --filter @rematch/web record:run` captures a run into
+`public/recorded/`.
+
 ## Docs
 
 - **[`docs/SYSTEM.md`](docs/SYSTEM.md)** — the agentic architecture: the contract as a
@@ -152,6 +186,31 @@ jury read as an unfinished screen to the other.
   unedited, with an **Implementation deltas** section at the end.
 - **[`docs/AI-DEV-LOG.md`](docs/AI-DEV-LOG.md)** — how it was built: one orchestrator
   session, parallel package-scoped subagents, what each decided, and what went wrong.
+
+## Show your work — where each judging criterion lives
+
+The rulebook scores the engineering system as much as the product. One link per
+criterion, so nobody has to dig through the log to find the evidence.
+
+| Criterion | Where the evidence is |
+|---|---|
+| Intent + specification | [`docs/SPEC.md`](docs/SPEC.md) — requirements, constraints, architecture, ten acceptance criteria, and an *Implementation deltas* section recording where reality diverged |
+| Context engineering | [`SYSTEM.md` §8.3](docs/SYSTEM.md#83-contexts-tools-and-one-worked-parallel-day) — what each role was given and denied; [`CLAUDE.md`](CLAUDE.md) for the standing rules and `.claude/settings.json` for the ones enforced as permission denials; handoff documents (`docs/HANDOFF-*.md`) as the unit of context transfer between sessions |
+| Orchestration + parallel work | [`SYSTEM.md` §8](docs/SYSTEM.md#8-build-time-agent-boundaries) — the lane diagram, the two rules that made lanes safe, and a worked day with timings and zero integration conflicts |
+| Harness + back pressure | this README's *Deterministic controls* below; `pnpm verify` on pre-commit; the replay-hash assertion in unit and e2e; Playwright screenshots into `artifacts/web/` as the evidence convention |
+| Autonomous loops + recovery | product side: [`SYSTEM.md` §6](docs/SYSTEM.md#6-autonomous-loop-evidence), a real run rejected by Gate 3 and approved on retry with no human message. Build side: §8.3's minion loop, with its screenshot |
+| Human as orchestrator | [`docs/AI-DEV-LOG.md`](docs/AI-DEV-LOG.md) — every entry attributes decisions to *Human*, *Orchestrator* or *Agent*; the open items at the end are marked *blocked: human decision* where they are |
+| Reproducibility | the *Commands* and *Environment* sections above; `?agent=mock` and `?agent=recorded` run the full loop with no key; `pnpm verify` regenerates every number quoted here |
+
+**How the harness fed the agents, not just the humans.** Every implementation subagent
+was briefed with the same three commands the pre-commit hook runs, and was told to stop
+only when they were green — so a failing unit test or typecheck was observed and fixed
+inside the agent's own turn, not reported back for a human to diagnose. The e2e suite
+writes one PNG per screen state; the orchestrator reads those images after every visual
+change and the log records what they caught that assertions could not (letterboxed hero,
+a scanline weight, a minion drawn as mud). The structural "costume" tests exist because
+telling an agent "keep cosmetics out of the simulation" is an instruction, and a test
+that fails the build is a guarantee.
 
 ## Deterministic controls
 

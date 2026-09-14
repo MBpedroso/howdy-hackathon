@@ -16,7 +16,7 @@
 export { camper } from './camper.ts';
 export { dodger } from './dodger.ts';
 export { kiter } from './kiter.ts';
-export { makeMimic } from './mimic.ts';
+export { accuracyFromSummary, makeMimic } from './mimic.ts';
 export { rusher } from './rusher.ts';
 export { BASE_AIM_ERROR, BOT_KINDS, type BotKind, type BotOptions, type PlayerBot } from './types.ts';
 export {

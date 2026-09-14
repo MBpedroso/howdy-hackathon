@@ -30,6 +30,14 @@
  */
 import type { ReplaySummary } from '@rematch/engine';
 
+import {
+  init as initAudio,
+  noteInterludeClosed,
+  noteInterludeOpened,
+  noteThinking,
+  trigger as triggerSfx,
+} from '../audio/engine.ts';
+import { sfxForVerdict } from '../audio/sfx.ts';
 import { AGENTS, JUDGE_APPROVE } from '../ui/cast.ts';
 import { createPortrait, setPortraitDim } from '../ui/portrait.ts';
 
@@ -37,6 +45,7 @@ import './interlude.css';
 import {
   castStatus,
   fallbackHeadline,
+  formatThrottle,
   INITIAL_CAST,
   plainVerdict,
   reduceCast,
@@ -44,9 +53,17 @@ import {
   type AgentSlot,
   type CastState,
 } from './castStatus.ts';
+// The client's own differ, which until now was only the mock's: the shipped file
+// arrives on the terminal `done` and its diff against the candidate the player
+// watched is not in the stream, so the one-line calibrated change has to be
+// computed here to be shown at all. Byte-compatible with the loop's `diff` strings,
+// which is what lets the same renderer draw both.
+import { unifiedDiff } from './diff.ts';
 import {
   balanceRates,
   MAX_ATTEMPTS,
+  readThrottle,
+  UNTHROTTLED,
   type Analysis,
   type FailureReason,
   type GateName,
@@ -64,7 +81,37 @@ export type Phase = Beat | 'done';
 
 /** Spec AC 5's outer bound: the safety-valve skip appears at 50 s, not before. */
 export const SKIP_AFTER_MS = 50_000;
-/** After `done`, the next round starts on its own this long later. */
+
+/**
+ * Spec AC 5: all four beats in <= 45 s, or a visible fallback in <= 50 s.
+ *
+ * The default and the deployed behaviour, not a hard bound: a locally probed server
+ * that advertises a larger loop deadline can raise the round's budget above it (spec
+ * §13 delta 25, `adoptDeadlineMs` in `interlude/index.ts`). It lives here, beside
+ * `SKIP_AFTER_MS`, because the clock renders against it; `interlude/index.ts`
+ * re-exports it, which is where every other module still reads it from.
+ */
+export const INTERLUDE_DEADLINE_MS = 45_000;
+
+/**
+ * The header clock, as a value: what it reads, and whether it is past the budget.
+ *
+ * Pure so the `over` rule can be tested without a DOM, and because the rule is the
+ * whole point of it. `deadlineMs` is the budget **this round** is actually running
+ * on — the adopted deadline, which on a locally probed server can be larger than
+ * `INTERLUDE_DEADLINE_MS`. Keying `over` off the constant instead was a lie the
+ * screen told at 45 s while the server still had 45 s of budget left.
+ */
+export function clockView(elapsedMs: number, deadlineMs: number = INTERLUDE_DEADLINE_MS): { text: string; over: boolean } {
+  return { text: `${(elapsedMs / 1000).toFixed(1)}s`, over: elapsedMs > deadlineMs };
+}
+/**
+ * This module's own fallback when nobody passes `autoFightMs` at all — kept for a
+ * caller that constructs `createInterludeUi` directly. `interlude/index.ts`
+ * (the app's real caller) always passes an explicit value now — `0` by default,
+ * for real play — so this constant is not what a human player sees any more; see
+ * `InterludeHandlerOptions.autoFightMs`'s doc for the actual default policy.
+ */
 export const AUTO_FIGHT_MS = 3000;
 
 /**
@@ -113,14 +160,37 @@ const BEAT_AGENT: Readonly<Record<Beat, AgentSlot>> = {
   trial: 'judge',
 };
 
-/** Spec AC 5's wording, verbatim. The reason only chooses the second half. */
-export function fallbackText(reason: FailureReason): string {
-  const why =
-    reason === 'max-attempts'
-      ? 'it ran out of attempts'
-      : reason === 'deadline'
-        ? 'the coder timed out'
-        : 'the coder failed';
+/** `reason`'s generic clause — used only when the loop sent no more specific `message`. */
+const GENERIC_FALLBACK_WHY: Readonly<Record<FailureReason, string>> = {
+  'max-attempts': 'it ran out of attempts',
+  deadline: 'the coder timed out',
+  error: 'the coder failed',
+};
+
+/** Trims a message down to one clause: no trailing period (this sentence adds its
+ *  own) and no surrounding whitespace. Not a summary — the loop's own words, just
+ *  fit to sit after the dash. */
+function tightenFallbackMessage(message: string): string {
+  return message.trim().replace(/[.\s]+$/, '');
+}
+
+/**
+ * Spec AC 5's wording, verbatim — `Using a pre-approved strategy — <why>.` — with
+ * `why` the loop's own `message` when it sent one, and `reason`'s generic clause
+ * only when it did not.
+ *
+ * The generic clause used to be the only option, which is what produced a
+ * 2026-09-10 playtest bug: a real run failed with `reason: 'error'` because the
+ * *Analyst* returned nothing usable after two attempts (the Coder never even ran),
+ * and the screen said "the coder failed" — true of the reason *code*, false of
+ * which agent actually failed, and stated as fact to a judge reading the demo
+ * (spec §2.2: every rejection stays readable *and honest*). `RewriteEvent`'s
+ * `fallback` and `done` events already carry the loop's real explanation as
+ * `message`; this function only had to stop discarding it in favour of a shorter,
+ * occasionally wrong, one.
+ */
+export function fallbackText(reason: FailureReason, message?: string): string {
+  const why = message === undefined || message === '' ? GENERIC_FALLBACK_WHY[reason] : tightenFallbackMessage(message);
   return `Using a pre-approved strategy — ${why}.`;
 }
 
@@ -177,6 +247,31 @@ export type InterludeState = {
   candidates: number;
   /** Which candidate's diff the Rewrite panel is showing. */
   selectedCandidate: number;
+  /**
+   * Every `calibrate.step` the screen has seen, in arrival order. Append-only for
+   * the life of the interlude, for the same reason `rejections` is: the search is
+   * the proof that the approval was arithmetic and not luck.
+   */
+  calibrations: Array<{
+    attempt: number;
+    candidate?: number;
+    step: number;
+    pressure: number;
+    panel?: number;
+    ok: boolean;
+  }>;
+  /**
+   * The throttle the newest search landed on (`calibrate.done.pressure` — the wire
+   * kept the older field name), or `null` when nothing was calibrated.
+   */
+  pressure: number | null;
+  /**
+   * True once a `done` result shipped a source the player had not been shown — the
+   * calibrated file — and its diff was attached to that candidate's pane. Set from
+   * the rendered section, never from the calibration events, so it cannot claim a
+   * diff the panel does not hold.
+   */
+  calibratedDiff: boolean;
 };
 
 export type InterludeUiOptions = {
@@ -193,13 +288,19 @@ export type InterludeUiOptions = {
   onSkip: () => void;
   /** 0 disables the auto-continue (the e2e suite does, so it can assert first). */
   autoFightMs?: number;
+  /**
+   * The budget this round is running on, ms — what the clock's `over` state keys
+   * off. Defaults to `INTERLUDE_DEADLINE_MS`; `interlude/index.ts` passes the
+   * adopted deadline, which a locally probed server can raise (spec §13 delta 25).
+   */
+  deadlineMs?: number;
   /** Injectable for tests. */
   now?: () => number;
 };
 
 export type InterludeUi = {
   handle(event: RewriteEvent): void;
-  /** The client-side 45 s deadline fired; there was no `fallback` event to render. */
+  /** The client-side deadline fired; there was no `fallback` event to render. */
   showFallback(reason: FailureReason, message?: string): void;
   /** Reveal FIGHT and start the auto-continue. Idempotent. */
   finish(): void;
@@ -264,10 +365,174 @@ export function meterView(matchesDone: number, matchesTotal: number): MeterView 
   };
 }
 
+// ------------------------------------------------- the Judge's own calibration
+//
+// When a candidate misses the fairness band and nothing else, the Judge does not
+// hand it back: it re-writes the one constant the file declares for exactly this
+// (`const PRESSURE`), re-runs all four gates, and bisects until the panel rate lands
+// in the round's band (`packages/agents/src/calibrate.ts`). Every function below is
+// the *reading* of that search and nothing else — pure, so
+// `test/interlude-calibration.test.ts` can assert the strings in Node.
+//
+// The register is arithmetic, on purpose. The Judge is not a model (spec §2.2) and
+// this is the one beat where it does something that could be mistaken for one: so
+// there is no spinner, no "reasoning", no adjectives — a chain of numbers, the rate
+// measured at each, and the sentence the harness wrote when one failed.
+
+/** One measured step of the search, as the strip needs it. */
+export type CalibrationStepView = {
+  /** 1-based, the number the event carried. */
+  step: number;
+  /** The throttle measured, under the wire's own field name (`calibrate.step`). */
+  pressure: number;
+  /** Gate 3's panel mean at this value; absent when the step never reached Gate 3. */
+  panel?: number;
+  /** The *whole* trial's verdict at this value, not Gate 3's alone. */
+  ok: boolean;
+  reason?: string;
+};
+
+/** Where the search landed, from `calibrate.done`. */
+export type CalibrationDone = { steps: number; pressure: number; approved: boolean };
+
+/** One row of the strip: four columns, so a reader can scan down the rates. */
+export type CalibrationRow = {
+  mark: string;
+  throttle: string;
+  /** `panel 0.44`, or the honest blank when Gate 3 never ran. */
+  rate: string;
+  /** Plain words: `too easy to be a fight`. One line — the strip is four rows tall. */
+  why: string;
+  /**
+   * The harness's own sentence for this step, verbatim, for the row's tooltip.
+   *
+   * The row shows the plain reading and carries the sentence, which is the same
+   * split the stamp makes (`plainVerdict` over `il-stamp-raw`). The candidate's own
+   * rejection — the one spec §2.2 is about — is untouched above this strip and in
+   * the rejection log, verbatim, as it always was.
+   */
+  detail: string;
+  ok: boolean;
+};
+
+/** A rate as the band is written: two decimals, so 0.44 sits next to 0.35–0.50. */
+function formatRate(value: number): string {
+  return value.toFixed(2);
+}
+
+function steps(n: number): string {
+  return `${n} step${n === 1 ? '' : 's'}`;
+}
+
+export function calibrationRow(step: CalibrationStepView): CalibrationRow {
+  return {
+    mark: step.ok ? '✓' : '✗',
+    throttle: `throttle ${formatThrottle(step.pressure)}`,
+    rate: step.panel === undefined ? 'panel not reached' : `panel ${formatRate(step.panel)}`,
+    // `ok` is the full four-gate verdict at this value, so "in band" is not the
+    // whole of what it proves — but it is the part the chain is searching for, and
+    // the other three gates are the ones already listed above the strip.
+    why: step.ok ? 'in band — all four gates pass' : plainVerdict(step.reason),
+    detail: step.ok ? '' : (step.reason ?? ''),
+    ok: step.ok,
+  };
+}
+
+/**
+ * `throttle 1.00 → 0.50 → 0.71` — the search as one line.
+ *
+ * `from` is the value the *Coder* wrote (read out of its own file, see
+ * `readPressure`), which is the only number in the chain the event stream does not
+ * carry. `null` when the file's knob was not readable, and then the chain simply
+ * starts at the first measured value rather than inventing a starting point.
+ */
+export function throttleChain(from: number | null, measured: readonly CalibrationStepView[]): string {
+  const values = [...(from === null ? [] : [from]), ...measured.map((s) => s.pressure)];
+  if (values.length === 0) return 'throttle —';
+  return `throttle ${values.map(formatThrottle).join(' → ')}`;
+}
+
+/**
+ * The strip's headline: what the Judge is doing, or what it did.
+ *
+ * `CALIBRATED` in both terminal cases, because the search always ran — the suffix is
+ * the outcome, and "no throttle passed" is as much a result as a shipped value.
+ */
+export function calibrationHead(view: {
+  /** The file, when more than one is in play — the strip is no longer under its rows. */
+  who?: string | null;
+  from: number | null;
+  measured: readonly CalibrationStepView[];
+  done: CalibrationDone | null;
+}): string {
+  const chain = throttleChain(view.from, view.measured);
+  const who = view.who === null || view.who === undefined || view.who === '' ? '' : `${view.who} · `;
+  if (view.done === null) return `${who}CALIBRATING · ${chain}`;
+  const tail = view.done.approved
+    ? `shipped at ${formatThrottle(view.done.pressure)}`
+    : 'no throttle passed';
+  return `${who}CALIBRATED · ${chain} · ${tail} (${steps(view.done.steps)})`;
+}
+
+/**
+ * Why an APPROVED stamp can sit under a `✗ Gate 3` row.
+ *
+ * The candidate's gate rows are the file the Coder wrote; the strip underneath them
+ * is the same file at other numbers. Without this sentence the panel reads as a
+ * contradiction, which is the one thing the Trial beat cannot afford.
+ */
+export const CALIBRATION_NOTE =
+  'Gate 3 missed the band — every throttle here is a full four-gate re-run.';
+
+/**
+ * The approval's quantitative line when the file that shipped is a calibrated one.
+ *
+ * `0.44 vs panel after the Judge throttled the boss to 0.71 (3 steps)` — the rate
+ * that was measured, the number that was changed, and what the search cost. The verb
+ * follows the direction the search actually went: the knob moves both ways (a file
+ * that is too *easy* is pushed up), and "throttled" would be a claim about a run
+ * that never happened.
+ */
+export function calibratedVerdictLine(view: {
+  panel: number | null;
+  from: number | null;
+  to: number;
+  steps: number;
+  mimic?: number | null;
+}): string {
+  const verb =
+    view.from === null
+      ? 'set the boss to'
+      : view.to < view.from
+        ? 'throttled the boss to'
+        : view.to > view.from
+          ? 'pushed the boss to'
+          : 'settled the boss at';
+  const head = view.panel === null ? 'approved' : `${formatRate(view.panel)} vs panel`;
+  const mimic = view.mimic === null || view.mimic === undefined ? '' : ` · mimic ${formatRate(view.mimic)}`;
+  return `${head} after the Judge ${verb} ${formatThrottle(view.to)} (${steps(view.steps)})${mimic}`;
+}
+
+/** The same ruling in words, with the direction the knob moved. */
+export function calibratedPlain(name: string | null, from: number | null, to: number): string {
+  const who = name ?? 'it';
+  const how =
+    from === null || from === to
+      ? 'at the throttle the Judge measured'
+      : to < from
+        ? 'once the Judge eased it off'
+        : 'once the Judge pushed it harder';
+  // One line, where the uncalibrated approval takes two: the strip above this stamp
+  // is four lines the panel did not have, and "this is what you fight next" is the
+  // one clause already said elsewhere — the footer names the boss and quotes it.
+  return `${who} is fair ${how}`;
+}
+
 export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const now = options.now ?? ((): number => performance.now());
   const startedAt = now();
   const autoFightMs = options.autoFightMs ?? AUTO_FIGHT_MS;
+  const deadlineMs = options.deadlineMs ?? INTERLUDE_DEADLINE_MS;
 
   const state: InterludeState = {
     phase: 'replay',
@@ -293,6 +558,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     events: 0,
     candidates: 1,
     selectedCandidate: 0,
+    calibrations: [],
+    pressure: null,
+    calibratedDiff: false,
   };
 
   // ------------------------------------------------------------------ header
@@ -457,7 +725,22 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   const diff = el('pre', 'il-diff');
   diff.dataset.testid = 'il-diff';
   diff.hidden = true;
-  rewriteBody.append(candStrip, diffHead, code, diff);
+  // The file that actually ships, when it is not byte-for-byte the one above.
+  //
+  // A calibrated candidate is the Coder's file with one constant rewritten by the
+  // Judge, and the diff the player watched arrive is the *pre*-calibration one. So
+  // the change the Judge made is rendered as its own labelled section under it —
+  // the second diff is against the candidate on screen, not against the previous
+  // round (that source never reaches this module), and the label says so.
+  const shippedBox = el('div', 'il-shipped');
+  shippedBox.dataset.testid = 'il-shipped';
+  shippedBox.hidden = true;
+  const shippedHead = el('div', 'il-shipped-head');
+  shippedHead.dataset.testid = 'il-shipped-head';
+  const shippedDiff = el('pre', 'il-diff il-shipped-diff');
+  shippedDiff.dataset.testid = 'il-shipped-diff';
+  shippedBox.append(shippedHead, shippedDiff);
+  rewriteBody.append(candStrip, diffHead, code, diff, shippedBox);
 
   // -------------------------------------------------------- beat 4: the trial
   const trialBody = bodyFor.get('trial') as HTMLElement;
@@ -480,6 +763,21 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   // reason in plain words, and — smaller, in monospace, never dropped — the
   // harness's own quantitative sentence. Spec §2.2: every rejection stays readable,
   // and "readable" now means readable by a player *and* checkable by a judge.
+  /**
+   * The Judge's calibration strips — **outside** the gate list on purpose.
+   *
+   * They started inside it, under the gate rows of the file each one re-measured,
+   * which is where they belong by meaning. But `.il-gates` is a fixed-height
+   * scroller (the Trial panel gets ~40 px for it on the 1280×800 projector this
+   * layout is sized for) and a strip is four lines: the chain, its rows, the
+   * footnote. Half of a `✓ throttle 0.71 · panel 0.44` row is worse than no row —
+   * it reads as a rendering bug in the one place the product is claiming rigour. So
+   * the strips get their own block that sizes to its content and never scrolls, and
+   * the scroller above absorbs the loss, which is what a scroller is for.
+   */
+  const calBox = el('div', 'il-cals');
+  calBox.dataset.testid = 'il-cals';
+
   const verdict = el('div', 'il-verdict');
   verdict.dataset.testid = 'il-verdict';
   const verdictPortrait = createPortrait('judge', { size: 48, dim: true });
@@ -492,7 +790,7 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   verdict.append(verdictPortrait, stamp);
   const rejections = el('ul', 'il-rejections');
   rejections.dataset.testid = 'il-rejections';
-  trialBody.append(gateList, meterWrap, verdict, rejections);
+  trialBody.append(gateList, meterWrap, calBox, verdict, rejections);
 
   // ------------------------------------------------------------------ footer
   const foot = el('footer', 'il-foot');
@@ -540,6 +838,13 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
   root.append(foot);
 
   options.host.append(root);
+
+  // The agents are thinking, so the music bed steps back for as long as this screen
+  // is up — Matt's "somente diminuir no momento do pensamento", and the only thing
+  // that ever happens to the session's music (`audio/musicState.ts`). The matching
+  // `noteInterludeClosed()` is in `dispose()`, which every exit path runs through,
+  // so a duck can never outlive the screen that asked for it.
+  noteInterludeOpened();
 
   // ------------------------------------------------------------------- timers
   let disposed = false;
@@ -643,9 +948,11 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     if (disposed) return;
     const elapsed = now() - startedAt;
     state.elapsedMs = elapsed;
-    clock.textContent = `${(elapsed / 1000).toFixed(1)}s`;
-    // 45 s is the AC 5 budget. Past it the number itself is the warning.
-    clock.classList.toggle('over', elapsed > 45_000);
+    // Past the round's own budget — not always AC 5's 45 s — the number itself is
+    // the warning. See `clockView`.
+    const view = clockView(elapsed, deadlineMs);
+    clock.textContent = view.text;
+    clock.classList.toggle('over', view.over);
 
     if (autoFightAt !== null) {
       const left = Math.max(0, autoFightAt - elapsed);
@@ -685,6 +992,21 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     code: string;
     /** The unified diff, once `rewrite.done` landed. */
     diff: string | null;
+    /** The file itself, from `rewrite.done` — authoritative where `code` is a stream. */
+    source: string | null;
+    /**
+     * The throttle this file already carries — `1.0` (untouched) for the usual case
+     * of a Coder file the Judge has not wrapped yet, and the declared value for a
+     * retry whose baseline was already a calibrated file.
+     */
+    throttle: number;
+    /** The Judge's search on this file: every step it measured, and where it landed. */
+    measured: CalibrationStepView[];
+    calibration: CalibrationDone | null;
+    /** The strip, built on the first step and repainted on every one after. */
+    strip: HTMLElement | null;
+    /** The calibrated file that shipped, diffed against `source`. Set on `done`. */
+    shipped: { diff: string; from: number | null; to: number | null } | null;
     status: 'writing' | 'testing' | 'ok' | 'fail';
     tab: HTMLButtonElement;
   };
@@ -737,8 +1059,14 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     for (const other of views) {
       if (other !== undefined) paintTab(other);
     }
-    if (view === undefined) return;
+    if (view === undefined) {
+      shippedBox.hidden = true;
+      return;
+    }
     setDiffHead(view);
+    // The calibrated section belongs to the file that shipped, so it follows the
+    // tab: click another candidate and it goes away with the diff it annotates.
+    paintShipped(view);
     if (view.diff !== null) {
       renderDiff(view.diff === '' ? '(no change from the previous strategy)' : view.diff);
     } else {
@@ -761,6 +1089,12 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       dial: null,
       code: '',
       diff: null,
+      source: null,
+      throttle: UNTHROTTLED,
+      measured: [],
+      calibration: null,
+      strip: null,
+      shipped: null,
       status: 'writing',
       tab,
     };
@@ -790,6 +1124,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     state.panelRate = null;
     state.mimicRate = null;
     state.codeChars = 0;
+    // The *landing* is per attempt; `state.calibrations` is not reset — it is the
+    // append-only record of every step the Judge measured on this screen.
+    state.pressure = null;
     pinned = false;
     locked = null;
     views = [];
@@ -801,6 +1138,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     code.hidden = false;
     diff.hidden = true;
     diffHead.hidden = true;
+    shippedBox.hidden = true;
+    calBox.replaceChildren();
+    panelFor.get('trial')?.removeAttribute('data-calibrated');
   }
 
   function setCandidateStatus(index: number, status: CandidateView['status']): void {
@@ -830,8 +1170,9 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     stream.style.flex = '0 0 46px';
   }
 
-  function renderDiff(text: string): void {
-    diff.replaceChildren();
+  /** Colour one unified diff into one `<pre>`. Used for both diffs on the panel. */
+  function paintDiff(target: HTMLElement, text: string): void {
+    target.replaceChildren();
     for (const line of text.split('\n')) {
       let cls = '';
       if (line.startsWith('+++') || line.startsWith('---')) cls = 'file';
@@ -839,10 +1180,52 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       else if (line.startsWith('+')) cls = 'add';
       else if (line.startsWith('-')) cls = 'del';
       const span = el('span', cls === '' ? undefined : cls, `${line}\n`);
-      diff.append(span);
+      target.append(span);
     }
+  }
+
+  function renderDiff(text: string): void {
+    paintDiff(diff, text);
     diff.hidden = false;
     code.hidden = true;
+  }
+
+  /**
+   * The calibrated file, under the candidate's own diff.
+   *
+   * Only for the candidate that shipped, and only when the shipped bytes really
+   * differ from the ones on screen — otherwise the section stays hidden rather than
+   * announcing a change nobody made.
+   */
+  function paintShipped(view: CandidateView | undefined): void {
+    const shipped = view?.shipped ?? null;
+    if (shipped === null) {
+      shippedBox.hidden = true;
+      return;
+    }
+    const to = shipped.to === null ? '—' : formatThrottle(shipped.to);
+    const from = shipped.from === null ? null : formatThrottle(shipped.from);
+    shippedHead.replaceChildren(
+      el('b', undefined, 'SHIPPED'),
+      el(
+        'span',
+        'dim',
+        from === null
+          ? ` · the Judge's calibration, applied to the file above (throttle ${to})`
+          : ` · the Judge's calibration, applied to the file above (throttle ${from} → ${to})`,
+      ),
+    );
+    paintDiff(shippedDiff, shipped.diff === '' ? '(the shipped file is identical)' : shipped.diff);
+    shippedBox.hidden = false;
+    // Park the pane on the harness's own line. The block it appends starts with the
+    // comment that says who wrote it (`calibrate.ts`'s `throttleBlock`), and that
+    // line is the one a viewer needs to see first — a renamed `init` at the top of
+    // the hunk is the mechanism, not the claim.
+    const mark = Array.from(shippedDiff.querySelectorAll<HTMLElement>('.add')).find((line) =>
+      (line.textContent ?? '').includes('calibrated by the Judge'),
+    );
+    shippedDiff.scrollTop =
+      mark === undefined ? shippedDiff.scrollHeight : Math.max(0, mark.offsetTop - shippedDiff.offsetTop);
   }
 
   /**
@@ -894,6 +1277,98 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     gateList.scrollTop = gateList.scrollHeight;
   }
 
+  /**
+   * The calibration strip, under the gate rows of the candidate it re-measured.
+   *
+   * Inside that candidate's `il-gate-group` rather than below the whole list,
+   * because with K files on screen the question a reader has is *which* file the
+   * Judge went back to — and the answer is "the one whose Gate 3 row is directly
+   * above this". The strip is rebuilt from `view.measured` on every step: it is a
+   * handful of rows, and rebuilding is how the chain in the header stays in step
+   * with the rows under it.
+   */
+  function paintCalibration(view: CandidateView): void {
+    const strip =
+      view.strip ??
+      (() => {
+        const node = el('div', 'il-cal');
+        node.dataset.testid = `il-cal-${view.index}`;
+        node.dataset.candidate = String(view.index);
+        // Ordered by candidate, like the tab strip: the files arrive in whatever
+        // order the model finishes them, and two strips in arrival order would not
+        // line up with the tabs above them.
+        const after = views
+          .slice(view.index + 1)
+          .find((other): other is CandidateView => other !== undefined && other.strip !== null);
+        if (after === undefined || after.strip === null) calBox.append(node);
+        else calBox.insertBefore(node, after.strip);
+        view.strip = node;
+        // The meter measured the *Coder's* file and nothing since: the two steps
+        // below ran 200 matches each with no bar of their own (`calibrate.step`
+        // carries no progress). Leaving a finished `200 / 200` next to a search
+        // that simulated 600 would be the one dishonest pixel on this panel — and
+        // it is also the 34 px the strip needs. It comes back the moment a real
+        // Gate 3 starts simulating again (see `trial.progress`).
+        panelFor.get('trial')?.setAttribute('data-calibrated', '1');
+        return node;
+      })();
+    strip.dataset.state = view.calibration === null ? 'running' : view.calibration.approved ? 'ok' : 'fail';
+    const head = el('div', 'il-cal-head');
+    head.dataset.testid = `il-cal-head-${view.index}`;
+    head.textContent = calibrationHead({
+      // Which file this is, now that the strip no longer sits under that file's own
+      // gate rows. Only when there is more than one to tell apart.
+      who: state.candidates > 1 ? view.label : null,
+      from: view.throttle,
+      measured: view.measured,
+      done: view.calibration,
+    });
+    strip.replaceChildren(head);
+    for (const step of view.measured) {
+      const row = calibrationRow(step);
+      const node = el('div', 'il-cal-step');
+      node.dataset.ok = row.ok ? 'true' : 'false';
+      if (row.detail !== '') node.title = row.detail;
+      node.append(
+        el('span', 'mark', row.mark),
+        el('span', 'p', row.throttle),
+        el('span', 'rate', row.rate),
+        el('span', 'why', row.why),
+      );
+      strip.append(node);
+    }
+    // The footnote goes last, under the evidence rather than between it and the
+    // chain: the Trial panel shows about four rows at a time, and the two things
+    // worth having in that window are the chain and the rates it measured.
+    strip.append(el('div', 'il-cal-note', CALIBRATION_NOTE));
+    // The strip taking its own space shrinks the scroller above it, which can leave
+    // the list parked back at Gate 1. The row the strip answers is the last one —
+    // the `✗ Gate 3` that sent the Judge searching — so the list is re-parked on it
+    // every time the strip grows, and again once the stamp has landed.
+    scrollGatesToEnd();
+  }
+
+  /**
+   * Keep the gate list on its newest row, whatever has just resized it.
+   *
+   * Without a strip this is the behaviour every other call site has always had:
+   * follow the bottom. With one, the list is a single line tall and following the
+   * bottom shows the *tail* of a wrapped rejection — "0.50 for round 2 (too hard)",
+   * a fragment with no gate and no rate in it. So it parks on the last row's first
+   * line instead, which is the one that reads `✗ Gate 3 balance — REJECTED — 0.91 vs
+   * panel …` and is the premise of the strip underneath.
+   */
+  function scrollGatesToEnd(): void {
+    if (calBox.childElementCount === 0) {
+      gateList.scrollTop = gateList.scrollHeight;
+      return;
+    }
+    const rows = gateList.querySelectorAll<HTMLElement>('.il-gate');
+    const last = rows[rows.length - 1];
+    gateList.scrollTop =
+      last === undefined ? gateList.scrollHeight : Math.max(0, last.offsetTop - gateList.offsetTop);
+  }
+
   function addPendingGateRow(gate: GateNumber, label: string, candidate?: number): void {
     const row = el('div', 'il-gate');
     row.dataset.gate = String(gate);
@@ -926,6 +1401,11 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     // Green for an approval, the Judge's red for a rejection — one agent, two
     // verdicts (see `JUDGE_APPROVE`), rather than two differently-coloured chromes.
     verdict.style.setProperty('--accent', kind === 'approved' ? JUDGE_APPROVE : AGENTS.judge.accent);
+    // The stamp sound. Only a real ruling gets one — `working` covers "waiting",
+    // "simulating" and the `↻ rewriting…` line between attempts, none of which are a
+    // verdict. Rejected is heavier than approved on purpose (`sfx.ts`'s `GAIN`): the
+    // brief calls the rejection "the demo's beat".
+    if (kind !== 'working') triggerSfx(sfxForVerdict(kind === 'approved'));
   }
 
   /** The diff's byline: the Coder, and the name the boss will fight under. */
@@ -976,6 +1456,12 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         // Autoscroll only while the player has not scrolled up themselves.
         stream.scrollTop = stream.scrollHeight;
         setNote('analysis', `${state.analysisChars} chars`);
+        // The thinking texture — fed right where the text it is tracking actually
+        // lands on screen. Unlike the typewriter tick this replaced, it is not one
+        // sound per chunk: `audio/thinking.ts` keeps a sustained processing
+        // texture alive for as long as chunks keep arriving, so a 40-char delta
+        // extends the span rather than firing anything of its own.
+        noteThinking(event.delta.length);
         break;
       }
 
@@ -1013,6 +1499,10 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         const view = candidateView(index, total);
         view.code += event.delta;
         state.codeChars += event.delta.length;
+        // Same texture as the Analyst's prose, and the same single span: K
+        // candidates streaming at once keep one processing sound alive between them
+        // rather than each earning its own voice.
+        noteThinking(event.delta.length);
         // The K files stream at once, so "follow the newest delta" would flicker
         // between three tabs sixty times a second. The pane stays on the first file
         // to arrive while they are all being written, and moves to whichever one is
@@ -1044,6 +1534,13 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         const name = event.meta?.name ?? null;
         const view = candidateView(index, total);
         view.diff = event.diff;
+        view.source = event.source;
+        // Where this file's throttle chain starts. Read here, out of the file the
+        // panel is about to display, because it is one end of the chain the event
+        // stream never carries (see `readThrottle`) — and it is `1.0` rather than
+        // "unknown" when the file has no block, because that is what the harness's
+        // own wrapper means by 1.0.
+        view.throttle = readThrottle(event.source) ?? UNTHROTTLED;
         view.status = 'testing';
         if (event.dial !== undefined) view.dial = event.dial;
         view.label = name ?? event.dial ?? view.label;
@@ -1103,12 +1600,64 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         meterRight.textContent = view.count;
         meter.classList.toggle('done', view.done);
         // The first event of an attempt is the one that puts the row on screen.
-        if (event.matchesDone <= 0) addPendingGateRow(3, 'simulating…', event.candidate);
+        if (event.matchesDone <= 0) {
+          addPendingGateRow(3, 'simulating…', event.candidate);
+          // A real Gate 3 is running again, so the bar is live again.
+          panelFor.get('trial')?.removeAttribute('data-calibrated');
+        }
         // The meter belongs to whichever candidate is being simulated; show that
         // one, so the diff on screen is the file the bar is measuring.
         if (!pinned && locked === null && event.candidate !== undefined && event.candidate !== state.selectedCandidate) {
           showCandidate(event.candidate);
         }
+        break;
+      }
+
+      case 'calibrate.step': {
+        advance('trial');
+        const index = event.candidate ?? 0;
+        const view = candidateView(index, state.candidates);
+        // `step: 1` starts a search. Re-measuring the same candidate twice in one
+        // attempt cannot happen, but a re-sent frame must not append a second copy
+        // of step 1 and make the chain double back on itself.
+        if (event.step === 1) {
+          view.measured = [];
+          view.calibration = null;
+        }
+        view.measured = [
+          ...view.measured.filter((s) => s.step !== event.step),
+          {
+            step: event.step,
+            pressure: event.pressure,
+            ...(event.panel === undefined ? {} : { panel: event.panel }),
+            ok: event.ok,
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+          },
+        ].sort((a, b) => a.step - b.step);
+        state.calibrations.push({
+          attempt: event.attempt,
+          ...(event.candidate === undefined ? {} : { candidate: event.candidate }),
+          step: event.step,
+          pressure: event.pressure,
+          ...(event.panel === undefined ? {} : { panel: event.panel }),
+          ok: event.ok,
+        });
+        // The file being re-measured is the file worth looking at, exactly as with a
+        // gate or the meter.
+        if (!pinned && locked === null && event.candidate !== undefined && event.candidate !== state.selectedCandidate) {
+          showCandidate(event.candidate);
+        }
+        paintCalibration(view);
+        break;
+      }
+
+      case 'calibrate.done': {
+        advance('trial');
+        const index = event.candidate ?? 0;
+        const view = candidateView(index, state.candidates);
+        view.calibration = { steps: event.steps, pressure: event.pressure, approved: event.approved };
+        state.pressure = event.pressure;
+        paintCalibration(view);
         break;
       }
 
@@ -1124,8 +1673,23 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
             // The approved file is the one that ships, so it is the one the panel is
             // left on and its rates are the ones the verdict line quotes — even
             // though the harness goes on to measure the candidates after it.
-            locked = { candidate: event.candidate as number, panel: state.panelRate, mimic: state.mimicRate };
-            if (!pinned) showCandidate(event.candidate as number);
+            const index = event.candidate as number;
+            const shipped = views[index];
+            const calibrated = shipped?.calibration?.approved === true;
+            locked = {
+              candidate: index,
+              // For a *calibrated* file the rates on `state` are the wrong file's:
+              // they were measured on the Coder's own pass, which this candidate
+              // failed. The shipped rate is the one the verdict event carries (the
+              // winning step's own `panel` is the fallback), and the Mimic rate is
+              // not measured during calibration at all — so a calibrated approval
+              // quotes no Mimic number rather than the pre-calibration one.
+              panel: calibrated
+                ? (event.panel ?? shipped?.measured.find((s) => s.ok)?.panel ?? null)
+                : state.panelRate,
+              mimic: calibrated ? null : state.mimicRate,
+            };
+            if (!pinned) showCandidate(index);
           }
         } else state.approved = event.approved;
 
@@ -1135,17 +1699,42 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
               state.panelRate = locked.panel;
               state.mimicRate = locked.mimic;
             }
+            const shipped = views[locked?.candidate ?? state.selectedCandidate];
+            const name = shipped?.label;
+            // At K = 1 there is no per-candidate verdict to carry the shipped
+            // file's rate, so a calibrated approval would otherwise quote the
+            // Coder's own failing Gate 3 number — the one directly above it on
+            // screen, marked `✗`. The winning step's rate is the shipped file's.
+            if (shipped?.calibration?.approved === true && locked === null) {
+              state.panelRate = shipped.measured.find((s) => s.ok)?.panel ?? state.panelRate;
+              state.mimicRate = null;
+            }
             const pct = state.panelRate === null ? null : `${Math.round(state.panelRate * 100)}%`;
-            const name = views[locked?.candidate ?? state.selectedCandidate]?.label;
+            // A calibrated approval has to explain itself, because its own Gate 3
+            // row above says `✗`: the Coder's counter shipped, with the Judge's
+            // number in it. Both lines are that sentence — the plain one in words,
+            // the monospace one in the rates and the value it landed on.
+            const calibration = shipped?.calibration ?? null;
+            const calibrated = calibration !== null && calibration.approved;
             setVerdict(
               'approved',
               pct === null ? '✓ APPROVED' : `✓ APPROVED — ${pct}`,
-              name === undefined
-                ? 'it is fair, and it countered you — this is what you fight next'
-                : `${name} is fair, and it countered you — this is what you fight next`,
-              state.panelRate === null
-                ? undefined
-                : `${pct} vs the reference panel${state.mimicRate === null ? '' : ` · ${Math.round(state.mimicRate * 100)}% vs a bot built from your own replay`}`,
+              calibrated
+                ? calibratedPlain(name ?? null, shipped?.throttle ?? null, calibration.pressure)
+                : name === undefined
+                  ? 'it is fair, and it countered you — this is what you fight next'
+                  : `${name} is fair, and it countered you — this is what you fight next`,
+              calibrated
+                ? calibratedVerdictLine({
+                    panel: state.panelRate,
+                    from: shipped?.throttle ?? null,
+                    to: calibration.pressure,
+                    steps: calibration.steps,
+                    mimic: state.mimicRate,
+                  })
+                : state.panelRate === null
+                  ? undefined
+                  : `${pct} vs the reference panel${state.mimicRate === null ? '' : ` · ${Math.round(state.mimicRate * 100)}% vs a bot built from your own replay`}`,
             );
           }
           break;
@@ -1200,6 +1789,31 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
         if (event.result.approved) {
           state.strategyName = event.result.meta.name;
           state.approved = true;
+          // THE FILE THAT SHIPS IS THE FILE THE PLAYER IS SHOWN.
+          //
+          // `result.source` is the calibrated file; the diff that arrived with
+          // `rewrite.done` is the Coder's, before the Judge touched the knob. When
+          // the two differ, the change is rendered as its own section — diffed
+          // against the candidate on screen, which is the only baseline this module
+          // has (the previous round's source never reaches the interlude), and
+          // labelled as exactly that.
+          const index = locked?.candidate ?? state.selectedCandidate;
+          const view = views[index];
+          const own = view?.source ?? null;
+          if (view !== undefined && own !== null && own !== event.result.source) {
+            view.shipped = {
+              diff: unifiedDiff(own, event.result.source, {
+                fromFile: `strategy.js (${view.label}, as the coder wrote it)`,
+                toFile: 'strategy.js (shipped — calibrated by the judge)',
+              }),
+              from: view.throttle,
+              to: readThrottle(event.result.source),
+            };
+            state.calibratedDiff = true;
+            // A player who clicked another tab keeps it; the section is attached to
+            // the shipped candidate's pane either way and appears when they go back.
+            if (!pinned || state.selectedCandidate === index) showCandidate(index);
+          }
           // The hand-off, and the last thing on screen before the fight: the thing
           // that was just written, by name, saying in its own words what it intends
           // to do to you. `rationale` is the strategy file's own `meta`, so this is
@@ -1238,17 +1852,20 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     state.fallback = { reason, ...(message === undefined ? {} : { message }) };
     // Plain words on top, spec AC 5's sentence verbatim underneath. The wording of
     // the second line is the spec's and is not paraphrased — it is the promise the
-    // product makes about never leaving the player on a spinner.
+    // product makes about never leaving the player on a spinner. `fallbackText`
+    // itself now prefers `message` over the generic-by-`reason` clause, so there
+    // is nothing left to append separately here — that used to be a second,
+    // barely-noticed line carrying the truth next to a wrong headline (the
+    // 2026-09-10 playtest bug `fallbackText`'s own doc comment describes).
     bannerHead.textContent = fallbackHeadline(reason);
-    bannerText.replaceChildren(document.createTextNode(fallbackText(reason)));
-    if (message !== undefined && message !== '') {
-      bannerText.append(el('small', undefined, ` (${message})`));
-    }
+    bannerText.replaceChildren(document.createTextNode(fallbackText(reason, message)));
     banner.hidden = false;
     status.hidden = true;
     cast = { ...cast, fallback: reason, active: 'judge' };
     paintCast();
-    if (state.approved === null) setVerdict('rejected', '✗ NO APPROVAL', fallbackHeadline(reason), fallbackText(reason));
+    if (state.approved === null) {
+      setVerdict('rejected', '✗ NO APPROVAL', fallbackHeadline(reason), fallbackText(reason, message));
+    }
   }
 
   function finish(): void {
@@ -1273,15 +1890,18 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
     if (!state.done) return;
     if (ev.code !== 'Enter' && ev.code !== 'NumpadEnter' && ev.code !== 'Space' && ev.code !== 'Escape') return;
     ev.preventDefault();
+    void initAudio();
     options.onFight();
   }
   window.addEventListener('keydown', onKey);
 
   fight.addEventListener('click', () => {
     autoFightAt = null;
+    void initAudio();
     options.onFight();
   });
   skip.addEventListener('click', () => {
+    void initAudio();
     options.onSkip();
   });
 
@@ -1311,6 +1931,13 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       cast = reduceCast(cast, event);
       handle(event);
       paintCast();
+      // The stamp and the hand-off line both change the panel's height after the
+      // rows were written, and a gate list parked mid-run ends up back at its top.
+      // Only where a strip has resized the list: every other run keeps the exact
+      // scroll behaviour it had, down to the pixel of its screenshots.
+      if ((event.type === 'verdict' || event.type === 'done') && calBox.childElementCount > 0) {
+        scrollGatesToEnd();
+      }
     },
     showFallback,
     finish,
@@ -1341,11 +1968,20 @@ export function createInterludeUi(options: InterludeUiOptions): InterludeUi {
       if (disclosure !== '') provenance.title = disclosure;
     },
     state(): InterludeState {
-      return { ...state, gates: [...state.gates], rejections: [...state.rejections] };
+      return {
+        ...state,
+        gates: [...state.gates],
+        rejections: [...state.rejections],
+        calibrations: [...state.calibrations],
+      };
     },
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      // Unduck the bed and silence the thinking texture. First, and unconditionally:
+      // everything below this line is about *this* screen's own resources, and a
+      // duck or a processing hum left behind would be heard over the next fight.
+      noteInterludeClosed();
       cancelAnimationFrame(frame);
       window.clearTimeout(skipTimer);
       window.removeEventListener('keydown', onKey);

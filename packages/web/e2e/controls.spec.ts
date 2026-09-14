@@ -105,3 +105,54 @@ test('the round-won screen appears with a replay hash and starts the next round'
   expect(seeds).not.toBe(fixture.seed);
   await expect(page.locator('.hud-round')).toContainText('Round 2');
 });
+
+/**
+ * Retrying a lost round fights the *same* boss.
+ *
+ * The regression this pins is the worst kind of silent one. `startRound` reads "no
+ * source supplied" as "use the bundled file", and the defeat screen's RETRY passed
+ * the round index alone — so dying on Round 3 and pressing RETRY restarted Round 3
+ * against the **Round 1** boss, the easiest strategy in the game, while the screen
+ * said Round 3. A player found it by playing ("depois que eu perdi uma vez e iniciei
+ * de novo, parece que ele voltou pro nível mais fácil possível") and it quietly
+ * undid the product's whole loop: the boss the agents wrote for you existed for
+ * exactly one attempt and then evaporated.
+ *
+ * The probe boss below walks and never attacks, so the round ends on the tick limit
+ * rather than on damage — which is a loss (`outcome !== 'playerWon'`) and reaches the
+ * same defeat screen a real death does, without needing to lose a fight by hand.
+ */
+const PROBE_BOSS = `
+export const meta = { name: 'Retry Probe', rationale: 'I pace, and I wait.', version: 1 };
+export function init() { return { t: 0 }; }
+export function decide(view, mem) {
+  mem.t = (mem.t + 1) % 120;
+  return { type: 'move', dx: mem.t < 60 ? 1 : -1, dy: 0 };
+}
+`;
+
+test('retrying a lost round keeps the boss you lost to', async ({ page }) => {
+  await page.goto('/?seed=424242&autostart=1');
+  await waitForRound(page);
+
+  // Round 3, against a boss that is not the bundled one. The index matters: the bug
+  // was invisible on Round 1, where the bundled file *is* the right answer.
+  await page.evaluate(async (src) => {
+    await window.__rematch?.startRound(3, src);
+  }, PROBE_BOSS);
+  await waitForRound(page);
+  expect(await page.evaluate(() => window.__rematch?.state?.strategy.name)).toBe('Retry Probe');
+
+  // Run it out to the tick limit.
+  await page.evaluate(() => window.__rematch?.fastForward());
+  const screen = page.locator('#screen');
+  await expect(screen).toHaveAttribute('data-screen', 'gameOver');
+  await expect(screen).toContainText('Round 3');
+  await expect(screen).toContainText('Retry Probe');
+
+  await page.getByTestId('primary').click();
+  await waitForRound(page);
+  expect(await page.evaluate(() => window.__rematch?.round)).toBe(3);
+  // The assertion the bug failed: this was 'Cornerbreaker', the Round 1 boss.
+  expect(await page.evaluate(() => window.__rematch?.state?.strategy.name)).toBe('Retry Probe');
+});

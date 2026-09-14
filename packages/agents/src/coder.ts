@@ -31,6 +31,7 @@ import {
   type Analysis,
   type CoderBracket,
   type CoderDial,
+  type CoderIncumbent,
   type CoderRejection,
 } from './context/prompts.ts';
 import { collect, type LLMProvider, type LLMUsage } from './provider.ts';
@@ -55,6 +56,13 @@ export type CoderInput = {
    * this candidate is aimed.
    */
   bracket?: CoderBracket;
+  /** The measured player profile, already rendered. Same for every candidate of an attempt. */
+  profile?: string;
+  /**
+   * The boss being replaced, measured against the panel and the Mimic. Sent on the
+   * first attempt only — see `incumbentAnchor`.
+   */
+  incumbent?: CoderIncumbent;
 };
 
 export type CoderResult = {
@@ -116,7 +124,9 @@ export async function runCoder(
       round: input.round,
       ...(input.rejection === undefined ? {} : { rejection: input.rejection }),
       ...(input.dial === undefined ? {} : { dial: input.dial }),
+      ...(input.incumbent === undefined ? {} : { incumbent: input.incumbent }),
       ...(input.bracket === undefined ? {} : { bracket: input.bracket }),
+      ...(input.profile === undefined ? {} : { profile: input.profile }),
       ...(selfRetry === undefined ? {} : { selfRetry: { violations: selfRetry } }),
     });
     promptChars = promptSize(prompt);

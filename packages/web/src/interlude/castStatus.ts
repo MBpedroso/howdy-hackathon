@@ -68,6 +68,20 @@ export type CastState = {
   matchesTotal: number;
   /** Gate 3 is mid-simulation for some candidate. */
   simulating: boolean;
+  /**
+   * The Judge is re-measuring a candidate's file at other PRESSURE values.
+   *
+   * Its own search (`packages/agents/src/calibrate.ts`), not the Coder's: same file,
+   * one constant changed, all four gates re-run at each value. True from the first
+   * `calibrate.step` until `calibrate.done`.
+   */
+  calibrating: boolean;
+  /** 1-based step the search is on; 0 when it is not searching. */
+  calibrationStep: number;
+  /** The PRESSURE the newest step measured. */
+  calibrationPressure: number | null;
+  /** The last `calibrate.done`: what the search cost and where it landed. */
+  calibration: { steps: number; pressure: number; approved: boolean } | null;
   verdict: CastVerdict | null;
   /** How many candidates have been rejected, over the whole interlude. */
   rejections: number;
@@ -90,6 +104,10 @@ export const INITIAL_CAST: CastState = {
   matchesDone: 0,
   matchesTotal: 0,
   simulating: false,
+  calibrating: false,
+  calibrationStep: 0,
+  calibrationPressure: null,
+  calibration: null,
   verdict: null,
   rejections: 0,
   approvedName: null,
@@ -133,6 +151,26 @@ export function fallbackHeadline(reason: FailureReason): string {
   if (reason === 'max-attempts') return '✗ out of attempts, none approved';
   return '✗ the rewrite failed';
 }
+
+/**
+ * The knob, as two decimals: `1.00`, `0.71`, `0.50`.
+ *
+ * Fixed width on purpose — the strip renders a chain of these (`1.00 → 0.50 →
+ * 0.71`) and a chain of ragged numbers is not readable as a search. Two decimals is
+ * also all the search resolves to: it quantizes PRESSURE to three
+ * (`clampPressure`), and the panel rate's own noise floor is 0.03.
+ */
+export function formatThrottle(value: number): string {
+  return value.toFixed(2);
+}
+
+/** A new attempt, or a new search: no steps measured, nothing landed. */
+const CALIBRATION_RESET = {
+  calibrating: false,
+  calibrationStep: 0,
+  calibrationPressure: null,
+  calibration: null,
+} as const satisfies Partial<CastState>;
 
 function nameOf(state: CastState, candidate: number | undefined): string | null {
   if (candidate === undefined) return state.bossName;
@@ -179,6 +217,7 @@ export function reduceCast(state: CastState, event: RewriteEvent): CastState {
               matchesDone: 0,
               matchesTotal: 0,
               simulating: false,
+              ...CALIBRATION_RESET,
             }
           : {}),
       };
@@ -205,7 +244,7 @@ export function reduceCast(state: CastState, event: RewriteEvent): CastState {
         candidateNames: names,
         written: Math.min(total, written),
         bossName: name ?? state.bossName,
-        ...(fresh ? { matchesDone: 0, matchesTotal: 0, simulating: false } : {}),
+        ...(fresh ? { matchesDone: 0, matchesTotal: 0, simulating: false, ...CALIBRATION_RESET } : {}),
       };
     }
 
@@ -219,6 +258,30 @@ export function reduceCast(state: CastState, event: RewriteEvent): CastState {
         matchesDone: event.matchesDone,
         matchesTotal: event.matchesTotal,
         simulating: event.matchesDone < event.matchesTotal,
+      };
+
+    case 'calibrate.step':
+      return {
+        ...state,
+        active: 'judge',
+        // A calibration step runs the whole trial with no `trial.progress` of its
+        // own (see the event's doc): the meter belongs to the Coder's file, and the
+        // line below is what says the Judge is still working.
+        simulating: false,
+        calibrating: true,
+        calibrationStep: event.step,
+        calibrationPressure: event.pressure,
+        // `step: 1` is a *new* search, on a new candidate: the previous
+        // candidate's landing must not still be on screen underneath it.
+        ...(event.step === 1 ? { calibration: null } : {}),
+      };
+
+    case 'calibrate.done':
+      return {
+        ...state,
+        active: 'judge',
+        calibrating: false,
+        calibration: { steps: event.steps, pressure: event.pressure, approved: event.approved },
       };
 
     case 'verdict': {
@@ -328,6 +391,14 @@ function judgeStatus(state: CastState): string {
     return `${fallbackHeadline(state.fallback)} — shipping a pre-approved strategy`;
   }
   if (state.approvedName !== null) return `✓ approved ${state.approvedName}`;
+  // Before `simulating`, and in the Judge's register: this is not the Coder having
+  // another go, it is the same file re-measured at another number. Rule 3 of this
+  // file's header is why it says "calibrating" and not "thinking" — there is no
+  // model anywhere in this step, only arithmetic over rates the sandbox measured.
+  if (state.calibrating) {
+    const at = state.calibrationPressure === null ? '' : `, throttle ${formatThrottle(state.calibrationPressure)}`;
+    return `calibrating the boss — step ${state.calibrationStep}${at}…`;
+  }
   if (state.simulating) {
     const total = state.matchesTotal > 0 ? state.matchesTotal : 200;
     return `running ${total} simulated fights…`;

@@ -55,15 +55,28 @@
   gap: 18px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 10px;
+  /* The mute toggle is fixed at top-right (34 px + 14 px, `ui/styles.css`); without
+     this the badge at the end of the row — MOCK / LIVE / RECORDED RUN — sits under it. */
+  padding-right: 44px;
 }
 
+/*
+ * The screen's title and the four beat chips are its marquee, so they take
+ * `--font-display` (defined in `ui/styles.css`) at ~75-80% of the monospace size
+ * with the tracking removed — a bitmap face is already a full em per character, so
+ * "THE BOSS IS REWRITING ITSELF" comes out the same width it was. Everything below
+ * the header — the diff, the analysis, the gate lines, the rejection sentences —
+ * stays on `--font` at the size it already had. Spec §2.2: those have to be read.
+ */
 .il-title {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--boss);
   white-space: nowrap;
+  text-shadow: 0 0 6px currentColor;
 }
 
 .il-rounds {
@@ -78,16 +91,17 @@
 .il-beats { display: flex; gap: 6px; margin-left: auto; }
 
 .il-chip {
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  font-family: var(--font-display);
+  font-size: 8px;
+  letter-spacing: 0;
   text-transform: uppercase;
-  padding: 4px 9px;
-  border: 1px solid var(--border);
+  padding: 5px 9px;
+  border: 2px solid var(--border);
   color: var(--text-dim);
-  border-radius: 2px;
+  border-radius: 0;
   white-space: nowrap;
 }
-.il-chip[data-state='active'] { color: var(--void); background: var(--player); border-color: var(--player); font-weight: 700; }
+.il-chip[data-state='active'] { color: var(--void); background: var(--player); border-color: var(--player); font-weight: 400; }
 .il-chip[data-state='done'] { color: var(--player); border-color: var(--player); }
 
 .il-clock {
@@ -129,7 +143,11 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
-  border: 1px solid var(--border);
+  /* Cabinet panels: 2px edge, square, and a solid offset shadow. The 10px grid gap
+     is what makes room for the 4px offset without the panels touching. */
+  border: 2px solid var(--border);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #000;
   background: #0a0c12;
   padding: 9px 11px 10px;
 }
@@ -145,8 +163,10 @@
  * Coder writes, red/green while the Judge decides.
  */
 .il-panel[data-state='idle'] { opacity: 0.5; }
-.il-panel[data-state='active'] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-.il-panel[data-state='done'] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+/* Every state re-states the offset shadow: `box-shadow` is one property, so a state
+   that only wanted to add its inset edge would silently drop the cabinet shadow. */
+.il-panel[data-state='active'] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent), 4px 4px 0 #000; }
+.il-panel[data-state='done'] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 35%, transparent), 4px 4px 0 #000; }
 
 /*
  * `data-acting` is the agent, not the beat: during a retry the Coder is writing
@@ -157,7 +177,13 @@
 .il-panel[data-acting='1'] {
   opacity: 1;
   border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent), 0 0 22px -8px var(--accent);
+  /* The acting panel's shadow is cast in its own agent's colour — darkened, so it
+     still reads as a shadow rather than as a second border — which is the loudest
+     the "who is working" signal gets without moving anything. */
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    4px 4px 0 color-mix(in srgb, var(--accent) 45%, #000),
+    0 0 22px -8px var(--accent);
 }
 .il-panel[data-acting='1'] .il-agent-status { color: var(--accent); }
 .il-panel[data-acting='1'] .rm-portrait { border-color: var(--accent); }
@@ -438,6 +464,34 @@
 
 .il-strategy-name { color: var(--boss); font-weight: 700; }
 
+/*
+ * The file that actually ships, when the Judge changed one constant in it.
+ *
+ * A second, much shorter diff under the first — *not* a replacement for it: the
+ * candidate's diff is what the Coder wrote and the player watched arrive, and this
+ * is the one line the harness rewrote on top of it. The heading says which two files
+ * are being compared, because a diff whose baseline is unstated is a claim.
+ */
+.il-shipped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.il-shipped-head {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--player);
+  line-height: 1.5;
+}
+.il-shipped-head .dim { color: var(--text-dim); letter-spacing: 0.04em; text-transform: none; }
+/* Short by construction (one constant, three lines of context), so it is given its
+   own small ceiling instead of competing with the candidate's diff for the panel. */
+.il-shipped-diff { max-height: 120px; flex: 0 0 auto; }
+
 /* ------------------------------------------------------------ beat 4: trial */
 
 .il-gates { display: flex; flex-direction: column; gap: 4px; }
@@ -479,11 +533,28 @@
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+/*
+ * The trial meter, read as an arcade bar: 20 blocks rather than one sliding edge.
+ *
+ * The notches are drawn on the *track* (`::after` over the whole element), not on
+ * the fill, because the fill's width is set inline in percent by `ui.ts` and a
+ * gradient painted on it would stretch its own segments as it grew. On the track
+ * they stay put, so a 45% fill lands on the ninth block and stays there. The fill
+ * mechanism and the `.done` colour swap below are untouched.
+ */
 .il-meter {
-  height: 9px;
-  border: 1px solid var(--border);
+  position: relative;
+  height: 11px;
+  border: 2px solid var(--border);
   background: var(--floor);
   overflow: hidden;
+}
+.il-meter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(to right, transparent 0 calc(5% - 2px), var(--void) calc(5% - 2px) 5%);
 }
 .il-meter i {
   display: block;
@@ -509,15 +580,27 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 7px 0 3px;
+  padding: 11px 0 8px;
   border-top: 1px solid rgba(43, 52, 72, 0.6);
 }
-.il-stamp { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.il-stamp { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+/*
+ * The mark is an ink stamp: display face, a double rule around it, and three
+ * degrees off square so it reads as pressed onto the panel rather than typeset into
+ * it. The rotation is on the mark alone — `.il-stamp-plain` and `.il-stamp-raw` sit
+ * under it dead level, because those two are the sentences spec §2.2 says a player
+ * has to be able to read, and tilted body copy is a worse stamp joke than none.
+ */
 .il-stamp-mark {
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.15;
+  /* Shrink-wrapped so the boxed verdict is as wide as its words, not as wide as
+     the panel — but only this child, because `.il-stamp-raw` under it is a full
+     harness sentence that has to wrap rather than run off the edge. */
+  align-self: flex-start;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.3;
   color: var(--accent);
 }
 .il-stamp-plain { font-size: 12px; line-height: 1.4; color: var(--text); }
@@ -528,20 +611,116 @@
   color: var(--text-dim);
   word-break: break-word;
 }
+/* Still running is not a verdict, so it gets no border and no tilt — just the line. */
 .il-verdict[data-kind='working'] .il-stamp-mark {
-  font-size: 14px;
+  font-size: 9px;
   font-weight: 400;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
   color: var(--slam);
 }
 .il-verdict[data-kind='working'] { --accent: var(--slam); }
-/* A stamp lands: one press, no loop. */
+/* A verdict has landed: box it, ink it, tilt it. */
+.il-verdict[data-kind='approved'] .il-stamp-mark,
+.il-verdict[data-kind='rejected'] .il-stamp-mark {
+  padding: 5px 9px;
+  border: 3px double currentColor;
+  text-shadow: 0 0 6px currentColor;
+  transform: rotate(-3deg);
+  transform-origin: left center;
+}
+/* A stamp lands: one press, no loop. The tilt is composed into both frames — a
+   bare `scale()` here would un-rotate the stamp for the length of the animation
+   and snap it back at the end. */
 .il-verdict[data-kind='approved'] .il-stamp-mark,
 .il-verdict[data-kind='rejected'] .il-stamp-mark { animation: il-stamp 220ms ease-out; }
 @keyframes il-stamp {
-  from { transform: scale(1.13); opacity: 0.4; }
-  to { transform: scale(1); opacity: 1; }
+  from { transform: rotate(-3deg) scale(1.13); opacity: 0.4; }
+  to { transform: rotate(-3deg) scale(1); opacity: 1; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .il-verdict[data-kind='approved'] .il-stamp-mark,
+  .il-verdict[data-kind='rejected'] .il-stamp-mark { animation: none; }
+}
+
+/*
+ * The Judge's calibration strip.
+ *
+ * Sits inside the gate group of the candidate it re-measured, directly under that
+ * file's own `✗ Gate 3` row, because the strip is the answer to the question that
+ * row raises. It borrows the gate rows' geometry — a mark column, then columns that
+ * line up down the list — so the eye reads it as more of the same proof rather than
+ * as a new kind of widget. No animation of any sort: the Judge is arithmetic
+ * (spec §2.2) and a pulsing strip is exactly what a model would look like.
+ */
+/*
+ * The strips' own block, between the meter and the stamp.
+ *
+ * `flex: 0 0 auto` and no `overflow`: this is the one thing on the Trial panel that
+ * must never be cut in half, so it takes its natural height and the gate list above
+ * it — a scroller by design — gives up the pixels. `:empty` collapses it completely,
+ * which is every run that has no calibration in it (the mock, the three recordings):
+ * their Trial panel is laid out exactly as it was.
+ */
+.il-cals {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.il-cals:empty { display: none; }
+/*
+ * The finished meter steps aside for the strip.
+ *
+ * `200 / 200` is the Coder's file's Gate 3 and nothing since — each calibration step
+ * simulated another 200 matches with no bar of its own — so next to a two-step search
+ * that number is stale, and it is also the room the strip needs. The bar returns the
+ * moment a real Gate 3 starts simulating again (`trial.progress`, `matchesDone: 0`).
+ */
+.il-panel[data-beat='trial'][data-calibrated='1'] .il-meter-wrap { display: none; }
+
+.il-cal {
+  display: flex;
+  flex-direction: column;
+  padding: 3px 0 3px 7px;
+  border-left: 3px solid var(--slam);
+}
+.il-cal[data-state='ok'] { border-left-color: var(--player); }
+.il-cal[data-state='fail'] { border-left-color: var(--boss); }
+.il-cal-head {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slam);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+.il-cal[data-state='ok'] .il-cal-head { color: var(--player); }
+.il-cal[data-state='fail'] .il-cal-head { color: var(--boss); }
+/* One line, and small: the strip has to fit inside a ~4-row gate list on the
+   projector the layout is sized for (see the top of this file), and the rates in the
+   rows under it are the evidence — this is only the sentence that stops an APPROVED
+   stamp under a `✗ Gate 3` row from reading as a contradiction. */
+.il-cal-note {
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  padding: 1px 0 2px;
+}
+.il-cal-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.25;
+  padding: 0;
+  color: #cfd6e3;
+}
+.il-cal-step .mark { width: 12px; flex: 0 0 12px; color: var(--boss); }
+.il-cal-step[data-ok='true'] .mark { color: var(--player); }
+.il-cal-step .p { min-width: 104px; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.il-cal-step .rate { min-width: 92px; color: var(--text); font-variant-numeric: tabular-nums; }
+.il-cal-step .why { flex: 1; min-width: 0; color: #ff8098; }
+.il-cal-step[data-ok='true'] .why { color: var(--player); }
 
 /* The rejection log NEVER clears: spec §2.2 — "the player must be able to read
    every rejection. Rejections are the proof." */

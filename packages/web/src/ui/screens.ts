@@ -24,6 +24,7 @@
  * interlude was designed against (`interlude.css`), and it has exactly one primary
  * action like everything else here.
  */
+import { attemptAutoStart, init as initAudio, noteGesture } from '../audio/engine.ts';
 import { AGENTS, CAST, type AgentId } from './cast.ts';
 import { DEFAULT_BOSS_FIGHTER, DEFAULT_PLAYER_FIGHTER, FIGHTER_LIST, type FighterId } from './fighters.ts';
 import {
@@ -94,6 +95,53 @@ export function createScreens(root: HTMLElement): Screens {
   let action: PrimaryAction | null = null;
   let kind: string | null = null;
 
+  /**
+   * The playtest fallback: "starting on the first menu-level gesture that already
+   * arms init()" widened to *any* pointerdown/keydown, not just the ones that hit a
+   * button or pass `introKeyAction`'s filter (a stray click on the fighter grid, an
+   * arbitrary keypress) — Matt's ask, verbatim: "first user gesture ANYWHERE while
+   * an intro/start screen is visible."
+   *
+   * `audio/engine.ts`'s `armGestureFallback()` now covers the same ground for the
+   * whole page (a player who never sees an intro still has to get music). This one
+   * stays because it is the *narrow* listener: armed only while an intro screen is
+   * up, gone before the fight starts, and therefore the path that gets the chain
+   * built while nothing is competing for a frame. Both are one-shot and both are
+   * idempotent, so whichever fires first simply makes the other a no-op.
+   *
+   * A `document`-level listener is exactly the shape the frame-budget lesson
+   * (`audio/engine.ts`'s header) warns against *in general* — but only because a
+   * page-lifetime listener would also catch live gameplay's own
+   * `pointerdown`/`keydown`. This one is armed **only** for as long as an intro
+   * screen is actually showing, and no simulation is running yet at that point, so
+   * there is no frame budget here for it to compete with. `armIntroFallback` is
+   * called once, by `start()`, the moment the intro mounts; `disarmIntroFallback`
+   * removes it the instant the player leaves — from `leaveIntro` below,
+   * synchronously and *before* `onFight()` even runs, so the window in which it
+   * could still be attached during the loading screen that follows (`app.ts`'s
+   * `startRound`, which calls `screens.loading()` before it calls `screens.hide()`)
+   * never opens — and `hide()` disarms it too, as a second, cheap, idempotent
+   * safety net for any path that reaches it a different way.
+   */
+  let introFallbackArmed = false;
+  function onIntroFallbackGesture(): void {
+    disarmIntroFallback();
+    void initAudio();
+    noteGesture();
+  }
+  function armIntroFallback(): void {
+    if (introFallbackArmed) return;
+    introFallbackArmed = true;
+    document.addEventListener('pointerdown', onIntroFallbackGesture);
+    document.addEventListener('keydown', onIntroFallbackGesture);
+  }
+  function disarmIntroFallback(): void {
+    if (!introFallbackArmed) return;
+    introFallbackArmed = false;
+    document.removeEventListener('pointerdown', onIntroFallbackGesture);
+    document.removeEventListener('keydown', onIntroFallbackGesture);
+  }
+
   function onKey(ev: KeyboardEvent): void {
     // Escape first, and independent of `action`: skipping the intro must work on the
     // last beat too, where the primary action is "enter the arena".
@@ -102,6 +150,8 @@ export function createScreens(root: HTMLElement): Screens {
       const run = escapeAction;
       escapeAction = null;
       action = null;
+      void initAudio();
+      noteGesture();
       run();
       return;
     }
@@ -118,6 +168,14 @@ export function createScreens(root: HTMLElement): Screens {
     ev.preventDefault();
     const run = action.run;
     action = null;
+    // Every one of this screen's primary actions is a deliberate menu-level click or
+    // keypress, never live gameplay input — exactly the gesture `audio/engine.ts`'s
+    // `init()` is meant to be called from (see its doc for why that specificity
+    // matters: colliding with `game/loop.ts`'s frame budget instead of this).
+    // `noteGesture` is the same kind of gesture for the music bed, and a no-op
+    // once the bed is already playing, so it fires harmlessly from every screen.
+    void initAudio();
+    noteGesture();
     run();
   }
   window.addEventListener('keydown', onKey);
@@ -129,6 +187,8 @@ export function createScreens(root: HTMLElement): Screens {
     if (action === null) return;
     const run = action.run;
     action = null;
+    void initAudio();
+    noteGesture();
     run();
   });
 
@@ -170,6 +230,8 @@ export function createScreens(root: HTMLElement): Screens {
         ev.stopPropagation();
         const run = primary.run;
         action = null;
+        void initAudio();
+        noteGesture();
         run();
       });
       (primarySlot ?? card).append(btn);
@@ -231,7 +293,51 @@ export function createScreens(root: HTMLElement): Screens {
     skip: () => void;
   };
 
-  /** `● ● ○ ○` — where you are in the four. */
+  /**
+   * The bottom band, identical on all four beats: the dots, the action, then one
+   * line of small print.
+   *
+   * It exists because the first cut let every beat put its own furniture wherever
+   * its content happened to end, so the dots and the button moved between screens
+   * and the sequence read as four pages rather than one machine. The button is
+   * planted here through `primarySlot`, and the small-print row keeps a floor
+   * height even when a beat has nothing to say in it — otherwise the action jumps
+   * vertically on the two beats that do.
+   */
+  function introFoot(screen: IntroScreen, ctx: IntroCtx): HTMLElement {
+    const foot = document.createElement('footer');
+    foot.className = 'intro-foot';
+    foot.append(introDots(screen));
+
+    const slot = document.createElement('div');
+    slot.className = 'intro-primary';
+    foot.append(slot);
+    primarySlot = slot;
+
+    const meta = document.createElement('div');
+    meta.className = 'intro-meta';
+    if (screen === 'hook') {
+      // The secondary way out. A returning player should not have to sit through
+      // four beats, and should not have to hunt for the way past them either.
+      const skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'intro-skip';
+      skipBtn.dataset.testid = 'skip-intro';
+      skipBtn.dataset.nofight = '1';
+      skipBtn.textContent = 'Skip intro';
+      skipBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ctx.skip();
+      });
+      meta.append(skipBtn);
+    } else if (screen === 'arena') {
+      meta.append(line('Press Enter to start', 'arena-hint'), line(`Session seed ${ctx.seed}`, 'start-seed'));
+    }
+    foot.append(meta);
+    return foot;
+  }
+
+  /** `● ● ○ ○` — where you are in the four. Same slot on every beat. */
   function introDots(screen: IntroScreen): HTMLElement {
     const dots = document.createElement('div');
     dots.className = 'intro-dots';
@@ -269,7 +375,7 @@ export function createScreens(root: HTMLElement): Screens {
     const pick = document.createElement('section');
     pick.className = 'start-pick';
     pick.dataset.testid = 'start-pick';
-    pick.append(sectionLabel('Pick your fighter', 'Costumes only — the fight is identical'));
+    pick.append(sectionLabel('Pick your fighter', 'Cosmetics only — the fight is identical'));
     const sides = document.createElement('div');
     sides.className = 'pick-sides';
     for (const which of ['player', 'boss'] as const) {
@@ -305,7 +411,7 @@ export function createScreens(root: HTMLElement): Screens {
         const name = document.createElement('span');
         name.className = 'pick-name';
         name.textContent = fighter.name;
-        btn.append(createFighterFace(fighter.id, 64), name);
+        btn.append(createFighterFace(fighter.id, 100), name);
         btn.title = fighter.tag;
 
         btn.addEventListener('click', (ev) => {
@@ -368,14 +474,17 @@ export function createScreens(root: HTMLElement): Screens {
    *
    * Each branch is a screen and they share almost nothing on purpose — the point of
    * the sequence is that a beat is one idea, so a shared skeleton would only be a
-   * place for a second idea to creep back in. The progress dots and the primary
-   * button are the only furniture every screen carries, and the button comes from
-   * `render`.
+   * place for a second idea to creep back in.
+   *
+   * What every beat *does* share is the composition: a title band, a content band,
+   * and `introFoot`'s action band. The bands are the reason the dots and the button
+   * do not move between screens, which is what made the first cut read as four web
+   * pages instead of one attract sequence.
    */
   function buildIntro(card: HTMLElement, screen: IntroScreen, ctx: IntroCtx): void {
     if (screen === 'hook') {
       const head = document.createElement('header');
-      head.className = 'hook-head';
+      head.className = 'intro-head hook-head';
       const kick = document.createElement('div');
       kick.className = 'hook-kicker';
       kick.textContent = 'Howdy Hackathon';
@@ -407,32 +516,21 @@ export function createScreens(root: HTMLElement): Screens {
       sub.className = 'hook-sub';
       sub.textContent = 'Five rounds. One boss. It adapts.';
 
-      // The secondary way out, small and next to the dots — a returning player
-      // should not have to sit through four beats, and should not have to hunt for
-      // the way past them either.
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'intro-skip';
-      skipBtn.dataset.testid = 'skip-intro';
-      skipBtn.dataset.nofight = '1';
-      skipBtn.textContent = 'Skip intro';
-      skipBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        ctx.skip();
-      });
+      const body = document.createElement('div');
+      body.className = 'intro-body hook-body';
+      body.append(art, sub);
 
-      const foot = document.createElement('div');
-      foot.className = 'hook-foot';
-      foot.append(introDots(screen), skipBtn);
-      card.append(head, art, sub, foot);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
     if (screen === 'concept') {
+      const head = document.createElement('header');
+      head.className = 'intro-head';
       const title = document.createElement('h1');
       title.className = 'intro-title';
       title.textContent = 'The boss learns';
-      card.append(title, flowRow(CONCEPT_FLOW, 'concept-flow'));
+      head.append(title, flowRow(CONCEPT_FLOW, 'concept-flow'));
 
       const steps = document.createElement('ol');
       steps.className = 'concept-row';
@@ -447,15 +545,21 @@ export function createScreens(root: HTMLElement): Screens {
         item.append(n, h, line(step.text, 'concept-text'));
         steps.append(item);
       }
-      card.append(steps, introDots(screen));
+
+      const body = document.createElement('div');
+      body.className = 'intro-body';
+      body.append(steps);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
     if (screen === 'agents') {
+      const head = document.createElement('header');
+      head.className = 'intro-head';
       const title = document.createElement('h1');
       title.className = 'intro-title';
       title.textContent = 'Three agents. One fight.';
-      card.append(title);
+      head.append(title);
 
       const cards = document.createElement('div');
       cards.className = 'agent-row';
@@ -465,7 +569,10 @@ export function createScreens(root: HTMLElement): Screens {
         item.dataset.agent = agent.id;
         item.dataset.testid = `cast-${agent.id}`;
         item.style.setProperty('--accent', agent.accent);
-        item.append(createPortrait(agent.id, { size: 84 }));
+        // 84 px on the old single screen, where this was one block of six. It is a
+        // whole beat now and the illustration is the fastest way to tell the three
+        // apart, so it gets the room.
+        item.append(createPortrait(agent.id, { size: 112 }));
 
         const name = document.createElement('h3');
         name.textContent = `The ${agent.name.replace(/^The /, '')}`;
@@ -482,7 +589,6 @@ export function createScreens(root: HTMLElement): Screens {
         item.append(line(agent.role, 'agent-role'));
         cards.append(item);
       }
-      card.append(cards);
 
       const closing = document.createElement('p');
       closing.className = 'agent-closing';
@@ -490,7 +596,11 @@ export function createScreens(root: HTMLElement): Screens {
         document.createTextNode('The boss can change. '),
         strong('The Judge decides what gets through.'),
       );
-      card.append(closing, introDots(screen));
+
+      const body = document.createElement('div');
+      body.className = 'intro-body';
+      body.append(cards, closing);
+      card.append(head, body, introFoot(screen, ctx));
       return;
     }
 
@@ -503,13 +613,19 @@ export function createScreens(root: HTMLElement): Screens {
       row.textContent = part;
       promise.append(row);
     }
-    card.append(promise, line('Every round makes the fight different.', 'arena-sub'));
-    card.append(fighterPicker(ctx), controlsBlock());
+    const head = document.createElement('header');
+    head.className = 'intro-head arena-head';
+    head.append(promise, line('Every round makes the fight different.', 'arena-sub'));
 
-    const foot = document.createElement('div');
-    foot.className = 'arena-foot';
-    foot.append(line('Press Enter to start', 'arena-hint'), line(`Session seed ${ctx.seed}`, 'start-seed'));
-    card.append(introDots(screen), foot);
+    // The picker is the beat's main interactive section and the controls are
+    // reference material under it, so they are two blocks with a gap rather than
+    // one stack — the first cut ran them together and the fight's four keys read as
+    // a fifth row of the fighter grid.
+    const body = document.createElement('div');
+    body.className = 'intro-body arena-body';
+    body.append(fighterPicker(ctx), controlsBlock());
+
+    card.append(head, body, introFoot(screen, ctx));
   }
 
   return {
@@ -549,19 +665,32 @@ export function createScreens(root: HTMLElement): Screens {
       let screen: IntroScreen = 'hook';
 
       /**
+       * Leave the intro for good, from any of the two ways in (SKIP INTRO, or the
+       * arena beat's own primary action reaching `nextScreen === 'fight'`).
+       * `disarmIntroFallback` runs first and synchronously — before `onFight()`,
+       * which is what eventually reaches `app.ts`'s `startRound` — so the fallback
+       * listener is never still attached during that call's own `screens.loading()`
+       * interstitial (see its own doc for why that window mattered).
+       */
+      function leaveIntro(): void {
+        disarmIntroFallback();
+        onFight();
+      }
+
+      /**
        * Leave the intro for good. Ticks the remembered flag on the way out, because
        * a player who pressed SKIP INTRO has said what they want for next time too —
        * `?intro=1` is the documented way back (`ui/intro.ts`).
        */
       function skip(): void {
         onSkipIntro?.(true);
-        onFight();
+        leaveIntro();
       }
 
       function advance(): void {
         const to = nextScreen(screen);
         if (to === 'fight') {
-          onFight();
+          leaveIntro();
           return;
         }
         screen = to;
@@ -588,6 +717,12 @@ export function createScreens(root: HTMLElement): Screens {
         );
       }
 
+      // The intro just mounted: attempt music with no gesture at all (Matt's
+      // playtest ask — see `attemptAutoStart()`'s doc for the autoplay-policy
+      // honesty of "attempt" vs. "guarantee"), and arm the broader gesture
+      // fallback for whichever browser says no.
+      attemptAutoStart();
+      armIntroFallback();
       show();
     },
 
@@ -654,6 +789,11 @@ export function createScreens(root: HTMLElement): Screens {
     hide(): void {
       kind = null;
       action = null;
+      // Safety net: `leaveIntro()` above already disarms it synchronously on every
+      // path out of the intro, but a listener left attached is a real page-lifetime
+      // hazard (see its own doc), so `hide()` — reached by every screen transition,
+      // not only the intro's own — disarms it too. Idempotent when it already is.
+      disarmIntroFallback();
       root.replaceChildren();
       root.classList.remove('active');
       delete root.dataset.screen;

@@ -7,20 +7,40 @@
 // with a ring burst at contact, then walks back out to reload the runway.
 //
 // Worth knowing before tuning it: the charge is the boss's *character*, not the source
-// of its win rate. Measured against the panel, this boss beats a kiting player only
-// 0.44 of the time — and takes nothing at all off a rusher. Closing the gap and winning
-// once you are there are two different problems, and the charge only solves the first.
+// of its win rate. Closing the gap and winning once you are there are two different
+// problems, and the charge only solves the first — which is why what finally moved this
+// boss's rate was what it does *after* it arrives (see the 2026-09-11 note below).
 //
 // The loop is deliberately loud: 20 ticks of telegraph on the charge, 40 on the slam,
 // so the player is told twice. The counter is the dash — 10 invulnerable ticks, which
 // beats both tells if it is spent on the right frame. A Round 4 boss should demand the
-// dash, and this one does; the Rusher bot, which dashes through everything, beats it
-// every single match.
+// dash, and this one does.
+//
+// ## Retuned 2026-09-11, for round 4's new band (spec §13, delta 24)
+//
+// Round 4's band moved to 0.60-0.75 and this boss sat at 0.54, with the shortfall in
+// one place: the Rusher beat it 1.00 of the time, every match, on every count. The
+// note above says why and it was right — "the counter is the dash" — but it read the
+// dash as an answer rather than as a resource. It is 10 invulnerable ticks on a
+// 45-tick cooldown, so a player at contact range can answer *one* thing.
+//
+// So the file now throws two. Branch 1b: the slam follows the ring inside 14 ticks and
+// resolves 40 ticks later, which lands inside the 45 the dash spends recovering from
+// the ring. Nothing fires more often than it did — the burst and the slam are on their
+// own cooldowns and the resting breaths are untouched at `HUNT_CHANCE` 0.45 — they are
+// simply thrown as a pair instead of separately, which is the same trick `nettle.js`
+// has always used at contact. Rusher 0.00 -> 0.16. `SPAWN_EVERY` 1380 -> 1250 covers
+// the rest of the distance to the new band's middle.
+//
+// It is still beatable by the thing it is meant to be beaten by: hold the dash for the
+// slam rather than spending it on the ring, and the pair costs nothing.
 //
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round4/bellringer.js
 // --round 4 --matches 200`:
 //
-//     panel 0.54   (Camper 1.00, Kiter 0.44, Rusher 0.00, Dodger 0.72)   band 0.50-0.65
+//     panel 0.70   (Camper 1.00, Kiter 0.76, Rusher 0.16, Dodger 0.88)   band 0.60-0.75
+//     0.700 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.05 inside both edges
 //     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
 //
 // Two things moved when the resting `idle` became a strafe and the retreat learned not
@@ -60,7 +80,9 @@ const RING_RANGE = 165;      // where a ring beats a cone
 const CONE_MIN = 250;
 const SLAM_LEAD = 30;
 const STANDOFF = 300;
-const SPAWN_EVERY = 1380;
+const SPAWN_EVERY = 1250;
+// How long after a ring the slam still counts as the second half of the pair.
+const RING_CHASE = 14;
 // The balance dial, and the boss's rhythm. Once per breath it rolls whether it is
 // hunting or resting; `rand()` is the engine's seeded PRNG, so a match replays
 // byte-for-byte while the player still cannot count the beats to safety. A short
@@ -70,7 +92,7 @@ const BREATH = 90;
 const HUNT_CHANCE = 0.45;
 
 export function init() {
-  return { lastSpawn: -999, charges: 0, breath: -1, hunting: true };
+  return { lastSpawn: -999, charges: 0, breath: -1, hunting: true, ringAt: -999 };
 }
 
 export function decide(view, mem) {
@@ -100,7 +122,17 @@ export function decide(view, mem) {
   // 1. The ring, first: if the player is already at contact there is nothing to
   //    close and a cone here is a free sidestep.
   if (cd.burst === 0 && armed && dist < RING_RANGE) {
+    mem.ringAt = view.tick;
     return { type: 'burst', angle: angle, count: 8 };
+  }
+
+  // 1b. Cash the ring. A player at contact range answers the ring with the dash —
+  //     10 invulnerable ticks, then 45 of cooldown. The slam resolves 40 ticks after
+  //     it is thrown, which lands inside that window, so throwing it on the heels of
+  //     the ring is the one thing at this range the dash cannot answer twice.
+  const sinceRing = view.tick - (typeof mem.ringAt === 'number' ? mem.ringAt : -999);
+  if (cd.slam === 0 && armed && sinceRing < RING_CHASE && dist < RING_RANGE + 60) {
+    return { type: 'slam', x: clamp(boss.x, 0, aw), y: clamp(boss.y, 0, ah) };
   }
 
   // 2. The charge. Aimed at where the player will be after the telegraph, not at
@@ -128,13 +160,14 @@ export function decide(view, mem) {
 
   // 4. A cone while the charge is down, so the mid range is never entirely free.
   if (cd.burst === 0 && armed && dist > CONE_MIN) {
-    return { type: 'burst', angle: angle, count: 5 };
+    return { type: 'burst', angle: leadAngle(boss, player, vx, vy, angle), count: 5 };
   }
 
   // 5. A minion behind the player, cutting the retreat the charge pushes them into.
   //    Deliberately rare — two in a whole round, and this cadence is the balance dial
-  //    that actually moves. Measured at 200 matches: `SPAWN_EVERY` 1300 puts this boss
-  //    at 0.59 against the panel, 1380 at 0.54 and 1800 at 0.49. The pets, not the charge, are what
+  //    that actually moves. Measured at 200 matches, before the ring-slam pair existed:
+  //    `SPAWN_EVERY` 1300 put this boss at 0.59 against the panel, 1380 at 0.54 and 1800
+  //    at 0.49; with the pair it is 1250 -> 0.70 and 1150 -> 0.73. The pets, not the charge, are what
   //    deny a defensive player the clear screen they need to shoot back. This boss is
   //    meant to be beaten by dashing its telegraphs, so the pets stay a garnish.
   if (cd.spawn === 0 && view.tick - mem.lastSpawn > SPAWN_EVERY) {
@@ -158,6 +191,30 @@ export function decide(view, mem) {
   return strafe(view, angle);
 }
 
+
+/**
+ * Where to aim a cone so the shots and the player arrive together.
+ *
+ * A boss projectile travels 5.5 px/tick, so at 350 px it is ~64 ticks in the air and a
+ * player walking across the cone at 3.6 px/tick is 230 px from where it was aimed.
+ * Two passes of the standard intercept iteration: guess the time of flight from the
+ * present range, move the player along its own velocity by that much, re-measure.
+ */
+function leadAngle(boss, player, vx, vy, fallback) {
+  const SHOT_SPEED = 5.5;
+  let t = 0;
+  let ax = player.x;
+  let ay = player.y;
+  for (let i = 0; i < 2; i = i + 1) {
+    ax = player.x + vx * t;
+    ay = player.y + vy * t;
+    t = Math.sqrt((ax - boss.x) * (ax - boss.x) + (ay - boss.y) * (ay - boss.y)) / SHOT_SPEED;
+  }
+  const lx = ax - boss.x;
+  const ly = ay - boss.y;
+  if (Math.sqrt(lx * lx + ly * ly) < 0.001) return fallback;
+  return Math.atan2(ly, lx);
+}
 
 /** The resting strafe: perpendicular to `angle`, reversing every `STRAFE_LEG` ticks. */
 function strafe(view, angle) {

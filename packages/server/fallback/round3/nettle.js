@@ -6,14 +6,33 @@
 // its own feet. There is no poke, no zoning and no chase; there is one radius, and
 // crossing it is the whole fight.
 //
-// That makes it a lesson rather than a difficulty setting: it eats aggression alive
-// and it is completely helpless against distance, because nothing it does travels.
-// Refuse the trade and it never lands a hit. Take the trade and it wins it.
+// That makes it a lesson rather than a difficulty setting: it eats aggression alive,
+// and refusing the trade is still the counter — but as of 2026-09-11 refusing it is
+// no longer free. Take the trade and it wins it.
+//
+// ## Retuned 2026-09-11, for round 3's new band (spec §13, delta 24)
+//
+// Round 3's band moved to 0.50-0.65 and this boss measured exactly 0.50 — on the
+// floor, with no margin at all. The dials could not fix that and it is worth being
+// precise about why: `TRIGGER` 200 -> 260 and `SPAWN_EVERY` 420 -> 300 moved the panel
+// rate by 0.02 and 0.00, because neither addresses the reason a kiting or dodging
+// player scored 0.00 against it. A boss that walks straight at a player who walks
+// 3.6 px/tick to its 2.6 is not slow, it is *behind* — pure pursuit never closes, so
+// the ambush radius never fires at anyone who keeps moving.
+//
+// So the fix is where the boss walks, not what it throws: `ambushPoint` aims the stalk
+// at the player's lead, or at the cell the heat map says they keep coming back to,
+// whichever is nearer. It throws exactly what it threw before. Kiter 0.00 -> 0.20 and
+// Dodger 0.00 -> 0.12 are the whole difference, and `CUT_CHANCE` is the dial that
+// keeps it inside the band — cutting on every breath measures 0.77, which is a round 5
+// boss wearing a round 3 file.
 //
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round3/nettle.js
 // --round 3 --matches 200`:
 //
-//     panel 0.50   (Camper 1.00, Kiter 0.00, Rusher 1.00, Dodger 0.00)   band 0.45-0.60
+//     panel 0.58   (Camper 1.00, Kiter 0.20, Rusher 1.00, Dodger 0.12)   band 0.50-0.65
+//     0.600 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.05 inside both edges
 //     longest motionless run 1 tick of the 90 Gate 3's ACTIVE assertion allows
 //
 // The only strategy in the pool whose rates did not move at all when its resting `idle`
@@ -28,7 +47,7 @@
 // a reduced 120 matches; both counts sit at least 0.03 inside both edges.
 export const meta = {
   name: 'Nettle',
-  rationale: 'I never throw anything. I just walk towards you and wait for you to come inside arm’s reach.',
+  rationale: 'I never throw anything. I just walk to where you are going and wait for you there.',
   version: 1,
 };
 
@@ -51,9 +70,25 @@ const SLAM_TRIGGER = 165;
 const STALK_STOP = 60;     // do not grind into the player's hitbox
 const REFRESH = 60;
 const SPAWN_EVERY = 420;
+/** Ticks the lead may look ahead. Past this the player has turned and the guess is
+ *  worse than no guess at all. */
+const LEAD_CAP = 90;
+// The balance dial, and the boss's one tell. Once per breath it rolls whether the
+// ambush is laid or merely walked: on a quiet breath it plods straight at the player,
+// which is the pursuit that never catches anyone, and the player gets a stretch of the
+// round in which walking away is free. `rand()` is the engine's seeded PRNG, so a match
+// still replays byte-for-byte while the player cannot count the breaths to safety.
+//
+// It is here because cutting is not a threshold, it is the whole difference between
+// this boss and a boss that cannot land anything: measured at 200 matches, always
+// cutting puts it at 0.77 against the panel and never cutting at 0.50, with the four
+// bots' rates near-binary in between. A per-breath roll is the one knob that moves the
+// rate continuously — the same finding `curfew.js` records for its own dial.
+const BREATH = 150;
+const CUT_CHANCE = 0.75;
 
 export function init() {
-  return { hot: -1, refreshedAt: -1, lastSpawn: -999 };
+  return { hot: -1, refreshedAt: -1, lastSpawn: -999, breath: -1, cutting: true };
 }
 
 export function decide(view, mem) {
@@ -99,13 +134,73 @@ export function decide(view, mem) {
     };
   }
 
-  // 4. Stalk. Never dash, never charge: the walk is the tell, and a player who reads
-  //    it simply walks away faster than the boss can follow. Once it is inside arm's
-  //    reach it circles instead of stopping — waiting is the design, standing
-  //    perfectly still is a boss that reads as crashed (and the earlier version of
-  //    this branch spent 57% of a typical match doing exactly that).
+  // 4. Stalk — by cutting, not by chasing. Never dash, never charge: the walk is the
+  //    tell, and a player who reads it simply walks away faster than the boss can
+  //    follow. That is also why a straight chase is worthless here: the boss walks
+  //    2.6 px/tick and the player 3.6, so pure pursuit is permanently behind and the
+  //    ambush radius never closes on anyone who keeps moving. It walks at where they
+  //    are *going* instead (`ambushPoint`), which is the only way a slower body ever
+  //    arrives first. Once it is inside arm's reach it circles instead of stopping —
+  //    waiting is the design, standing perfectly still is a boss that reads as crashed
+  //    (and the earlier version of this branch spent 57% of a typical match doing
+  //    exactly that).
   if (dist <= STALK_STOP || dist < 0.001) return strafe(view, angle);
-  return { type: 'move', dx: dx / dist, dy: dy / dist };
+  const breath = Math.floor(view.tick / BREATH);
+  if (mem.breath !== breath) {
+    mem.breath = breath;
+    mem.cutting = rand() < CUT_CHANCE;
+  }
+  if (mem.cutting !== true) return { type: 'move', dx: dx / dist, dy: dy / dist };
+  const aim = ambushPoint(view, mem, dist);
+  const ax = aim.x - boss.x;
+  const ay = aim.y - boss.y;
+  const amag = Math.sqrt(ax * ax + ay * ay);
+  if (amag < STALK_STOP) return strafe(view, angle);
+  return { type: 'move', dx: ax / amag, dy: ay / amag };
+}
+
+/**
+ * Where to walk so the player arrives too.
+ *
+ * Two readings of "where they are going", and the boss takes whichever is nearer:
+ *
+ *  - The **lead**: their position after the time it takes the boss to walk there, at
+ *    2.6 px/tick, solved by one iteration. Exact for a straight line and a decent
+ *    guess for a circle.
+ *  - The **habit**: the hottest cell of `history.playerPosHeat`, which is the one
+ *    thing in the view that describes the player rather than the tick. A player who
+ *    keeps returning to the same corner is ambushed by standing in it — and unlike
+ *    the lead, that works against someone whose velocity says nothing because they
+ *    are circling.
+ *
+ * Neither makes the boss faster. Both make it early, which is the whole design: this
+ * boss cannot catch anyone, so the ground has to.
+ */
+function ambushPoint(view, mem, dist) {
+  const boss = view.boss;
+  const player = view.player;
+  const BOSS_SPEED = 2.6;
+  const vx = typeof player.vx === 'number' && isFinite(player.vx) ? player.vx : 0;
+  const vy = typeof player.vy === 'number' && isFinite(player.vy) ? player.vy : 0;
+  let t = dist / BOSS_SPEED;
+  if (t > LEAD_CAP) t = LEAD_CAP;
+  const leadX = clamp(player.x + vx * t, 0, view.arena.w);
+  const leadY = clamp(player.y + vy * t, 0, view.arena.h);
+
+  if (view.tick - mem.refreshedAt >= REFRESH || mem.hot < 0) {
+    mem.hot = hottestCell(view.history.playerPosHeat);
+    mem.refreshedAt = view.tick;
+  }
+  const cellW = view.arena.w / 8;
+  const cellH = view.arena.h / 8;
+  const col = mem.hot % 8;
+  const row = (mem.hot - col) / 8;
+  const hotX = clamp(col * cellW + cellW / 2, 0, view.arena.w);
+  const hotY = clamp(row * cellH + cellH / 2, 0, view.arena.h);
+
+  const dLead = Math.sqrt((leadX - boss.x) * (leadX - boss.x) + (leadY - boss.y) * (leadY - boss.y));
+  const dHot = Math.sqrt((hotX - boss.x) * (hotX - boss.x) + (hotY - boss.y) * (hotY - boss.y));
+  return dHot < dLead ? { x: hotX, y: hotY } : { x: leadX, y: leadY };
 }
 
 

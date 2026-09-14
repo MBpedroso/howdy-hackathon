@@ -4,7 +4,8 @@
  * SOURCE OF TRUTH: `packages/agents/src/events.ts` (`RewriteEvent`, `RewriteResult`,
  * `AttemptLog`, `FailureReason`), plus `packages/harness/src/gates/types.ts`
  * (`GateResult`), `packages/agents/src/context/prompts.ts` (`Analysis`,
- * `PlayerArchetype`) and `packages/agents/src/provider.ts` (`LLMUsage`).
+ * `PlayerArchetype`), `packages/agents/src/provider.ts` (`LLMUsage`) and
+ * `packages/agents/src/calibrate.ts` (the PRESSURE knob `readPressure` reads).
  *
  * ## Why a copy and not an import
  *
@@ -53,12 +54,18 @@ export type GateFail = {
 
 export type GateResult = GateOk | GateFail;
 
-/** Spec §6.2's per-round fairness band, for the rejection copy the UI renders. */
+/**
+ * Spec §6.2's per-round fairness band (as amended by §13 delta 24), for the rejection
+ * copy the UI renders.
+ *
+ * A copy rather than an import: `packages/web` does not depend on `@rematch/harness`.
+ * `packages/harness/src/gates/balanceConfig.ts` is the source of truth.
+ */
 export const BAND: Readonly<Record<number, readonly [number, number]>> = {
   2: [0.35, 0.5],
-  3: [0.45, 0.6],
-  4: [0.5, 0.65],
-  5: [0.55, 0.7],
+  3: [0.5, 0.65],
+  4: [0.6, 0.75],
+  5: [0.65, 0.95],
 };
 
 /**
@@ -114,6 +121,18 @@ export type CandidateLog = {
   reason?: string;
   panel?: number;
   skipped?: true;
+  /**
+   * The `const PRESSURE` this candidate's file ended up declaring — equal to
+   * `calibration.to`. Absent for a file without the knob.
+   */
+  pressure?: number;
+  /**
+   * What the Judge's own search did to this candidate (`packages/agents/src/calibrate.ts`).
+   *
+   * `from` is the PRESSURE the Coder wrote, `to` the one the candidate ended at, and
+   * `steps` how many extra full gate passes that cost.
+   */
+  calibration?: { steps: number; from: number; to: number };
 };
 
 export type AttemptLog = {
@@ -227,6 +246,53 @@ export type RewriteEvent =
       /** Gate 3's panel mean for this candidate, when it measured one. */
       panel?: number;
     }
+  /**
+   * Beat 4, still — one per re-measurement of a candidate's file at a different
+   * `const PRESSURE` (`packages/agents/src/calibrate.ts`).
+   *
+   * The Coder writes the shape of the counter; the Judge aims the number. When a
+   * candidate fails Gate 3 on FAIR alone and its file declares the knob, the loop
+   * brackets and bisects PRESSURE in log2 space and re-runs the *whole* trial at
+   * each value — so every one of these is a real four-gate verdict at ~1 s, not a
+   * shortcut, and nothing about it is a model.
+   *
+   * `step` is 1-based and `pressure` is the value measured. `panel` is Gate 3's
+   * panel mean at that value, absent if the step never reached Gate 3. `ok` is the
+   * full trial's verdict; `reason` carries the rejecting gate's sentence when it is
+   * false.
+   *
+   * No `trial.gate` or `trial.progress` events are emitted for a calibration step:
+   * the candidate's gate list and its progress meter are about the file the Coder
+   * wrote. That is why the interlude renders these as their own strip under that
+   * candidate's gate rows (see `ui.ts`) rather than as more gate rows.
+   */
+  | {
+      type: 'calibrate.step';
+      attempt: number;
+      candidate?: number;
+      candidates?: number;
+      step: number;
+      pressure: number;
+      panel?: number;
+      ok: boolean;
+      reason?: string;
+    }
+  /**
+   * One per calibrated candidate, after its last step.
+   *
+   * `steps` is how many extra gate passes the search spent, `pressure` the value the
+   * candidate ended at, and `approved` whether one of the steps passed every gate. A
+   * candidate whose file has no knob emits neither this nor any `calibrate.step`.
+   */
+  | {
+      type: 'calibrate.done';
+      attempt: number;
+      candidate?: number;
+      candidates?: number;
+      steps: number;
+      pressure: number;
+      approved: boolean;
+    }
   /** Attempts or the deadline are exhausted; a pre-approved strategy ships. */
   | { type: 'fallback'; reason: FailureReason; message?: string }
   | { type: 'done'; result: RewriteResult };
@@ -243,6 +309,12 @@ export const EVENT_TYPES: readonly RewriteEventType[] = [
   'trial.gate',
   'trial.progress',
   'verdict',
+  // Dropping a frame whose `type` is not in this list is how a newer server talking
+  // to an older client stays quiet (see `isRewriteEvent`) — which also means a type
+  // missing from here is *invisible*, not a type error. The calibration strip did
+  // not exist on screen until these two lines did.
+  'calibrate.step',
+  'calibrate.done',
   'fallback',
   'done',
 ];
@@ -308,4 +380,39 @@ export function balanceRates(result: GateResult): { panel?: number; mimic?: numb
   const panel = read('panel');
   const mimic = read('mimic');
   return { ...(panel === undefined ? {} : { panel }), ...(mimic === undefined ? {} : { mimic }) };
+}
+
+/**
+ * `const THROTTLE = 0.5;` at column zero — the value, or `null`.
+ *
+ * A **copy** of `readThrottle` in `packages/agents/src/calibrate.ts`, for the same
+ * reason the event union is one: the browser must not import the agents package. The
+ * regex is deliberately identical, including the "exactly one match at column zero"
+ * rule — that line belongs to the block the Judge injects (`// ---- calibrated by the
+ * Judge …`), and anything looser would read a constant the search never touched.
+ *
+ * The interlude needs this for two things, both of them ends of the throttle chain
+ * (`throttle 1.00 → 0.50 → 0.71`): the value the file on screen already carries, and
+ * the value the *shipped* file ended at. The stream carries every value the Judge
+ * measured but neither of those, and both are sitting in sources the interlude
+ * already holds. Reading them out is exact; inferring them would not be.
+ */
+const THROTTLE_LINE = String.raw`^const THROTTLE = (-?(?:\d+(?:\.\d*)?|\.\d+));`;
+
+/**
+ * The throttle of a file that declares none: `1.0` is the Coder's file untouched.
+ *
+ * Not a UI convention — `calibrate.ts` defines `THROTTLE_MAX = 1.0` as exactly this,
+ * and its injected block short-circuits at `>= 1`. So a chain that starts at 1.00 is
+ * describing the file the Coder wrote, not rounding up to a tidy number.
+ */
+export const UNTHROTTLED = 1;
+
+export function readThrottle(source: string): number | null {
+  const re = new RegExp(THROTTLE_LINE, 'gm');
+  const first = re.exec(source);
+  if (first === null) return null;
+  if (re.exec(source) !== null) return null;
+  const value = Number(first[1]);
+  return Number.isFinite(value) ? value : null;
 }

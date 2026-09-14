@@ -3,11 +3,17 @@
  * whole product is balanced against and every one of them is arguable.
  *
  * ```
- * ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          "it countered how you played"
- * FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
- * ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
- *            boss range over a match   >= 56 px        "…and it is not stuck in one spot"
+ * ADAPTED :  win_rate(boss vs Mimic)  >= ADAPTED_MIN[round]   "it countered how you played"
+ * FAIR    :  win_rate(boss vs panel)  in BAND[round]          "…but a different approach still beats it"
+ * ACTIVE  :  longest motionless run   <= 90 ticks             "…and it never looks crashed"
+ *            boss range over a match   >= 56 px               "…and it is not stuck in one spot"
  * ```
+ *
+ * Both of the first two are per-round tables, and they escalate in opposite
+ * directions on purpose (delta 24): FAIR's band rises slowly, because it is the cap
+ * on raw strength, while ADAPTED's threshold rises fast and *blocks* from round 3
+ * on, because the difficulty the player is supposed to feel across a fight is the
+ * boss learning their movement rather than the boss spamming harder.
  *
  * ACTIVE is the one that is not in the spec's §6.2, and it is here because a human
  * playtest found what §6.2 cannot: a boss frozen in a corner for four seconds,
@@ -26,19 +32,107 @@ export const BALANCE_ROUNDS = [2, 3, 4, 5] as const satisfies readonly BalanceRo
  * boss gets harder over the fight without ever becoming unwinnable — the upper
  * bound is the promise to the player, the lower bound is the promise to the demo
  * (a boss that loses 80% of the time is not a boss).
+ *
+ * ## Why the bands moved on 2026-09-11 (spec §13, delta 24)
+ *
+ * Rounds 3–5 were raised (0.45–0.60 / 0.50–0.65 / 0.55–0.70 → the numbers below) and
+ * round 2 was left **byte-for-byte unchanged**, because round 2's numbers are quoted
+ * in the published recorded run and in `SYSTEM.md` §6 and a band that moves under
+ * them makes that evidence unreadable.
+ *
+ * The bands are still the cap on *raw* strength, and they are deliberately the
+ * smaller half of the escalation: a band alone gets harder by letting the boss spam
+ * more, which is the difficulty a player resents. The escalation the player is meant
+ * to feel is `ADAPTED_MIN` below, which blocks from round 3 on. Round 5's ceiling is
+ * 0.95 rather than 0.70 so that a boss which has genuinely read the player is allowed
+ * to be very hard; the floor is what still stops a boss from being a pushover.
  */
 export const BAND: Readonly<Record<BalanceRound, readonly [number, number]>> = {
   2: [0.35, 0.5],
-  3: [0.45, 0.6],
-  4: [0.5, 0.65],
-  5: [0.55, 0.7],
+  3: [0.5, 0.65],
+  4: [0.6, 0.75],
+  5: [0.65, 0.95],
 };
 
 /**
  * ADAPTED, route 1: the boss beats a bot built from the player's own replay this
  * often. The absolute claim — "it counters how you played".
+ *
+ * Per-round since 2026-09-11 (spec §13, delta 24), and paired with `ADAPTED_BLOCKS`
+ * below, which says whether missing it rejects the candidate or only advises.
+ *
+ * Round 2 keeps 0.70 **and keeps advising rather than blocking** — delta 23's
+ * argument is unchanged there, and its numbers are the ones the recorded run and
+ * `SYSTEM.md` §6 quote. Rounds 3, 4 and 5 escalate 0.75 → 0.85 → 0.95 and reject.
+ *
+ * ## Why the escalation lives here rather than in `BAND`
+ *
+ * Both tables can make a round harder, and they make it harder in different ways.
+ * Raising `BAND` buys difficulty by letting the boss be stronger against four
+ * scripted bots that never change — more projectiles, more area denial, a boss that
+ * wins because it is spamming. Raising this buys difficulty by demanding the boss
+ * beat a bot built from **this player's own replay**, which it cannot do by firing
+ * more: the Mimic reproduces the player's positions, dodges and trigger discipline,
+ * so the only way past it is to read where that player goes. That is the difficulty
+ * the product promises, so that is the dial the rounds escalate on.
+ *
+ * ## Why blocking is survivable now when delta 23 said it was not
+ *
+ * Delta 23 retired ADAPTED as a blocker because it was unsatisfiable *for round 2*:
+ * the incumbent scored 0.710 against a Mimic of a flawless human run, so a candidate
+ * had to beat a bar its predecessor could barely reach while FAIR capped it at 0.50
+ * against the panel. Round 2 is therefore exactly where this stays advisory. From
+ * round 3 the arithmetic is different: FAIR's ceiling is 0.65–0.95 rather than 0.50,
+ * so there is room above the panel for a boss that also beats the Mimic, and the
+ * **relative route** (`ADAPTED_MARGIN`) is always open — a candidate that beats the
+ * incumbent's rate against the identical Mimic by 0.10 has adapted whatever the
+ * absolute number says. Either route satisfies the assertion; the absolute one is
+ * not a wall on its own.
+ *
+ * The thresholds are not calibrated against a recorded eval, because there is no
+ * recorded eval for rounds 3–5 — every committed run is a round-2 run. They are set
+ * from the round-2 corpus's own shape: the ten committed `ReplaySummary` fixtures put
+ * the incumbent between 0.54 and 1.00 against their Mimics (mean 0.804,
+ * `scripts/mimic-calibration.ts`), so 0.75 is above the middle of that distribution,
+ * 0.85 is near its top quartile, and 0.95 is reachable only against a player the boss
+ * has genuinely solved — or by the relative route.
  */
-export const ADAPTED_MIN = 0.7;
+export const ADAPTED_MIN: Readonly<Record<BalanceRound, number>> = {
+  2: 0.7,
+  3: 0.75,
+  4: 0.85,
+  5: 0.95,
+};
+
+/**
+ * Whether missing ADAPTED **rejects** the candidate, per round.
+ *
+ * Round 2 is `false` and that is delta 23 standing exactly as it was: measured,
+ * reported in the artifact (`detail.adapted`), appended to any rejection so the Coder
+ * still aims at it, and never the reason a candidate is refused. Rounds 3–5 are
+ * `true` (delta 24).
+ *
+ * A separate table from `ADAPTED_MIN` rather than `number | null` in one, because the
+ * two facts are independent: round 2 has a threshold it reports and does not enforce,
+ * and folding "report only" into the threshold's own value would delete the 0.70 that
+ * round 2's advisory sentence still has to print.
+ */
+export const ADAPTED_BLOCKS: Readonly<Record<BalanceRound, boolean>> = {
+  2: false,
+  3: true,
+  4: true,
+  5: true,
+};
+
+/** The absolute ADAPTED target for a round. */
+export function adaptedMinFor(round: BalanceRound): number {
+  return ADAPTED_MIN[round];
+}
+
+/** Whether ADAPTED rejects in this round, or only advises (round 2). */
+export function adaptedBlocks(round: BalanceRound): boolean {
+  return ADAPTED_BLOCKS[round];
+}
 
 /**
  * ADAPTED, route 2: how much the new boss must beat the *incumbent's* rate against
@@ -99,6 +193,27 @@ export const ADAPTED_MIN = 0.7;
  * question rather than quietly changed. The relative route stays because it is
  * sound, costs one simulation per interlude, and binds whenever the incumbent is
  * weak — a round following a fallback boss, most obviously.
+ *
+ * ## 2026-09-10 note: the 0.710 baseline above predates calibration
+ *
+ * That measurement used a `Mimic` whose aim (`makeMimic`'s `accuracy`) was fixed
+ * at 0.72 for every player, regardless of how well they actually shot
+ * (`bots/mimic.ts`, `accuracyFromSummary`, analysis item 3). The Mimic is now
+ * calibrated to the summary it imitates, so 0.710 is a pre-calibration number and
+ * a fresh 12-attempt live run would not reproduce it exactly. What *is* re-verified
+ * (`scripts/mimic-calibration.ts`, before/after on every committed replay
+ * summary): the mean incumbent-vs-Mimic win rate across the ten committed
+ * `ReplaySummary` fixtures moved from 0.822 to 0.804 — a modest drop, in the
+ * direction the analysis predicted, not the dramatic one. The closest committed
+ * analogue to the flawless zero-damage run this comment describes
+ * (`packages/agents/canned/mimic-camper.json`, the "Statue" replay) did not drop
+ * at all (0.980 → 1.000 at 100 matches): for that specific replay, accuracy was
+ * never the bottleneck — its heat map is a single static corner cell, so
+ * `round1.js` wins on positioning regardless of aim (verified by sweeping
+ * `accuracy` 0.3→0.85 against it directly; the win rate stayed 0.96–1.00
+ * throughout). That is evidence for, not against, this file's own read of
+ * analysis §5 Q3: aim was a real and fixable weak channel for most of the
+ * corpus, but not the one this specific flawless-run analogue needed.
  */
 export const ADAPTED_MARGIN = 0.1;
 

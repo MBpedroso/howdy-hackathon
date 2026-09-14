@@ -1,0 +1,20 @@
+# Docker build context = repo root. Keep the image to the server's runtime closure.
+node_modules
+**/node_modules
+**/dist
+**/test
+**/e2e
+**/*.test.ts
+packages/web
+docs
+artifacts
+.git
+.githooks
+.github
+.claude
+.env
+.env.*
+!.env.example
+*.md
+!packages/contract/README.md
+scripts

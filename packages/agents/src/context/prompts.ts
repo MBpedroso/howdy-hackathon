@@ -22,7 +22,16 @@
  */
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
-import { ACTIVITY, ADAPTED_MIN, DEFAULT_MATCHES, bandFor, formatBand, type BalanceRound } from '@rematch/harness';
+import {
+  ACTIVITY,
+  DEFAULT_MATCHES,
+  DEFAULT_ROUND,
+  adaptedBlocks,
+  adaptedMinFor,
+  bandFor,
+  formatBand,
+  type BalanceRound,
+} from '@rematch/harness';
 import type { GateName } from '@rematch/harness';
 import { extractMeta } from '../meta.ts';
 import { contractDoc } from './contractDoc.ts';
@@ -104,13 +113,68 @@ export type AnalystContext = {
   prevMeta?: StrategyMeta;
 };
 
+/**
+ * What the retry branch of `analystPrompt` needs to know about the reply it is
+ * following up on. Two shapes in one type, distinguished by `prose`:
+ *
+ *  - **No `prose`**: the reply had a JSON block (or something that looked like
+ *    one) and it failed to parse or validate. That reply is noise — a model
+ *    handed its own malformed output tends to anchor on the mistake rather than
+ *    fix it — so it is not echoed back; the retry is a fresh attempt with the
+ *    error named (2026-09-03 design, `analyst.ts`'s doc comment).
+ *  - **`prose` present**: the reply had *no* JSON at all — no fence, no balanced
+ *    `{…}` anywhere — but the prose before it read as real analysis
+ *    (`parseAnalysis`'s `kind: 'no-json'`, live 2026-09-10:
+ *    `artifacts/server/rewrite-2026-09-10T16-53-53-446Z.json`, claude-cli/sonnet,
+ *    1909 clean chars of prose and then nothing). That reply is not noise, it is
+ *    unfinished work, so the retry is an *extraction* task: the prose is included
+ *    verbatim and the model is asked only to restate it as JSON, not to
+ *    re-analyse the replay.
+ */
+export type AnalystRetryContext = {
+  /** `ParseResult`'s `error`, unmodified — always present, shown only in the
+   *  non-extraction branch (the extraction branch's problem was structural, not
+   *  a message worth quoting). */
+  error: string;
+  /**
+   * The previous reply's full raw text, when (and only when) it had no JSON at
+   * all. The streamed prose the player watched is capped at the fence
+   * (`analysisGate`), but there was no fence in this reply — the raw text *is*
+   * the prose — so `runAnalyst` passes `done.text` unmodified rather than the
+   * deltas, which would just be the same string reassembled the hard way.
+   */
+  prose?: string;
+};
+
 const ARCHETYPE_HINTS = `Archetype definitions (pick the closest; "mixed" if none fits):
 - camper: lives in one or two cells, lets the boss come, shoots from safety
 - kiter: keeps distance and keeps moving, orbits, never commits
 - rusher: closes distance, trades damage, dashes into the boss
 - dodger: reacts to telegraphs, high dash count, attacks only in safe windows`;
 
-export function analystPrompt(ctx: AnalystContext, retryError?: string): Prompt {
+export function analystPrompt(ctx: AnalystContext, retry?: AnalystRetryContext): Prompt {
+  // Extraction retry: the previous reply's prose already *is* the analysis —
+  // that is the whole premise of `kind: 'no-json'` — so the only thing missing
+  // is the fenced block, and asking for it does not need the replay again. Skip
+  // `renderSummary` entirely rather than pay for a second copy of it: a shorter
+  // retry is a faster one, and it removes a real risk along with the tokens —
+  // handed the full summary a second time, a model could re-derive a *different*
+  // reading of it than the prose the player already watched stream past.
+  if (retry?.prose !== undefined) {
+    const content = [
+      'Your previous reply had no fenced JSON block at all, but its prose was usable —',
+      'here it is, verbatim, exactly as you wrote it:',
+      '',
+      retry.prose,
+      '',
+      'Reply now with ONLY the fenced JSON block described in the instructions:',
+      '`observations` (3 to 6 of the sentences above, as a JSON array of strings),',
+      '`playerArchetype`, `counterPlan`. Nothing else — no prose before it, no',
+      'sentences repeated outside the fence, no text after the closing fence.',
+    ].join('\n');
+    return { system: ANALYST_SYSTEM, messages: [{ role: 'user', content }] };
+  }
+
   const content = [
     renderSummary(ctx.summary, {
       round: ctx.round,
@@ -123,12 +187,13 @@ export function analystPrompt(ctx: AnalystContext, retryError?: string): Prompt 
   ].join('\n');
 
   const messages: Prompt['messages'] = [{ role: 'user', content }];
-  if (retryError !== undefined) {
-    // The failed reply is not echoed back: it was unparseable, so it is noise, and
-    // showing a model its own malformed output tends to anchor the retry on it.
+  if (retry !== undefined) {
+    // The failed reply is not echoed back: it was unparseable (or its JSON was
+    // the wrong shape), so it is noise, and showing a model its own malformed
+    // output tends to anchor the retry on it.
     messages.push({
       role: 'user',
-      content: `Your previous reply could not be parsed: ${retryError}\n\nReply again in the two parts described in the instructions: the prose sentences first, then the fenced JSON block.`,
+      content: `Your previous reply could not be parsed: ${retry.error}\n\nReply again in the two parts described in the instructions: the prose sentences first, then the fenced JSON block.`,
     });
   }
   return { system: ANALYST_SYSTEM, messages };
@@ -153,6 +218,32 @@ export function harnessRules(round: BalanceRound): string {
   // the approved runs in `artifacts/agents/` — a boss with two bots at 1.00 has
   // never passed.
   const rest = Math.max(0, (4 * ((lo + hi) / 2) - 1) / 3).toFixed(2);
+  // ADAPTED rejects from round 3 and advises in round 2 (spec §13, deltas 23 and 24).
+  // The Coder is told which of the two it is facing, because "a goal you cannot fail"
+  // and "the assertion that will refuse this file" are different instructions.
+  const adaptedMin = adaptedMinFor(round).toFixed(2);
+  const blocks = adaptedBlocks(round);
+  const gate3Intro = blocks
+    ? 'Three assertions, and every one of them rejects:'
+    : 'Two assertions\nthat reject, and one goal that does not:';
+  const adaptedRule = blocks
+    ? `    ADAPTED : boss win rate vs the Mimic  >= ${adaptedMin}   (round ${round} — this rejects you)
+              The Mimic is a bot rebuilt from THIS player's replay — their heat
+              map, their dash bias, their shot timing. Beating it is what "you
+              countered how they played" means, and from round 3 it is a
+              requirement rather than a goal: the round gets harder by reading this
+              player better, not by throwing more at everyone. There is a second way
+              to satisfy it — beat the boss you are replacing by 0.10 against the
+              same Mimic — and the rejection sentence names both numbers.
+              You cannot buy it with volume: FAIR still caps you at ${hi.toFixed(2)}.`
+    : `    ADAPTED : boss win rate vs the Mimic  >= ${adaptedMin}   (a goal — it cannot reject you)
+              The Mimic is a bot rebuilt from THIS player's replay — their heat
+              map, their dash bias, their shot timing. Beating it is what "you
+              countered how they played" means. Aim at it; never trade FAIR for it.`;
+  const adaptedExample = blocks
+    ? `    ✗ "0.62 vs Mimic — didn't adapt (need >= ${adaptedMin} for round ${round}, or >= 0.81 =
+       incumbent 0.71 + 0.10)"`
+    : '';
   return `# HOW THE HARNESS JUDGES YOU
 
 Your file is not shipped because it looks good. It runs four gates, in order, and
@@ -170,12 +261,8 @@ Gate 2 — contract fuzz. Your \`decide\` is called on ~500 generated states,
     ✗ "returned an invalid action on 3.0% of states (15/500); the most common
        problem was burst.angle must be a finite number, got NaN (12x)"
 
-Gate 3 — balance. ${DEFAULT_MATCHES} simulated matches on a fixed seed set. Two assertions
-that reject, and one goal that does not:
-    ADAPTED : boss win rate vs the Mimic  >= ${ADAPTED_MIN.toFixed(2)}   (a goal — it cannot reject you)
-              The Mimic is a bot rebuilt from THIS player's replay — their heat
-              map, their dash bias, their shot timing. Beating it is what "you
-              countered how they played" means. Aim at it; never trade FAIR for it.
+Gate 3 — balance. ${DEFAULT_MATCHES} simulated matches on a fixed seed set. ${gate3Intro}
+${adaptedRule}
     FAIR    : boss win rate vs the scripted panel  in ${formatBand(round)}   (round ${round})
               Four scripted bots that play nothing like this player: Camper,
               Kiter, Rusher, Dodger. The panel rate is the plain mean of their
@@ -198,21 +285,22 @@ that reject, and one goal that does not:
               range, pace the ground you are guarding — with straight legs of ~34
               ticks, because a curve makes you unhittable and that fails FAIR.
     ✗ "0.91 vs panel — too hard (band ${formatBand(round)} for round ${round}; Camper 1.00, Kiter 0.96,
-       Rusher 0.92, Dodger 0.76); 0.41 vs Mimic — didn't adapt"
-    ✗ "boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle
+       Rusher 0.92, Dodger 0.76)"
+${adaptedExample}    ✗ "boss motionless for 263 consecutive ticks (4.4 s) vs Kiter — never return idle
        as a resting state; patrol, reposition or feint instead (limit 90 ticks)"
 
 Gate 4 — perf. \`decide\` p99 must stay inside its 2 ms budget in the sandbox.
     ✗ "decide() p99 = 6.2ms > 2ms"
 
 What this means for how you write:
-- Aim at the middle of the band (${((lo + hi) / 2).toFixed(2)}), not the top: "too hard" costs the
-  player the game, and it fails exactly like "too easy". One pressure source at a
-  time, a quiet window after every committed attack. A bot at 1.00 never got a turn.
+- Aim at the middle of the band (${((lo + hi) / 2).toFixed(2)}). Both edges fail, but they are not
+  equally recoverable: over the band the harness throttles your own file until the
+  rate lands, and under it nothing can — so if you must miss, miss high. One
+  pressure source at a time, a quiet window after every committed attack. A bot at
+  1.00 never got a turn.
 - \`Rusher 1.00\` is the commonest single cause of "too hard": punishing contact
   unconditionally beats it every match. \`Kiter 0.00, Rusher 0.00\` is "too easy".
-- On a retry, move magnitude, not architecture. 0.90 wants about half the
-  pressure it has, not none — a rewrite is how "too hard" becomes "too easy".
+- On a retry, move magnitude, not architecture.
 - Counter the *specific* player in the analysis — that is the whole point of the
   rewrite, and what the ADAPTED number reports — but leave the counter answerable.
   Prefer punishing one habit hard over raising pressure everywhere.
@@ -233,12 +321,42 @@ What this means for how you write:
  * denial test in `test/context.test.ts` holds it to that — a hint that leaked an
  * engine identifier would fail the build.
  *
- * Kept under 900 characters on purpose. It sits in the cached system prompt in
- * front of the analysis, and a page of tactics would start to compete with the
- * contract for the model's attention. The heat-map line grew on 2026-09-04 to say
- * that `playerPosHeat` is *cumulative and never decays* — the sentence the frozen
- * Round 2 boss needed, since it parked on a cell the player had left twenty seconds
- * earlier — and four other lines were tightened to pay for it.
+ * Was kept under 900 characters through 2026-09-04; now under 2100. It sits in the
+ * cached system prompt in front of the analysis, and a page of tactics would start
+ * to compete with the contract for the model's attention, so the ceiling is a
+ * deliberate one, raised deliberately rather than drifted into. The heat-map line
+ * grew on 2026-09-04 to say that `playerPosHeat` is *cumulative and never decays* —
+ * the sentence the frozen Round 2 boss needed, since it parked on a cell the player
+ * had left twenty seconds earlier — and four other lines were tightened to pay for
+ * it. It grew again on 2026-09-09 (analysis item 1,
+ * `docs/ANALYSIS-learning-signal-2026-09-09.md`) with the *constructive* half of
+ * that same warning: a strategy that only knows the cumulative map can name the
+ * player's habit but not tell a camper who is still camping from one who left ten
+ * seconds ago, because nothing in the contract hands it a recent window — `mem` is
+ * the only place a strategy can build one, so the hint now says how. This growth
+ * was not paid for by cutting another line, unlike 09-04's: item 1 is ranked #2 of
+ * seven interventions specifically because it is prompt-only, and a page of tactics
+ * un-earning its keep is a worse failure mode than 400 extra cached bytes.
+ *
+ * A third bullet was added 2026-09-09 (later), from a playtest rather than the
+ * analysis: `ADAPT_DIALS`'s `place` dial told the Coder to slam the hottest cell
+ * "whether or not the player is standing in it right now", and a slam that lands
+ * on ground the player could never reach in time is not pressure, it is a boss
+ * that reads as broken (Matt: dashing straight at the telegraphed spot, he still
+ * only closed half the distance). The bullet states the reachability arithmetic as
+ * a measured fact of the engine — telegraph length, best-case travel, blast radius
+ * — once, so both `place`'s instruction and the mem-window bullet's "lead it" can
+ * point at it instead of restating the numbers.
+ *
+ * The cumulative-heat bullet grew one more clause on 2026-09-10, again from a
+ * playtest rather than the analysis: a spread-out player's "hottest" cell can be
+ * 0.08 share with several neighbours within a point of it (a real recorded run,
+ * `artifacts/server/rewrite-2026-09-10T16-41-46-470Z.json` — 0.081, vs. 0.334 for
+ * an actual camper the same week, `…T18-03-48-701Z.json`), and the boss was still
+ * fencing that non-habit like a real one. The clause tells the Coder to read the
+ * PLAYER PROFILE's `share` before treating a cell as a habit at all, rather than
+ * adding a fourth bullet for a fact that belongs right next to the first one about
+ * what the heat map means.
  */
 export function harnessHints(round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
@@ -256,7 +374,21 @@ Measured on strategies that passed Gate 3:
   fixed duty cycles give 0.00 or 1.00 per bot.
 - \`history.playerPosHeat\` is where the player *lives*: cumulative over the round
   and never decaying, so its hottest cell may be one they left 20 s ago. Aim there,
-  then keep moving — never park on it.
+  then keep moving — never park on it. But check the share first (the PLAYER
+  PROFILE's \`share\` field): under ~0.10 nobody lives anywhere, that is a spread-out
+  player's transit cell, not a habit — aim at the live player and pick pressure by
+  archetype instead of fencing ground they only crossed.
+- A \`slam\` telegraphs for 40 ticks (~0.67s) and then hits once, at one point: even
+  sprinting with a dash, a player covers at most ~220px in that time, so aiming past
+  ~330px away (that travel plus the slam's own ~110px reach) is a guaranteed miss —
+  slam where they can BE when it resolves, not just where they have been; \`spawn\` or
+  \`burst\` to punish ground they have already left.
+- \`view.player.x/y\` is live, every non-telegraph tick: keep your own recent picture
+  in \`mem\` instead of trusting the lifetime map alone. Push the player's cell index
+  every ~10 ticks into a ring of ~60 entries and aim slams and bursts at the ring's
+  centroid — led by \`vx\`/\`vy\` across a slam's telegraph, same reason as above — not
+  the lifetime peak; the lifetime map is the habit, the ring is whether they're still
+  in it.
 - Round ${round}'s band is ${formatBand(round)}; aim at its middle, ${((lo + hi) / 2).toFixed(2)}.`;
 }
 
@@ -269,7 +401,9 @@ Measured on strategies that passed Gate 3:
  * from one number. It is omitted entirely when no rate carries one, so a Gate 3
  * `detail` from an older run still renders.
  */
-export function renderBotRates(rates: BotRates): string {
+export function renderBotRates(rates: BotRates, round: BalanceRound = DEFAULT_ROUND): string {
+  const adaptedMin = adaptedMinFor(round);
+  const blocks = adaptedBlocks(round);
   const rows: Array<{ name: string; winRate: number; maxIdleRun?: number; mimic: boolean }> = [
     ...rates.perBot.map((b) => ({ ...b, mimic: false })),
   ];
@@ -280,8 +414,10 @@ export function renderBotRates(rates: BotRates): string {
     .map((row) => {
       const rate = row.winRate.toFixed(2);
       const note = row.mimic
-        ? row.winRate < ADAPTED_MIN
-          ? `  <- short of the ${ADAPTED_MIN.toFixed(2)} goal (did not reject you)`
+        ? row.winRate < adaptedMin
+          ? blocks
+            ? `  <- short of the ${adaptedMin.toFixed(2)} ADAPTED requirement for round ${round}`
+            : `  <- short of the ${adaptedMin.toFixed(2)} goal (did not reject you)`
           : ''
         : row.winRate >= 1
           ? '  <- unwinnable for that bot; this is what makes you too hard'
@@ -340,16 +476,20 @@ export function correctionHint(rates: BotRates, round: BalanceRound): string | u
       'pressure — but put it back on the habit the analysis names, not everywhere.',
     ].join('\n');
   }
-  if (rates.mimic !== undefined && rates.mimic < ADAPTED_MIN) {
-    // Reachable only alongside another failure now that ADAPTED advises rather than
-    // rejects: an in-band, active boss that merely misses the Mimic goal ships. Kept
-    // because ACTIVE can still be the rejection while the Mimic rate is also low,
-    // and then this is exactly the right instruction.
+  if (rates.mimic !== undefined && rates.mimic < adaptedMinFor(round)) {
+    // In round 2 this is reachable only alongside another failure, because ADAPTED
+    // advises there: an in-band, active boss that merely misses the Mimic goal ships,
+    // and this hint is for the case where ACTIVE was the rejection and the Mimic rate
+    // is also low. From round 3 ADAPTED rejects, so the same hint is the whole
+    // instruction — and it is the same instruction either way: the panel rates are
+    // already right, so the counter is the only thing to change.
+    const why = adaptedBlocks(round)
+      ? `the Mimic rate is what rejected you, and round ${round} needs ${adaptedMinFor(round).toFixed(2)}.`
+      : 'the Mimic rate is a goal, not the reason\nyou were rejected.';
     return [
       `Your panel rate (${panel.toFixed(2)}) is already inside the band: change NOTHING that the`,
       'panel bots see. Sharpen the one counter to the habit in the analysis and leave',
-      'every other dial exactly where it is — the Mimic rate is a goal, not the reason',
-      'you were rejected.',
+      `every other dial exactly where it is — ${why}`,
     ].join('\n');
   }
   return undefined;
@@ -417,15 +557,28 @@ export type CoderBracket = {
  * the burst is, how long the quiet window is) is what makes the three files
  * actually different, and three genuinely different files are what turn a
  * rejection into an interval.
+ *
+ * `conservative` was rewritten on 2026-09-11. Its old text stacked four separate
+ * subtractions — one pressure source, no `spawn`, long range only, `count: 3`, and
+ * 120 quiet ticks after every attack — and against `claude-cli` (Sonnet, effort
+ * low) all three live interludes of that day produced a file that measured 0.26,
+ * 0.20 and **0.00** vs the panel against bands whose middles are 0.42, 0.58 and
+ * 0.68 (`artifacts/server/rewrite-2026-09-11T16-*.json`). The quiet window was the
+ * subtraction too many: a single attack that is also rare is not a restrained boss,
+ * it is an absent one, and 0.00 fails FAIR exactly as hard as 1.00 does. The dial
+ * still holds the low edge — one threat, no minions, no contact punish — but the
+ * one threat now has to actually fire.
  */
 export const DIALS: readonly { name: string; instruction: string; aim: CoderDial['aim'] }[] = [
   {
     name: 'conservative',
     aim: 'low',
     instruction: [
-      'ONE pressure source and no more. Do not `spawn` at all. `burst` only at long',
-      'range and only with `count: 3`. Never punish contact — when the player is close,',
-      'reposition instead. Leave at least 120 quiet ticks after every committed attack.',
+      'ONE pressure source and no more, and do not `spawn` at all — but that one source',
+      'fires on every cooldown it has, led onto where the player is moving rather than',
+      'where they stand. Never punish contact: when the player is close, reposition and',
+      'keep the range you shoot from. Restraint here is ONE threat, not a rare one —',
+      'adding a quiet window on top of a single attack is how a boss measures 0.00.',
     ].join('\n'),
   },
   {
@@ -462,20 +615,38 @@ export const DIALS: readonly { name: string; instruction: string; aim: CoderDial
  * refused by ACTIVE rather than by the Mimic rate, and the instruction is right for
  * that too: a frozen boss that is otherwise in band needs its pressure moved
  * somewhere, not scaled.
+ *
+ * `place`'s instruction was rewritten 2026-09-09 (later) after a playtest: "commit
+ * it there whether or not the player is standing in it" told the Coder to slam the
+ * habit cell unconditionally, and a slam telegraphs for 40 ticks and hits once, at
+ * one point — a player who was never going to be within reach when it lands cannot
+ * be threatened by it, so an unconditional habit-slam reads as the boss missing on
+ * purpose (Matt's report: dashing straight at it, he still only closed half the
+ * distance). See `harnessHints`' reachability bullet for the arithmetic; `place`
+ * now spends the slam only when the player can still be caught, and leads the live
+ * player otherwise. `ground` is untouched on purpose: a minion does not need the
+ * player to already be near it, so denying the habit ground by occupying it has no
+ * reachability problem to fix.
  */
 export const ADAPT_DIALS: readonly { name: string; instruction: string }[] = [
   {
     name: 'place',
     instruction: [
-      'Change only WHERE. Put every `slam` on the hottest cell of',
-      '`history.playerPosHeat` and commit it there whether or not the player is',
-      'standing in it right now, so the ground they live on is the dangerous ground.',
+      'Change only WHERE. A `slam` telegraphs for 40 ticks and then hits once, at one',
+      'point — see the reachability numbers in WHAT THE HARNESS HAS LEARNED. If the',
+      'player is already in (or close enough to reach) the hottest cell of',
+      '`history.playerPosHeat`, commit the slam there. Otherwise the habit cell is out',
+      'of reach this tick: lead the live player instead — aim at',
+      '`player.x + player.vx * 40` and `player.y + player.vy * 40` — and use',
+      '`spawn`/`burst` to make the habit cell itself costly, rather than slamming',
+      'ground nobody can be standing on.',
     ].join('\n'),
   },
   {
     name: 'ground',
     instruction: [
-      'Change only WHO holds the space. `spawn` toward the hottest cell of',
+      'Change only WHO holds the space. Unlike a `slam`, a minion does not need the',
+      'player to already be near it when it appears: `spawn` toward the hottest cell of',
       '`history.playerPosHeat` and keep the minion between the player and it, so',
       'returning to their favourite ground costs them something every time.',
     ].join('\n'),
@@ -512,6 +683,32 @@ export function adaptDials(total: number): CoderDial[] {
 }
 
 /**
+ * Which of `DIALS` candidate 0, 1, 2 … is given — **best file first**, not lowest
+ * aim point first.
+ *
+ * `DIALS` is written low edge to high edge because that is how a human reads a
+ * spread, and until 2026-09-11 candidate index followed it, so candidate 0 was
+ * always `conservative`. That was free as long as every candidate of an attempt
+ * reached the gates. On the `claude-cli` path it is not: a Coder call is 14-22 s
+ * and the Analyst another 14-16 s, so a 45 s interlude judges whichever candidate
+ * lands first and the deadline aborts the rest
+ * (`artifacts/server/rewrite-2026-09-11T16-*.json`: one judged candidate in each
+ * of three attempts, `conservative` every time, 0.26 / 0.20 / 0.00 vs panel).
+ * Index order and the deadline together guaranteed the weakest file was the only
+ * one measured.
+ *
+ * So the order is `balanced`, `aggressive`, `conservative`: the middle of the band
+ * is what the loop is aiming at, and an attempt cut to one file should be holding
+ * the one aimed at the target. `aggressive` is second because every measured
+ * failure on this provider is an undershoot — if only two survive, the pair that
+ * brackets the band from above is worth more than a second file below it.
+ *
+ * Judging in completion order (`loop.ts`) is the other half of the same fix; this
+ * half is what decides *which* file the fastest slot is writing.
+ */
+export const DIAL_ORDER: readonly number[] = [1, 2, 0];
+
+/**
  * The dial for candidate `index` of `total`.
  *
  * `undefined` when `total <= 1`: one candidate is the legacy loop, and it must
@@ -520,7 +717,7 @@ export function adaptDials(total: number): CoderDial[] {
  */
 export function dialFor(index: number, total: number): CoderDial | undefined {
   if (total <= 1) return undefined;
-  const dial = DIALS[index % DIALS.length];
+  const dial = DIALS[DIAL_ORDER[index % DIAL_ORDER.length] as number];
   if (dial === undefined) return undefined;
   return {
     name: dial.name,
@@ -546,10 +743,26 @@ export function blendDials(total: number, bracket: CoderBracket, round: BalanceR
   const centre = span <= 0 ? 0.5 : Math.min(0.9, Math.max(0.1, (mid - bracket.low.panel) / span));
   const spread = 0.16;
   return Array.from({ length: total }, (_, i) => {
-    const offset = total === 1 ? 0 : (i / (total - 1) - 0.5) * 2 * spread;
     const base = dialFor(i, Math.max(2, total)) as CoderDial;
+    // The offset follows the dial's own `aim`, not its index. Since `DIAL_ORDER`
+    // stopped index and aim from agreeing (2026-09-11), spreading by index would
+    // label the *highest* blend "conservative" in the next attempt's comparison
+    // table — the same three blends as before, attached to the wrong three names.
+    // Past `DIALS.length` there is no aim left to follow and the index spread is
+    // the only thing that still produces K distinct points.
+    const offset =
+      total === 1
+        ? 0
+        : total <= DIALS.length
+          ? (aimFraction(base.aim) - 0.5) * 2 * spread
+          : (i / (total - 1) - 0.5) * 2 * spread;
     return { ...base, of: total, blend: Math.min(0.95, Math.max(0.05, centre + offset)) };
   });
+}
+
+/** Where a dial's aim point sits between the bracket's too-easy and too-hard ends. */
+function aimFraction(aim: CoderDial['aim']): number {
+  return aim === 'low' ? 0 : aim === 'high' ? 1 : 0.5;
 }
 
 /** What one candidate of a rejected attempt measured. Rendered as a table row. */
@@ -582,10 +795,12 @@ function shortVerdict(outcome: CandidateOutcome, round: BalanceRound): string {
   const [lo, hi] = bandFor(round);
   if (outcome.panel !== undefined && outcome.panel > hi) return 'too hard';
   if (outcome.panel !== undefined && outcome.panel < lo) return 'too easy';
-  // Last, and only when nothing that rejects explains the row: ADAPTED advises now,
-  // so "short of goal" is a description of a candidate that was refused for some
-  // other reason — never the verdict on its own.
-  if (outcome.rates?.mimic !== undefined && outcome.rates.mimic < ADAPTED_MIN) return 'short of goal';
+  // Last, because FAIR is read first. In round 2 ADAPTED advises, so "short of goal"
+  // describes a candidate refused for some other reason; from round 3 the same row is
+  // the verdict itself, and the label says so.
+  if (outcome.rates?.mimic !== undefined && outcome.rates.mimic < adaptedMinFor(round)) {
+    return adaptedBlocks(round) ? "didn't adapt" : 'short of goal';
+  }
   return 'rejected';
 }
 
@@ -666,7 +881,10 @@ export function bracketHint(
     `Start from the "${below.dial}" file and move every knob that differs between the two`,
     `about ${pctOfWay}% of the way towards "${above.dial}": the spawn cadence, the burst count and`,
     `the range it fires at, the hold distance, and the \`rand()\` threshold on the punish.`,
-    `Change nothing else. Target ${mid.toFixed(2)}.`,
+    `Change nothing else. Aim at ${mid.toFixed(2)} and do not agonise over the last few hundredths:`,
+    `if you come in over the band the harness throttles the file it already has — it`,
+    `forces a rest between your attacks and re-measures until the rate lands. Erring`,
+    `towards "${above.dial}" is therefore the safer miss; being too easy is not fixable that way.`,
   ].join('\n');
 }
 
@@ -792,6 +1010,34 @@ export type BotRates = {
   mimic?: number;
 };
 
+/**
+ * The boss being replaced, run through the same simulation that is about to judge
+ * this file — the **first** attempt's only measured number.
+ *
+ * Everything quantitative the Coder gets today arrives on a retry: the bot-rate
+ * table, `correctionHint`, the candidate table, the bracket. On the `claude-cli`
+ * path there is no retry — the Analyst takes 14-16 s and one Coder call 14-22 s, so
+ * a 45 s interlude gets exactly one attempt — and the first attempt was therefore
+ * calibrated by adjectives alone. It undershot every time: 0.26, 0.20 and 0.00 vs
+ * panel against band middles of 0.42, 0.58 and 0.68
+ * (`artifacts/server/rewrite-2026-09-11T16-*.json`, 2026-09-11). The same prompt on
+ * gpt-5.4-mini overshot at 0.78-0.91, which is the tell — an uncalibrated first
+ * attempt lands wherever the model's prior is, and the band is 0.15 wide.
+ *
+ * The numbers are free: `rewrite()` already measures the incumbent against the
+ * Mimic for ADAPTED's relative route, and the panel half is the same simulation on
+ * the same seeds. Both are optional, because a source that will not load is not a
+ * baseline and must not cost the player their rewrite.
+ */
+export type CoderIncumbent = {
+  /** `meta.name` of the boss that just lost, when it could be read. */
+  name?: string;
+  /** Its per-bot rates against the scripted panel, measured on Gate 3's seeds. */
+  perBot?: readonly { name: string; winRate: number }[];
+  /** Its win rate against a Mimic of this player — ADAPTED's relative baseline. */
+  mimic?: number;
+};
+
 export type CoderRejection = {
   gate: GateName;
   gateNumber: number;
@@ -827,7 +1073,73 @@ export type CoderContext = {
    * between these two files, so both have to be in the context.
    */
   bracket?: CoderBracket;
+  /**
+   * The measured player profile (`playerProfile.ts`'s `renderPlayerProfile`),
+   * already rendered — hot cells, dominant dash angle, shots-during, round length
+   * — as fenced JSON. Analysis item 7: the same numbers as the Analyst's prose,
+   * offered as data so the Coder embeds them rather than retyping them. Identical
+   * across an attempt's K candidates (`rewrite()` computes it once), so it lives
+   * here in the message and not the cached system prompt, same reason `bracket`
+   * and `rejection` do.
+   */
+  profile?: string;
+  /**
+   * The boss being replaced, measured. Rendered only on the **first** attempt —
+   * once there is a rejection the harness's own numbers are better and later, and
+   * spec §6.3 wants the rejection sentence to be the last thing in the context.
+   */
+  incumbent?: CoderIncumbent;
 };
+
+/**
+ * The first attempt's calibration block.
+ *
+ * Two jobs, both of them arithmetic the model cannot do for itself. The first is a
+ * reference point: "the file you are editing measured 0.18 and you need 0.42" is a
+ * size of change, where "aim at the middle of the band" is a wish. The second is
+ * the floor — the 2026-09-11 runs produced a boss at 0.00 vs the panel and called
+ * it conservative, so the block says in one sentence what 0.00 actually is.
+ *
+ * `undefined` when nothing was measured: a block with no numbers in it is the
+ * adjectives again, and this exists to replace those.
+ */
+export function incumbentAnchor(incumbent: CoderIncumbent, round: BalanceRound): string | undefined {
+  const perBot = incumbent.perBot ?? [];
+  if (perBot.length === 0 && incumbent.mimic === undefined) return undefined;
+  const [lo, hi] = bandFor(round);
+  const mid = (lo + hi) / 2;
+  const panel = perBot.length === 0 ? undefined : perBot.reduce((sum, b) => sum + b.winRate, 0) / perBot.length;
+  const rates: BotRates = {
+    perBot,
+    ...(incumbent.mimic === undefined ? {} : { mimic: incumbent.mimic }),
+  };
+  const who = incumbent.name === undefined ? 'The boss you are replacing' : `"${incumbent.name}"`;
+  const table =
+    perBot.length === 0
+      ? `    Mimic   ${(incumbent.mimic as number).toFixed(2)}`
+      : renderBotRates(rates, round);
+  const gap =
+    panel === undefined
+      ? `You need ${formatBand(round)} against the panel. Aim at ${mid.toFixed(2)}.`
+      : `That is ${panel.toFixed(2)} vs the panel. You need ${formatBand(round)}, so aim at ` +
+        `${mid.toFixed(2)} — a change of ${mid - panel >= 0 ? '+' : ''}${(mid - panel).toFixed(2)}.`;
+  return [
+    '# THE BOSS YOU ARE REPLACING, MEASURED',
+    '',
+    `${who} was put through the same simulation that is about to judge you — the same`,
+    'bots, the same seeds. These are the only real numbers you have before your first',
+    'verdict, and they are the ones to move:',
+    '',
+    table,
+    '',
+    gap,
+    '',
+    '0.00 vs the panel means the boss never wins a single match — not one, against a bot',
+    'that stands still. A boss that never fires at a stationary bot is not conservative,',
+    'it is absent, and the harness rejects 0.00 exactly as hard as it rejects 1.00.',
+    '',
+  ].join('\n');
+}
 
 export function coderPrompt(ctx: CoderContext): Prompt {
   const system = [
@@ -846,8 +1158,10 @@ export function coderPrompt(ctx: CoderContext): Prompt {
     `# ROUND ${ctx.round}`,
     '',
     `You are writing the boss for round ${ctx.round}. Its fairness band is ${formatBand(ctx.round)} against the`,
-    `panel — that is the hard requirement. Beating the Mimic of this player ${ADAPTED_MIN.toFixed(2)} of the`,
-    'time is the goal to aim at, and it is reported rather than enforced.',
+    `panel — that is the hard requirement. Beating the Mimic of this player ${adaptedMinFor(ctx.round).toFixed(2)} of the`,
+    adaptedBlocks(ctx.round)
+      ? `time is the other one: from round 3 the harness rejects a boss that did not adapt.`
+      : 'time is the goal to aim at, and it is reported rather than enforced.',
     '',
   ];
 
@@ -927,6 +1241,29 @@ export function coderPrompt(ctx: CoderContext): Prompt {
   parts.push(nameRule(takenNames(ctx), ctx.dial?.nameSuffix), '');
 
   parts.push('# THE ANALYST ON THIS PLAYER', '', '```json', JSON.stringify(ctx.analysis, null, 2), '```', '');
+
+  if (ctx.profile !== undefined) {
+    // Right after the Analyst's reading and before the code, same as the Analyst
+    // block above: both are *evidence*, and the rejection sentence still has to
+    // stay the last thing in the context (spec §6.3).
+    parts.push(
+      '# PLAYER PROFILE (measured — embed the numbers you aim with as constants, do not retype them from prose)',
+      '',
+      '```json',
+      ctx.profile,
+      '```',
+      '',
+    );
+  }
+
+  // First attempt only, and immediately above the file it is about. On a retry the
+  // harness has said something better and more recent, and spec §6.3 keeps that
+  // sentence last — two sets of numbers about two different files would be the
+  // oscillation this loop already spent four attempts on.
+  if (ctx.rejection === undefined && ctx.incumbent !== undefined) {
+    const anchor = incumbentAnchor(ctx.incumbent, ctx.round);
+    if (anchor !== undefined) parts.push(anchor);
+  }
 
   if (ctx.bracket !== undefined) {
     // Both endpoints, not just the better one: an interpolation needs two points,
@@ -1012,7 +1349,7 @@ export function coderPrompt(ctx: CoderContext): Prompt {
       parts.push(
         `Your win rate against each opponent, in the ${all.length > 1 ? 'best' : 'rejected'} file's simulation:`,
         '',
-        renderBotRates(ctx.rejection.rates),
+        renderBotRates(ctx.rejection.rates, ctx.round),
         '',
       );
       // Suppressed when the candidates bracketed the band: "remove 45% of your

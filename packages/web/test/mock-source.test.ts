@@ -410,7 +410,7 @@ describe('mockSource', () => {
   it('quotes the right fairness band for a later round', async () => {
     const events = await run({ req: requestFixture({ round: 4 }) });
     const rejected = events.find((e): e is Extract<RewriteEvent, { type: 'verdict' }> => e.type === 'verdict' && !e.approved);
-    expect(rejected?.reason).toContain('0.50–0.65');
+    expect(rejected?.reason).toContain('0.60–0.75');
     expect(rejected?.reason).toContain('round 4');
   });
 });
