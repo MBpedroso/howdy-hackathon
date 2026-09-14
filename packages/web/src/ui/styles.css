@@ -1,3 +1,16 @@
+/*
+ * The pixel face, bundled. `@fontsource/press-start-2p` is OFL and ships the woff2
+ * next to its own `@font-face` block, so Vite resolves this bare specifier at build
+ * time and copies the files into `dist/` — nothing is fetched from a font CDN at
+ * runtime and offline dev keeps working (the brief's condition for a pixel font).
+ * The package's `unicode-range` split means the browser downloads the latin subset
+ * and leaves the cyrillic/greek ones on disk.
+ *
+ * This has to stay the first rule in the file: `@import` is only legal before every
+ * other rule.
+ */
+@import '@fontsource/press-start-2p';
+
 /* Chrome only: the fight itself is canvas. Colours mirror src/render/palette.ts. */
 :root {
   --void: #07080c;
@@ -9,6 +22,18 @@
   --text: #e8ecf5;
   --text-dim: #7d8799;
   --font: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  /*
+   * The *display* face, and only that: headings, the primary button, the HUD's
+   * numbers, the interlude's titles and the Judge's stamp. Body copy, code, the diff
+   * and every rejection sentence stay on `--font` — spec §2.2 makes their legibility
+   * contractual and a 5x7 bitmap face is not a reading face.
+   *
+   * `--font` behind it is a real fallback, not politeness: Press Start 2P's latin
+   * subset has no `→` (U+2192), `✓` or `✗`, all three of which appear in display
+   * strings ("NEXT →", "✓ APPROVED"), so those characters resolve per-glyph to the
+   * monospace stack instead of rendering as tofu.
+   */
+  --font-display: 'Press Start 2P', var(--font);
 }
 
 * { box-sizing: border-box; }
@@ -69,26 +94,56 @@ body {
   text-transform: uppercase;
 }
 
-.hud-round { color: var(--text); font-weight: 700; }
+/*
+ * Round, timer and pips are the cabinet's readout, so they are the one part of the
+ * HUD that moves to the display face. `font-weight: 400` and `letter-spacing: 0`
+ * throughout: a bitmap face has one weight (700 asks the browser to smear it) and it
+ * is already a full em per character, so the tracking the monospace HUD needed to
+ * look deliberate makes this one look broken. Sizes are ~60% of the monospace ones,
+ * which is where Press Start 2P's advance width lands on the same line length —
+ * `.hud-top` keeps its layout.
+ */
+.hud-round {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text);
+}
 .hud-round span { color: var(--text-dim); font-weight: 400; }
 
 .hud-timer {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--text);
+  /* Phosphor. `currentColor` so the last ten seconds glow amber with the digits. */
+  text-shadow: 0 0 6px currentColor;
 }
 .hud-timer.low { color: var(--slam); }
 
 .hud-pips { display: flex; gap: 5px; align-items: center; }
+/*
+ * Health as arcade blocks: square, and bevelled by a 1px inset highlight top-left
+ * against a 1px inset shadow bottom-right, which is how a 90s HUD faked a lit LED
+ * without a gradient. Same 13px box as before so the row cannot reflow.
+ */
 .hud-pip {
   width: 13px;
   height: 13px;
   border: 2px solid var(--player);
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--player);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.5), inset -1px -1px 0 rgba(0, 0, 0, 0.45);
 }
-.hud-pip.empty { background: transparent; opacity: 0.35; }
+/* Spent: the socket is still there, dark, with a dim outline — not a hole. */
+.hud-pip.empty {
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--player) 28%, transparent);
+  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.5);
+}
 
 /* Boss strategy panel: spec §12 — the player sees the boss's strategy by name. */
 .hud-strategy {
@@ -97,17 +152,20 @@ body {
   bottom: 12px;
   max-width: 46%;
   padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--boss);
+  border: 2px solid var(--border);
+  border-left: 4px solid var(--boss);
+  border-radius: 0;
   background: rgba(7, 8, 12, 0.72);
+  box-shadow: 4px 4px 0 #000;
 }
 .hud-strategy .label {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
+  font-family: var(--font-display);
   font-size: 9px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0;
   color: var(--text-dim);
   text-transform: uppercase;
 }
@@ -119,7 +177,7 @@ body {
  * bundled boss claims nothing and renders as an empty span.
  */
 .hud-strategy .origin {
-  letter-spacing: 0.18em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 .hud-strategy .origin:empty { display: none; }
@@ -160,23 +218,31 @@ body {
   padding: 13px 20px;
   text-align: center;
   background: rgba(7, 8, 12, 0.85);
-  border: 1px solid var(--boss);
-  border-top: 3px solid var(--boss);
-  box-shadow: 0 0 30px rgba(255, 77, 109, 0.28);
+  border: 2px solid var(--boss);
+  border-top: 4px solid var(--boss);
+  border-radius: 0;
+  /* The hard offset first, the bloom behind it: a cabinet bezel lit from inside. */
+  box-shadow: 4px 4px 0 #000, 0 0 30px rgba(255, 77, 109, 0.28);
   transform: translateX(-50%);
 }
 .round-banner-kicker {
-  font-size: 10px;
-  letter-spacing: 0.32em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  line-height: 1.4;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--slam);
+  text-shadow: 0 0 6px currentColor;
 }
 .round-banner-name {
-  margin-top: 4px;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-family: var(--font-display);
+  margin-top: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--boss);
+  text-shadow: 0 0 6px currentColor;
 }
 .round-banner-rationale {
   margin-top: 6px;
@@ -258,6 +324,18 @@ body {
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 .card { padding: 28px 30px; max-width: 78%; }
+/*
+ * Every card except the intro is a box on the arena, so it gets the cabinet
+ * treatment: square corners, a 2px edge and a solid offset shadow rather than a
+ * blur. `.card.start` is the whole viewport and is deliberately left alone — a
+ * border around the screen is a frame, not a card.
+ */
+.card:not(.start) {
+  border: 2px solid var(--border);
+  border-radius: 0;
+  background: rgba(13, 16, 23, 0.92);
+  box-shadow: 4px 4px 0 #000;
+}
 
 .card .kicker {
   font-size: 10px;
@@ -266,9 +344,11 @@ body {
   color: var(--text-dim);
 }
 .card h1 {
-  font-size: 30px;
-  margin: 10px 0 6px;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  font-size: 18px;
+  line-height: 1.35;
+  margin: 12px 0 10px;
+  letter-spacing: 0;
 }
 .card h1.lose { color: var(--boss); }
 .card h1.win { color: var(--player); }
@@ -291,12 +371,19 @@ body {
   text-transform: uppercase;
   color: var(--void);
   background: var(--player);
-  border: 0;
-  border-radius: 4px;
-  padding: 11px 22px;
+  /*
+   * A cabinet button: square, a hard black edge, and a solid offset shadow that the
+   * press takes away by moving the button onto it. 3px on the edge because this is
+   * the loudest control on any screen and it is always the primary action.
+   */
+  border: 3px solid #000;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #000;
+  padding: 9px 20px;
   cursor: pointer;
 }
 .btn:hover { filter: brightness(1.12); }
+.btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #000; }
 .btn.danger { background: var(--boss); color: var(--text); }
 .btn:focus-visible { outline: 2px solid var(--slam); outline-offset: 3px; }
 
@@ -545,8 +632,10 @@ body {
 
 .card.start .intro-title {
   margin: 0;
-  font-size: clamp(22px, 2.5vw, 32px);
-  letter-spacing: 0.22em;
+  font-family: var(--font-display);
+  font-size: clamp(13px, 1.5vw, 19px);
+  line-height: 1.4;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--text);
   text-align: center;
@@ -568,10 +657,11 @@ body {
  * the hero of a title screen, so the title gives room back and keeps the glow.
  */
 .card.start .hook-title {
-  margin: 6px 0 0;
-  font-size: clamp(30px, 4.6vw, 52px);
-  line-height: 1;
-  letter-spacing: 0.16em;
+  margin: 8px 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(18px, 2.8vw, 31px);
+  line-height: 1.25;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--text);
   text-shadow: 0 0 22px rgba(255, 77, 109, 0.35);
@@ -823,7 +913,10 @@ body {
   font-size: 9px;
   letter-spacing: 0.2em;
   padding: 2px 7px;
-  border: 1px solid var(--accent);
+  /* Chunkier, still hard-cornered and still monospace: the Judge's chip is the one
+     label on this screen that is claiming *not* to be a model, and a pixel-arcade
+     face would make it look like decoration. */
+  border: 2px solid var(--accent);
   color: var(--accent);
   font-weight: 700;
 }
@@ -849,9 +942,10 @@ body {
   display: grid;
   gap: 0;
   margin: 0;
-  font-size: clamp(21px, 2.7vw, 33px);
-  line-height: 1.14;
-  letter-spacing: 0.16em;
+  font-family: var(--font-display);
+  font-size: clamp(13px, 1.6vw, 20px);
+  line-height: 1.5;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--text);
   text-align: center;
@@ -998,6 +1092,46 @@ body {
 }
 
 /*
+ * The display face on the primary action, and the sizes that go with it.
+ *
+ * Keyed on `[data-testid='primary']` rather than on `.btn` so this only ever styles
+ * the one button a screen nominates, and placed *after* the two `.card.start .btn`
+ * rules above because it ties with the first of them on specificity (0,2,0) and
+ * loses to the second — the arena override is matched with its own (0,4,0) twin
+ * instead of by raising the base rule.
+ *
+ * ~65% of the monospace sizes: 15px -> 10px, 17px -> 11px. The tracking goes to
+ * zero, so "ENTER THE ARENA" still fits inside the 300px floor with room to spare
+ * and the button never resizes between beats.
+ */
+.btn[data-testid='primary'] {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.card.start .btn[data-testid='primary'] { font-size: 10px; padding: 11px 34px; }
+.card.start[data-intro='arena'] .btn[data-testid='primary'] { font-size: 11px; padding: 13px 40px; }
+
+/*
+ * INSERT COIN. A 1.2s two-frame blink on the button's *shadow*, never on its text —
+ * the e2e suite reads that text, and a blinking label is a flicker hazard besides.
+ * `steps(1, end)` keeps it hard-edged: this is a cabinet's attract mode, not a
+ * fade. Only on the intro's primary; the win/lose screens are not attracting anyone.
+ */
+@keyframes insert-coin {
+  0%, 49.99% { box-shadow: 4px 4px 0 #000, 0 0 0 3px color-mix(in srgb, var(--slam) 60%, transparent); }
+  50%, 100% { box-shadow: 4px 4px 0 #000, 0 0 0 3px transparent; }
+}
+.card.start .btn[data-testid='primary'] {
+  animation: insert-coin 1.2s steps(1, end) infinite;
+}
+.card.start .btn[data-testid='primary']:hover,
+.card.start .btn[data-testid='primary']:focus-visible { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .card.start .btn[data-testid='primary'] { animation: none; }
+}
+
+/*
  * Narrower than the projector: reorganise rather than shrink. Each grid drops to a
  * count that keeps its cell readable — three concept steps at 90 px wide is not a
  * smaller version of the beat, it is an unreadable one — and the intro is allowed
@@ -1008,7 +1142,7 @@ body {
  */
 @media (max-width: 1120px), (max-height: 760px) {
   .card.start { gap: 10px; }
-  .card.start .hook-title { font-size: clamp(26px, 5.4vw, 40px); }
+  .card.start .hook-title { font-size: clamp(16px, 3.2vw, 24px); }
   .hook-art { margin-top: -10px; }
   .hook-art-img { max-height: 42vh; }
   .agent-card .rm-portrait { margin-bottom: 8px; }
@@ -1032,4 +1166,75 @@ body {
   .intro-meta { flex-direction: column; gap: 6px; }
   .card.start .btn,
   .card.start[data-intro='arena'] .btn { padding: 11px 26px; font-size: 13px; min-width: 0; }
+  /* The display-face twins, which outrank the pair above by construction. */
+  .card.start .btn[data-testid='primary'],
+  .card.start[data-intro='arena'] .btn[data-testid='primary'] { padding: 10px 18px; font-size: 9px; min-width: 0; }
+}
+
+/*
+ * The mute toggle (`ui/audioToggle.ts`) — mounted once into `document.body`, outside
+ * `#hud`/`#screen`, so it survives every teardown between rounds. `z-index: 50` sits
+ * above the interlude overlay (40, `interlude.css`) and the start screen (30), which
+ * is the whole point: sound has to be reachable from every screen in the game,
+ * including the one playing a stinger.
+ */
+.audio-toggle {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 50;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(7, 8, 12, 0.6);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.audio-toggle svg { width: 18px; height: 18px; }
+.audio-toggle:hover { color: var(--text); border-color: var(--text-dim); }
+.audio-toggle[data-muted='true'] { color: var(--boss); border-color: var(--boss); }
+
+/* ------------------------------------------------------------------- the CRT
+ *
+ * Two fixed layers over everything — scanlines and a corner vignette — drawn as
+ * `body::before` / `body::after`. Pure CSS, no canvas pass, no image: it costs one
+ * composited layer and nothing per frame, which is the only version of this effect
+ * worth having in a game that has to hold 60 Hz.
+ *
+ * `body` is a flex container, but `position: fixed` takes both pseudo-elements out
+ * of flow, so neither becomes a flex item and the stage stays centred.
+ *
+ * `z-index: 9999` is above every other layer this app stacks — the start screen
+ * (30), the interlude (40), the mute toggle (50) — because a scanline that stops at
+ * the edge of the overlay is worse than no scanline at all. `pointer-events: none`
+ * because it must never eat a click.
+ *
+ * Deliberately faint. The interlude's rejection sentences are contractual reading
+ * material (spec §2.2) and this sits on top of them: 18% black on one row in three
+ * is ~6% average darkening, and the vignette tops out at 35% in the corners where
+ * nothing is ever printed. Anyone who still wants it gone loads `?crt=0`
+ * (`src/ui/crt.ts`), which flips `data-crt` to `off` and unmatches both rules.
+ *
+ * Nothing here animates, at any motion preference. A flickering CRT is a
+ * photosensitivity hazard and, at 60 Hz, a lie about what the screen is doing —
+ * the same reason the interlude only animates while real work is happening.
+ */
+html[data-crt='on'] body::before,
+html[data-crt='on'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+}
+html[data-crt='on'] body::before {
+  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.12) 0 1px, transparent 1px 3px);
+}
+html[data-crt='on'] body::after {
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, 0.35) 100%);
 }

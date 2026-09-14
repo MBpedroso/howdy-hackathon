@@ -122,7 +122,7 @@ describe('runCoder', () => {
     await runCoder({ analysis: ANALYSIS, prevSource, round: 3 }, provider);
     const prompt = provider.promptOf(0);
     expect(prompt).toContain('# ROUND 3');
-    expect(prompt).toContain('0.45–0.60');
+    expect(prompt).toContain('0.50–0.65');
     expect(prompt).toContain('THE STRATEGY THAT JUST LOST');
     expect(prompt).toContain(prevSource.trim().slice(0, 80));
     expect(prompt).toContain('"playerArchetype": "camper"');

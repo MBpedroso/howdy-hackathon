@@ -49,6 +49,7 @@ export { ALL_GATES, DEFAULT_GATES, gatesFor, runGates, type RunGatesOptions, typ
 
 export {
   ACTIVITY,
+  ADAPTED_BLOCKS,
   ADAPTED_MARGIN,
   ADAPTED_MIN,
   BALANCE_ROUNDS,
@@ -56,6 +57,8 @@ export {
   DEFAULT_MATCHES,
   DEFAULT_ROUND,
   SEED_OFFSET,
+  adaptedBlocks,
+  adaptedMinFor,
   bandFor,
   formatBand,
   seedsFor,
@@ -69,6 +72,7 @@ export {
   BASE_AIM_ERROR,
   BOT_KINDS,
   PANEL,
+  accuracyFromSummary,
   camper,
   dodger,
   kiter,

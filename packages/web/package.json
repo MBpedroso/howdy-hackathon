@@ -21,11 +21,13 @@
     "record:run": "node --experimental-strip-types scripts/record-run.ts"
   },
   "dependencies": {
+    "@fontsource/press-start-2p": "^5.3.0",
     "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",
     "@rematch/contract": "workspace:*",
     "@rematch/engine": "workspace:*",
     "@rematch/sandbox": "workspace:*",
-    "quickjs-emscripten-core": "^0.32.0"
+    "quickjs-emscripten-core": "^0.32.0",
+    "tone": "^15.1.22"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

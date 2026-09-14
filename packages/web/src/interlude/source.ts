@@ -84,6 +84,13 @@ export type RewriteRequest = {
   prevMeta: StrategyMeta;
   /** The round seed. Keeps a seeded fallback pick reproducible (spec AC 3). */
   seed: number;
+  /**
+   * How long the caller will actually wait, ms. The server clamps its own loop to
+   * `min(configured, budgetMs - 2 s)` (`clampToClientBudget`), so this is the number
+   * that decides how many Coder attempts the run gets. Built in `interlude/index.ts`
+   * from the adopted deadline — see `adoptDeadlineMs` — and always equal to it.
+   */
+  budgetMs?: number;
 };
 
 export type InterludeSource = (
@@ -225,23 +232,64 @@ export const LIVE_FALLBACK_BADGE = 'LIVE · fallback-only';
  * mock's scripted one. `useServer: false` covers every other outcome — no
  * response, a timeout, a non-2xx, or a body that isn't `{ ok: true, ... }` — and
  * `reason` is the one line worth telling a developer about it.
+ *
+ * `deadlineMs` is the loop deadline the server *advertises* on `/api/health`
+ * (`REMATCH_DEADLINE_MS`), carried here so the client can widen its own budget to
+ * match instead of clamping a 90 s server down to 45 s — see `adoptDeadlineMs` in
+ * `interlude/index.ts`. Absent when the server did not advertise a usable number,
+ * which is every server older than this field and every non-probed row.
  */
 export type LocalProbeOutcome =
-  | { useServer: true; fallbackOnly: boolean }
+  | { useServer: true; fallbackOnly: boolean; deadlineMs?: number }
   | { useServer: false; reason: string };
+
+/**
+ * The values `VITE_DEFAULT_AGENT` accepts. Anything else — including it being unset —
+ * means "no build-time default", i.e. exactly the behaviour that existed before it.
+ */
+export type DefaultAgent = 'recorded' | 'mock' | 'sse';
+
+/**
+ * What the build baked in as the default source, when the URL does not say.
+ *
+ * The deployed product is a *static* site: there is no `/api/rewrite` behind it, so
+ * the host-based rule below ("not local ⇒ SSE") would spend the first interlude
+ * discovering a 404 and then quietly play the mock behind it. `recorded` says the
+ * honest thing instead — real model output, badged `RECORDED RUN · <model> · <date>` —
+ * and says it at build time, where the deploy shape is actually known.
+ *
+ * `sse` is not the same as leaving it unset: it means "decide the way you always
+ * did" (base, host, boot probe), it does not force the server. Only `?agent=sse`
+ * does that.
+ */
+function buildDefaultAgent(options: Pick<ResolveOptions, 'defaultAgent'>): DefaultAgent | null {
+  // `import.meta.env` is typed as an index signature, hence the cast.
+  const raw = options.defaultAgent ?? (import.meta.env.VITE_DEFAULT_AGENT as string | undefined);
+  return raw === 'recorded' || raw === 'mock' || raw === 'sse' ? raw : null;
+}
+
+/** The four `?agent=` values that force a source; anything else is treated as absent. */
+function forcedAgent(search: string): 'mock' | 'recorded' | 'sse' | 'server' | null {
+  const agent = new URLSearchParams(search).get('agent');
+  return agent === 'mock' || agent === 'recorded' || agent === 'sse' || agent === 'server' ? agent : null;
+}
 
 /**
  * Whether `resolveSource`, given these same options, would land on the "local host,
  * no explicit `?agent=`, no configured API base" row — the one row the boot probe
  * exists to fix (every other row already has an unambiguous answer: a forced
- * `?agent=`, a configured base, or a non-local host all mean SSE with no probing
- * needed). Kept as one function so the probe and `resolveSource` can never disagree
- * about which row applies.
+ * `?agent=`, a build default of `recorded`/`mock`, a configured base, or a non-local
+ * host all decide the source with no probing needed). Kept as one function so the
+ * probe and `resolveSource` can never disagree about which row applies.
+ *
+ * A build default of `sse` is *not* one of those answers: it means "decide as before",
+ * which includes consulting the probe — so it leaves this row in place.
  */
-function localDefaultApplies(options: Pick<ResolveOptions, 'search' | 'hostname' | 'apiBase'>): boolean {
+function localDefaultApplies(options: Pick<ResolveOptions, 'search' | 'hostname' | 'apiBase' | 'defaultAgent'>): boolean {
   const search = options.search ?? (typeof location === 'undefined' ? '' : location.search);
-  const agent = new URLSearchParams(search).get('agent');
-  if (agent === 'mock' || agent === 'recorded' || agent === 'sse' || agent === 'server') return false;
+  if (forcedAgent(search) !== null) return false;
+  const def = buildDefaultAgent(options);
+  if (def === 'mock' || def === 'recorded') return false;
   const hostname = options.hostname ?? (typeof location === 'undefined' ? 'localhost' : location.hostname);
   const envBase = options.apiBase ?? (import.meta.env.VITE_API_BASE as string | undefined);
   return envBase === undefined && LOCAL_HOSTS.has(hostname);
@@ -264,13 +312,21 @@ export async function probeHealth(
     const res = await fetchImpl(`${base}/api/health`, { signal: controller.signal });
     if (!res.ok) return { useServer: false, reason: `/api/health answered ${res.status}` };
     const body = (await res.json().catch(() => null)) as
-      | { ok?: unknown; hasApiKey?: unknown; provider?: unknown }
+      | { ok?: unknown; hasApiKey?: unknown; provider?: unknown; deadlineMs?: unknown }
       | null;
     if (body === null || body.ok !== true) {
       return { useServer: false, reason: '/api/health did not report ok: true' };
     }
     const fallbackOnly = body.hasApiKey !== true || body.provider === 'none';
-    return { useServer: true, fallbackOnly };
+    // Anything that is not a positive finite number is treated as "not advertised":
+    // the client's own default is the safe answer, and a server that answers
+    // `deadlineMs: null` must not turn into a `NaN` budget on the wire.
+    const advertised = body.deadlineMs;
+    const deadlineMs =
+      typeof advertised === 'number' && Number.isFinite(advertised) && advertised > 0
+        ? Math.trunc(advertised)
+        : undefined;
+    return { useServer: true, fallbackOnly, ...(deadlineMs === undefined ? {} : { deadlineMs }) };
   } catch (err) {
     const why = controller.signal.aborted ? `no response within ${timeoutMs}ms` : (err as Error).message;
     return { useServer: false, reason: `could not reach /api/health: ${why}` };
@@ -316,6 +372,12 @@ export type ResolveOptions = {
   hostname?: string;
   /** Defaults to `import.meta.env.VITE_API_BASE`. */
   apiBase?: string | undefined;
+  /**
+   * The build-time default source, used only when the URL carries no `?agent=`.
+   * Defaults to `import.meta.env.VITE_DEFAULT_AGENT`; `'recorded' | 'mock' | 'sse'`
+   * are read, anything else is ignored. See `buildDefaultAgent`.
+   */
+  defaultAgent?: string | undefined;
   /** Extra mock options; `speed` is overridden by `?speed=`. */
   mock?: MockOptions;
   /** Extra recorded options; `speed` is overridden by `?speed=`, `run` by `?run=`. */
@@ -348,10 +410,22 @@ export type ResolvedSource = {
  * | `?agent=mock` | mock, always |
  * | `?agent=recorded` | a recorded real run, `?run=<name>` or `index.json`'s first |
  * | `?agent=sse` / `?agent=server` | SSE, no mock safety net |
+ * | no `?agent=`, `VITE_DEFAULT_AGENT=recorded` | that same recorded run — `?run=` still picks which |
+ * | no `?agent=`, `VITE_DEFAULT_AGENT=mock` | mock |
+ * | no `?agent=`, `VITE_DEFAULT_AGENT` unset / `sse` / anything else | the rows below decide |
  * | `VITE_API_BASE` is set | SSE at that base |
  * | hostname is not local | SSE at the same origin (the Vercel deploy) |
  * | local, no `?agent=`, no `VITE_API_BASE`, boot probe found `/api/health` ok | SSE at `''`, badge `LIVE` (or `LIVE · fallback-only` — see below) |
  * | local, no `?agent=`, no `VITE_API_BASE`, probe failed/timed out/never ran | mock |
+ *
+ * The URL always wins: `?agent=` is the demo's switch and a build default never
+ * overrides it. Below it sits `VITE_DEFAULT_AGENT`, which exists because the deployed
+ * product is a static site with no `/api/rewrite` behind it — the "not local ⇒ SSE"
+ * row would otherwise spend the first interlude on a 404 and land on the mock, which
+ * is real-looking output that no model produced. Building with `recorded` puts the
+ * honest answer on the published site instead. A default of `sse` (or an unrecognised
+ * value, or none) changes nothing: the host/base/probe rows below decide, exactly as
+ * they did before this option existed.
  *
  * The last two rows are `localDefaultApplies`'s row — the one `pnpm dev` sits on,
  * since `pnpm dev` starts both Vite and the API server on 8787. Before this existed,
@@ -384,10 +458,13 @@ export function resolveSource(options: ResolveOptions = {}, onSwitch?: (kind: So
   const speedParam = Number(params.get('speed'));
   const speed = Number.isFinite(speedParam) && speedParam > 0 ? speedParam : (options.mock?.speed ?? 1);
   const mock = mockSource({ ...options.mock, speed });
+  // The build default is consulted only when the URL forced nothing — so `?agent=sse`
+  // still beats `VITE_DEFAULT_AGENT=recorded`, same as every other `?agent=`.
+  const fallbackAgent = forcedAgent(search) === null ? buildDefaultAgent(options) : null;
 
-  if (agent === 'mock') return { source: mock, kind: 'mock', speed };
+  if (agent === 'mock' || fallbackAgent === 'mock') return { source: mock, kind: 'mock', speed };
 
-  if (agent === 'recorded') {
+  if (agent === 'recorded' || fallbackAgent === 'recorded') {
     // `?run=` names a file in `public/recorded/`; absent, the source reads
     // `index.json` and takes the first entry, so the demo URL stays short.
     const run = params.get('run');

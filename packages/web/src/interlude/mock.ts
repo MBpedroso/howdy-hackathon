@@ -243,9 +243,26 @@ export function rejectionReason(round: number): string {
   });
 }
 
-/** `0.35–0.50` and the rest, per round. Spec §6.2's table. */
+/**
+ * `0.35–0.50` and the rest, per round. Spec §6.2's table, as amended by §13 delta 24.
+ *
+ * A copy rather than an import: `packages/web` does not depend on `@rematch/harness`
+ * (the harness is a Node worker pool). `packages/harness/src/gates/balanceConfig.ts`
+ * is the source of truth, and this mock lies to the player if it drifts from it.
+ */
 export function bandOf(round: number): string {
-  return round === 2 ? '0.35–0.50' : round === 3 ? '0.45–0.60' : round === 4 ? '0.50–0.65' : '0.55–0.70';
+  return round === 2 ? '0.35–0.50' : round === 3 ? '0.50–0.65' : round === 4 ? '0.60–0.75' : '0.65–0.95';
+}
+
+/**
+ * ADAPTED's target, and whether missing it rejects (spec §13, deltas 23 and 24).
+ * Round 2 reports 0.70 and ships anyway; rounds 3–5 reject at 0.75 / 0.85 / 0.95.
+ */
+function adaptedOf(round: number): { min: number; blocks: boolean } {
+  if (round === 2) return { min: 0.7, blocks: false };
+  if (round === 3) return { min: 0.75, blocks: true };
+  if (round === 4) return { min: 0.85, blocks: true };
+  return { min: 0.95, blocks: true };
 }
 
 const BOT_NAMES = ['Camper', 'Kiter', 'Rusher', 'Dodger'] as const;
@@ -271,7 +288,14 @@ export function balanceReason(
   } else if (rates.panel < lo) {
     problems.push(`${rates.panel.toFixed(2)} vs panel — too easy (band ${bandOf(round)} for round ${round}; ${perBot})`);
   }
-  if (rates.mimic < 0.7) problems.push(`${rates.mimic.toFixed(2)} vs Mimic — didn't adapt (need ≥ 0.70)`);
+  const adapted = adaptedOf(round);
+  if (rates.mimic < adapted.min) {
+    problems.push(
+      adapted.blocks
+        ? `${rates.mimic.toFixed(2)} vs Mimic — didn't adapt (need >= ${adapted.min.toFixed(2)} for round ${round})`
+        : `${rates.mimic.toFixed(2)} vs Mimic — aim for >= ${adapted.min.toFixed(2)} (not blocking)`,
+    );
+  }
   return problems.join('; ');
 }
 

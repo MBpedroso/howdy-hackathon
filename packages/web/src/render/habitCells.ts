@@ -25,6 +25,28 @@ export const GRID_CELLS = 8;
 /** How many of the previous round's hottest cells the highlight considers. */
 export const HABIT_CELL_COUNT = 3;
 
+/**
+ * Minimum share a cell needs to count as a *habit* rather than transit ground —
+ * `habitCellsFromSummary`'s concentration floor, not `rankHotCells`' (see its own
+ * doc: that function stays a faithful mirror of the Analyst's ranking, which has
+ * no such floor because it is prose about where the player *was*, not a claim
+ * about a pattern).
+ *
+ * Measured, not guessed. A 2026-09-10 playtest found "YOUR HABIT" pointing at the
+ * base of the map while Matt was camping the top — the previous round's heat map
+ * was flat (top cell **0.081** share, and three of the top four were row-6 transit
+ * ground), but `rankHotCells` takes the top `count` cells regardless of how hot
+ * they actually are, so a 7-8% transit cell got labelled a habit
+ * (`artifacts/server/rewrite-2026-09-10T16-41-46-470Z.json`). A real camp measures
+ * far hotter — **~0.33** in one cell, same artifact set — against a uniform-noise
+ * floor of 1/64 ≈ **0.016** for an 8x8 grid with no pattern at all. `0.10` sits well
+ * above the flat case and well below a real camp: roughly 6 s of a 60 s round
+ * spent in one cell, which reads as "lived there" rather than "passed through".
+ * Below it, `habitCellsFromSummary` returns `[]` and the feature stays silent —
+ * honest, since there is nothing to remember.
+ */
+export const MIN_HABIT_SHARE = 0.1;
+
 export type HotCell = {
   cell: number;
   /** This cell's share of the round (already normalized upstream, 0..1). */
@@ -91,7 +113,14 @@ export function habitCellAt(
 /**
  * The player's top habit cells from the previous round's replay summary, or `[]`
  * when there is no previous round to read from — round 1, or a retry (`app.ts`'s
- * `startRound` passes `null` on purpose in both cases; see its comment).
+ * `startRound` passes `null` on purpose in both cases; see its comment) — **or**
+ * when the previous round has no real habit to report: `rankHotCells` ranks the
+ * top `count` cells regardless of how hot they are, so a flat heat map (a player
+ * who moved constantly) still hands back three cells at a few percent each. Those
+ * are filtered out here by `MIN_HABIT_SHARE` (see its doc for the measured
+ * reasoning) — this function's whole job is turning "where the player happened to
+ * be" into "what the player actually did", and only the second one is honest to
+ * call a habit.
  */
 export function habitCellsFromSummary(
   summary: ReplaySummary | null,
@@ -100,5 +129,7 @@ export function habitCellsFromSummary(
   count = HABIT_CELL_COUNT,
 ): HotCell[] {
   if (summary === null) return [];
-  return rankHotCells(summary.history.playerPosHeat, arenaW, arenaH, count);
+  return rankHotCells(summary.history.playerPosHeat, arenaW, arenaH, count).filter(
+    (cell) => cell.share >= MIN_HABIT_SHARE,
+  );
 }

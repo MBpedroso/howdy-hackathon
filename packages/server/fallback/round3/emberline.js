@@ -40,13 +40,23 @@
 // 1200-1400): every combination lands 0.50-0.55 with 12.8-13.5 attacks/1000t, so this
 // is not a knife edge.
 //
+// ## Retuned 2026-09-11, for round 3's new band (spec §13, delta 24)
+//
+// Round 3's FAIR band moved from 0.45-0.60 to 0.50-0.65, and at 0.55 this boss was
+// one grid point inside the old middle and too near the new floor. The change is one
+// number — `SPAWN_EVERY` 1300 -> 1250 — because this file's own note above already
+// measured which dial moves the rate: the pets, not the bursts. Nothing about how it
+// plays changed, and the engagement rate it was rebalanced for on 09-08 is untouched.
+//
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round3/emberline.js
 // --round 3 --matches 200`:
 //
-//     panel 0.55   band 0.45-0.60, margin +0.050
+//     panel 0.57   (Camper 1.00, Kiter 0.48, Rusher 0.08, Dodger 0.72)   band 0.50-0.65
+//     0.567 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.06 inside both edges
 //     12.8 attack primitives per 1000 ticks (was 5.0)
 //     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
-//     narrowest bounding box 388 px of the 56 px ACTIVE requires
+//     narrowest bounding box 387 px of the 56 px ACTIVE requires
 //
 // The orbit used to walk this boss into the top-left corner and leave it there — 169
 // consecutive motionless ticks against a camper, without ever returning `idle`, because
@@ -65,7 +75,7 @@ export const meta = {
 };
 
 const REFRESH = 55;
-const SPAWN_EVERY = 1300;    // spawn cooldown is 300; retry slower than that, not faster
+const SPAWN_EVERY = 1250;    // spawn cooldown is 300; retry slower than that, not faster
 // How far ahead the orbit checks for a wall, and how close to the edge it may aim.
 // The boss clamps at its own radius (28 px), so a leg aimed inside this strip would
 // displace it by nothing — see note 4.

@@ -94,13 +94,16 @@ describe('provenanceLabel', () => {
 });
 
 /**
- * The caveat that ships with the recordings.
+ * The caveat that ships with some of the recordings.
  *
- * All three committed runs were recorded before Gate 3 grew its ACTIVE assertion, so
+ * The three 2026-09-03 runs were recorded before Gate 3 grew its ACTIVE assertion, so
  * the strategies they approved use `idle` as a resting state and the boss visibly
  * freezes. Re-recording would mean inventing model output, which is the one thing
  * this mode exists not to do — so the runs stay and the disclosure ships with them.
- * These assertions are what stop the disclosure from being silently dropped.
+ * The 2026-09-11 `claude-cli` runs are from after the assertion and rest under a
+ * throttle instead of idling, so they disclose nothing. These assertions stop the
+ * disclosure from being silently dropped — and stop it from spreading to a run that
+ * does not have the fault.
  */
 describe('knownIssueLabel', () => {
   it('prefixes the disclosure so it cannot be mistaken for provenance', () => {
@@ -114,16 +117,24 @@ describe('knownIssueLabel', () => {
     expect(knownIssueLabel({ knownIssue: '   ' })).toBeUndefined();
   });
 
-  it('every committed recording discloses its idle runs', async () => {
+  it('the 2026-09-03 recordings disclose their idle runs, and the index scopes the caveat', async () => {
     const { readFile } = await import('node:fs/promises');
     const dir = new URL('../public/recorded/', import.meta.url);
     const index = JSON.parse(await readFile(new URL('index.json', dir), 'utf8')) as {
       note: string;
-      runs: Array<{ name: string; knownIssue?: string }>;
+      runs: Array<{ name: string; recordedAt: string; knownIssue?: string }>;
     };
     expect(index.runs.length).toBeGreaterThan(0);
     expect(index.note).toContain('ACTIVE');
-    for (const entry of index.runs) {
+
+    const caveated = index.runs.filter((entry) => entry.knownIssue !== undefined);
+    expect(caveated.length).toBeGreaterThan(0);
+    for (const entry of caveated) {
+      // Every run that predates the ACTIVE assertion still discloses it, and the note
+      // names exactly those runs — a blanket caveat over a recording that does not
+      // have the fault would be its own small lie.
+      expect(entry.recordedAt.slice(0, 10), entry.name).toBe('2026-09-03');
+      expect(index.note, entry.name).toContain(entry.name);
       // The index carries it so a picker can show it without fetching the run…
       expect(entry.knownIssue, entry.name).toMatch(/boss idles up to \d+ ticks/);
       // …and the run file carries it because that is what the footer reads.
@@ -132,6 +143,15 @@ describe('knownIssueLabel', () => {
       };
       expect(file.knownIssue, entry.name).toBe(entry.knownIssue);
       expect(knownIssueLabel(file), entry.name).toContain('ACTIVE assertion');
+    }
+
+    // And a recording made *after* the assertion claims nothing — the footer stays
+    // empty rather than repeating a caveat that no longer applies.
+    for (const entry of index.runs.filter((run) => run.knownIssue === undefined)) {
+      const file = JSON.parse(await readFile(new URL(`${entry.name}.json`, dir), 'utf8')) as {
+        knownIssue?: string;
+      };
+      expect(knownIssueLabel(file), entry.name).toBeUndefined();
     }
   });
 });

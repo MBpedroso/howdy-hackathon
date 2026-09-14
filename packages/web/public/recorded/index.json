@@ -1,7 +1,36 @@
 {
-  "note": "Recorded real eval runs, replayed by ?agent=recorded&run=<name>. Real model output and real harness verdicts; per-event timing is reconstructed (see each file's timing.method). The first entry is the default. KNOWN ISSUE: all three runs predate Gate 3's ACTIVE assertion, so the strategies they approved use `idle` as a resting state and the boss freezes for seconds at a time. Each run carries its own measured worst run in `knownIssue`, the interlude footer shows it on screen, and these files are kept as-is rather than re-recorded from a model that never ran. Re-record with `pnpm --filter @rematch/web record:run` against an authorized eval.",
-  "source": "eval-2026-09-03T23-53-46-645Z.json",
+  "note": "Recorded real runs, replayed by ?agent=recorded&run=<name>. Real model output and real harness verdicts; per-event timing is reconstructed (see each file's timing.method). The first entry is the default: silo-r2-calibrated, a 2026-09-11 claude-cli (sonnet) run approved through the Judge's deterministic throttle calibration. KNOWN ISSUE — mimic-camper, dodger-a, kiter-a only: those recordings predate Gate 3's ACTIVE assertion, so the strategies they approved use `idle` as a resting state and the boss freezes for seconds at a time. Each carries its own measured worst run in `knownIssue`, the interlude footer shows it on screen, and these files are kept as-is rather than re-recorded from a model that never ran. Re-record with `pnpm --filter @rematch/web record:run`.",
   "runs": [
+    {
+      "name": "silo-r2-calibrated",
+      "provider": "claude-cli",
+      "model": "sonnet",
+      "recordedAt": "2026-09-11T18:45:45.327Z",
+      "round": 2,
+      "archetype": "camper",
+      "approved": true,
+      "attempts": 1,
+      "strategy": "Silo I",
+      "rejections": 2,
+      "totalMs": 44461,
+      "label": "silo-r2-calibrated — 2 candidate(s) rejected by the harness, then \"Silo I\" approved on attempt 1 at the Judge's throttle 0.50 after 1 calibration step (44.5s)",
+      "source": "local-live-2026-09-11-r2-throttle.json"
+    },
+    {
+      "name": "cistern-r3-calibrated",
+      "provider": "claude-cli",
+      "model": "sonnet",
+      "recordedAt": "2026-09-11T18:47:05.340Z",
+      "round": 3,
+      "archetype": "camper",
+      "approved": true,
+      "attempts": 1,
+      "strategy": "Cistern I",
+      "rejections": 3,
+      "totalMs": 56702,
+      "label": "cistern-r3-calibrated — 3 candidate(s) rejected by the harness, then \"Cistern I\" approved on attempt 1 at the Judge's throttle 0.77 after 4 calibration steps (56.7s)",
+      "source": "local-live-2026-09-11-r3-throttle.json"
+    },
     {
       "name": "mimic-camper",
       "model": "gpt-5.4-mini",
@@ -14,7 +43,8 @@
       "rejections": 5,
       "totalMs": 23542,
       "label": "mimic-camper — 5 candidate(s) rejected by the harness, then \"Warden I\" approved on attempt 2 (23.5s)",
-      "knownIssue": "boss idles up to 155 ticks (2.6 s); generated before the ACTIVE assertion existed"
+      "knownIssue": "boss idles up to 155 ticks (2.6 s); generated before the ACTIVE assertion existed",
+      "source": "eval-2026-09-03T23-53-46-645Z.json"
     },
     {
       "name": "dodger-a",
@@ -28,7 +58,8 @@
       "rejections": 8,
       "totalMs": 35778,
       "label": "dodger-a — 8 candidate(s) rejected by the harness, then \"Lantern III\" approved on attempt 3 (35.8s)",
-      "knownIssue": "boss idles up to 764 ticks (12.7 s); generated before the ACTIVE assertion existed"
+      "knownIssue": "boss idles up to 764 ticks (12.7 s); generated before the ACTIVE assertion existed",
+      "source": "eval-2026-09-03T23-53-46-645Z.json"
     },
     {
       "name": "kiter-a",
@@ -42,7 +73,8 @@
       "rejections": 6,
       "totalMs": 39751,
       "label": "kiter-a — 6 candidate(s) rejected by the harness, then \"Warden I\" approved on attempt 3 (39.8s)",
-      "knownIssue": "boss idles up to 183 ticks (3.1 s); generated before the ACTIVE assertion existed"
+      "knownIssue": "boss idles up to 183 ticks (3.1 s); generated before the ACTIVE assertion existed",
+      "source": "eval-2026-09-03T23-53-46-645Z.json"
     }
   ]
 }

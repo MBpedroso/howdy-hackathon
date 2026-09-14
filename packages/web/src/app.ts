@@ -25,6 +25,9 @@
 import { CONSTANTS } from '@rematch/contract';
 import { ENGINE_CONSTANTS, type GameState, type InputLog, type ReplaySummary } from '@rematch/engine';
 
+import { armGestureFallback, trigger as triggerSfx } from './audio/engine.ts';
+import { sfxForRoundOutcome } from './audio/sfx.ts';
+import { createAudioTracker, type AudioTracker } from './audio/tracker.ts';
 import { createInputSource, type AimContext, type InputSource } from './game/input.ts';
 import { createLoop, logInputProvider, type Loop } from './game/loop.ts';
 import { createRound, type Round } from './game/round.ts';
@@ -156,6 +159,13 @@ export function createApp(options: AppOptions): App {
 
   const renderer: Renderer = createRenderer(options.canvas);
   /**
+   * Sim events → SFX, the same way `renderer` turns them into visuals — see
+   * `audio/tracker.ts`'s header. `triggerSfx` is a no-op until a real gesture has
+   * initialized the audio chain (`audio/engine.ts`), so this costs nothing before
+   * that and nothing in Node/headless either way.
+   */
+  const audioTracker: AudioTracker = createAudioTracker(triggerSfx);
+  /**
    * The costumes, handed straight to the renderer. They go nowhere else:
    * `startRound` and the engine never learn them, which is what keeps the replay
    * hash and every recorded run valid across this feature (`ui/fighters.ts`).
@@ -243,6 +253,7 @@ export function createApp(options: AppOptions): App {
 
   function render(current: Round): void {
     renderer.draw(current.state);
+    audioTracker.sync(current.state);
 
     // The "YOUR HABIT" caption stays one drawn frame behind the highlight it
     // labels by construction — both read off the same `draw()` call.
@@ -305,6 +316,12 @@ export function createApp(options: AppOptions): App {
     teardown();
     input.clear();
     renderer.reset();
+    audioTracker.reset();
+    // No music call here, and that absence is the 2026-09-11 decision rather than
+    // an omission: `stopIntroMusic()` used to run on this line, and it is what made
+    // every fight silent. The bed plays for the whole session now and only ducks
+    // under the interlude (`audio/musicState.ts`), so "the fight is beginning" is
+    // not an audio event at all.
     hud.reset();
     banner.reset();
     habitCaption.hide();
@@ -362,6 +379,11 @@ export function createApp(options: AppOptions): App {
   async function handleOutcome(finished: Round): Promise<void> {
     const summary = finished.summary();
     const hash = finished.hash();
+
+    // One stinger, win or lose — spec §2.1's round boundary, read straight off the
+    // outcome the loop already settled. `bossWon` and `timeout` both read as "you
+    // lost" from the chair, so neither gets a cue of its own (`sfx.ts`).
+    triggerSfx(sfxForRoundOutcome(finished.state.outcome === 'playerWon'));
 
     if (finished.state.outcome !== 'playerWon') {
       // Retry the round you lost, against the boss you lost to.
@@ -524,6 +546,12 @@ export function createApp(options: AppOptions): App {
 
   return {
     async boot(): Promise<void> {
+      // The session's last-resort way into audio: one page-level, one-shot gesture
+      // listener that removes itself the moment music is playing. Every other
+      // arming path is a screen the player might never see — `?autostart=1` mounts
+      // no intro at all — and the music bed is required to play for the whole
+      // session now (`audio/engine.ts`'s header).
+      armGestureFallback();
       screens.loading('Starting the sandbox');
       // Instantiate QuickJS up front: ~1.4 MB of WASM should not be paid for on the
       // click that starts the fight.

@@ -12,6 +12,7 @@ import {
   GRID_CELLS,
   habitCellAt,
   habitCellsFromSummary,
+  MIN_HABIT_SHARE,
   pointInCell,
   rankHotCells,
   type HotCell,
@@ -129,6 +130,53 @@ describe('habitCellsFromSummary', () => {
     heat[40] = 0.3;
     const cells = habitCellsFromSummary(summaryWithHeat(heat), W, H, 2);
     expect(cells.map((c) => c.cell)).toEqual([9, 40]);
+  });
+
+  /**
+   * The 2026-09-10 playtest finding: a flat heat map must not produce a habit.
+   * Reproduces the reported round's actual shape (`artifacts/server/
+   * rewrite-2026-09-10T16-41-46-470Z.json`) rather than a rounder stand-in number,
+   * so this test would have failed against the original bug.
+   */
+  it('is empty against a flat heat map — no cell hot enough to be a habit', () => {
+    const heat = new Array<number>(64).fill(0);
+    // Top cell 0.081; three of the next-hottest are row-6 transit ground (cells
+    // 48-55). Nothing here reaches `MIN_HABIT_SHARE`.
+    heat[12] = 0.081;
+    heat[49] = 0.075;
+    heat[51] = 0.07;
+    heat[53] = 0.065;
+    expect(habitCellsFromSummary(summaryWithHeat(heat), W, H)).toEqual([]);
+  });
+
+  it('keeps a cell from a real camp — the concentration a genuine habit measures', () => {
+    const heat = new Array<number>(64).fill(0);
+    // ~0.33 in one cell, per the same artifact's contrasting "this player really
+    // did camp" round — the rest spread thin, well under the floor.
+    heat[27] = 0.33;
+    heat[28] = 0.05;
+    heat[35] = 0.04;
+    const cells = habitCellsFromSummary(summaryWithHeat(heat), W, H);
+    expect(cells.map((c) => c.cell)).toEqual([27]);
+  });
+
+  it('the floor is inclusive at the boundary — exactly `MIN_HABIT_SHARE` still counts', () => {
+    const heat = new Array<number>(64).fill(0);
+    heat[9] = MIN_HABIT_SHARE;
+    expect(habitCellsFromSummary(summaryWithHeat(heat), W, H).map((c) => c.cell)).toEqual([9]);
+
+    // One float epsilon under it does not.
+    const under = new Array<number>(64).fill(0);
+    under[9] = MIN_HABIT_SHARE - 0.0001;
+    expect(habitCellsFromSummary(summaryWithHeat(under), W, H)).toEqual([]);
+  });
+
+  it('drops only the cells below the floor, keeping the ones that clear it', () => {
+    const heat = new Array<number>(64).fill(0);
+    heat[9] = 0.4;
+    heat[40] = 0.081; // the reported flat-map top cell, mixed in with a real habit
+    const cells = habitCellsFromSummary(summaryWithHeat(heat), W, H, 2);
+    expect(cells.map((c) => c.cell)).toEqual([9]);
   });
 });
 

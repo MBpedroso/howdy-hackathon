@@ -54,8 +54,42 @@ export type CandidateLog = {
   reason?: string;
   /** Gate 3's panel mean, when it measured one. */
   panel?: number;
-  /** True when the deadline stopped the attempt before this candidate's gates ran. */
+  /** True when this candidate was never judged. `skippedReason` says why. */
   skipped?: true;
+  /**
+   * Why the candidate was skipped.
+   *
+   * `deadline` — the attempt ran out of wall clock before its gates could run.
+   * `approved-sibling` — another candidate of the same attempt had already passed
+   * every gate, so there was nothing left for this one to win; the loop stops the
+   * moment it has an answer rather than spending the player's interlude measuring
+   * files it cannot ship.
+   *
+   * Absent on an older log, where `deadline` was the only way to be skipped.
+   */
+  skippedReason?: 'deadline' | 'approved-sibling';
+  /**
+   * The throttle this candidate's file ended up carrying (`src/calibrate.ts`).
+   *
+   * `1.0` is the Coder's file untouched; below that, the Judge's injected wrapper
+   * forces a rest of `(1/p - 1) x 45` ticks between the boss's attacks. Present
+   * whenever the throttle search ran at all — equal to `calibration.to` — and absent
+   * for a candidate it never touched, which is every candidate that was not over the
+   * band and every file it could not wrap.
+   *
+   * Named `pressure` on the events for wire compatibility; it is the same number.
+   */
+  pressure?: number;
+  /**
+   * What the Judge's own search did to this candidate (`src/calibrate.ts`).
+   *
+   * `from` is always `1.0` — the Coder's file as it was first measured — `to` the
+   * throttle the candidate ended at, and `steps` how many extra full gate passes that
+   * cost. `from === to` with `steps > 0` means the search measured other values and
+   * came back; the run log carries the reason it stopped in the `calibrate.done`
+   * event.
+   */
+  calibration?: { steps: number; from: number; to: number };
 };
 
 export type AttemptLog = {
@@ -222,6 +256,55 @@ export type RewriteEvent =
       candidates?: number;
       /** Gate 3's panel mean for this candidate, when it measured one. */
       panel?: number;
+    }
+  /**
+   * Beat 4, still — one per re-measurement of a candidate's file at a different
+   * throttle (`src/calibrate.ts`).
+   *
+   * The Coder writes the shape of the counter; the harness aims the number. When a
+   * candidate comes in *over* the band and fails Gate 3 on FAIR alone, the loop wraps
+   * the file's own `decide` to force a rest between its attacks, brackets that rest
+   * downwards in log2 space, and re-runs the *whole* trial at each value — so every
+   * one of these is a real four-gate verdict at ~1 s, not a shortcut.
+   *
+   * `step` is 1-based. `pressure` is the throttle the step measured, in `[0.1, 1.0]`,
+   * where 1.0 is the file untouched and lower is more rest between attacks; the field
+   * kept its name from the first design of this feature so the client mirror of this
+   * union does not churn. `panel` is Gate 3's panel mean at that throttle, absent if
+   * the step never reached Gate 3. `ok` is the full trial's verdict; `reason` carries
+   * the rejecting gate's sentence when it is false.
+   *
+   * No `trial.gate` or `trial.progress` events are emitted for a calibration step:
+   * the candidate's gate list and its progress meter are about the file the Coder
+   * wrote, and a second series inside one candidate would contradict the first.
+   */
+  | {
+      type: 'calibrate.step';
+      attempt: number;
+      candidate?: number;
+      candidates?: number;
+      step: number;
+      pressure: number;
+      panel?: number;
+      ok: boolean;
+      reason?: string;
+    }
+  /**
+   * One per calibrated candidate, after its last step.
+   *
+   * `steps` is how many extra gate passes the search spent, `pressure` the throttle
+   * the candidate ended at, and `approved` whether one of the steps passed every gate.
+   * A candidate the search never touched emits neither this nor any `calibrate.step`,
+   * so a consumer sees the byte-identical stream it did before the throttle existed.
+   */
+  | {
+      type: 'calibrate.done';
+      attempt: number;
+      candidate?: number;
+      candidates?: number;
+      steps: number;
+      pressure: number;
+      approved: boolean;
     }
   /** Attempts or the deadline are exhausted; the server should ship a fallback. */
   | { type: 'fallback'; reason: FailureReason; message?: string }

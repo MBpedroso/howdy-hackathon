@@ -24,6 +24,7 @@
  * interlude was designed against (`interlude.css`), and it has exactly one primary
  * action like everything else here.
  */
+import { attemptAutoStart, init as initAudio, noteGesture } from '../audio/engine.ts';
 import { AGENTS, CAST, type AgentId } from './cast.ts';
 import { DEFAULT_BOSS_FIGHTER, DEFAULT_PLAYER_FIGHTER, FIGHTER_LIST, type FighterId } from './fighters.ts';
 import {
@@ -94,6 +95,53 @@ export function createScreens(root: HTMLElement): Screens {
   let action: PrimaryAction | null = null;
   let kind: string | null = null;
 
+  /**
+   * The playtest fallback: "starting on the first menu-level gesture that already
+   * arms init()" widened to *any* pointerdown/keydown, not just the ones that hit a
+   * button or pass `introKeyAction`'s filter (a stray click on the fighter grid, an
+   * arbitrary keypress) — Matt's ask, verbatim: "first user gesture ANYWHERE while
+   * an intro/start screen is visible."
+   *
+   * `audio/engine.ts`'s `armGestureFallback()` now covers the same ground for the
+   * whole page (a player who never sees an intro still has to get music). This one
+   * stays because it is the *narrow* listener: armed only while an intro screen is
+   * up, gone before the fight starts, and therefore the path that gets the chain
+   * built while nothing is competing for a frame. Both are one-shot and both are
+   * idempotent, so whichever fires first simply makes the other a no-op.
+   *
+   * A `document`-level listener is exactly the shape the frame-budget lesson
+   * (`audio/engine.ts`'s header) warns against *in general* — but only because a
+   * page-lifetime listener would also catch live gameplay's own
+   * `pointerdown`/`keydown`. This one is armed **only** for as long as an intro
+   * screen is actually showing, and no simulation is running yet at that point, so
+   * there is no frame budget here for it to compete with. `armIntroFallback` is
+   * called once, by `start()`, the moment the intro mounts; `disarmIntroFallback`
+   * removes it the instant the player leaves — from `leaveIntro` below,
+   * synchronously and *before* `onFight()` even runs, so the window in which it
+   * could still be attached during the loading screen that follows (`app.ts`'s
+   * `startRound`, which calls `screens.loading()` before it calls `screens.hide()`)
+   * never opens — and `hide()` disarms it too, as a second, cheap, idempotent
+   * safety net for any path that reaches it a different way.
+   */
+  let introFallbackArmed = false;
+  function onIntroFallbackGesture(): void {
+    disarmIntroFallback();
+    void initAudio();
+    noteGesture();
+  }
+  function armIntroFallback(): void {
+    if (introFallbackArmed) return;
+    introFallbackArmed = true;
+    document.addEventListener('pointerdown', onIntroFallbackGesture);
+    document.addEventListener('keydown', onIntroFallbackGesture);
+  }
+  function disarmIntroFallback(): void {
+    if (!introFallbackArmed) return;
+    introFallbackArmed = false;
+    document.removeEventListener('pointerdown', onIntroFallbackGesture);
+    document.removeEventListener('keydown', onIntroFallbackGesture);
+  }
+
   function onKey(ev: KeyboardEvent): void {
     // Escape first, and independent of `action`: skipping the intro must work on the
     // last beat too, where the primary action is "enter the arena".
@@ -102,6 +150,8 @@ export function createScreens(root: HTMLElement): Screens {
       const run = escapeAction;
       escapeAction = null;
       action = null;
+      void initAudio();
+      noteGesture();
       run();
       return;
     }
@@ -118,6 +168,14 @@ export function createScreens(root: HTMLElement): Screens {
     ev.preventDefault();
     const run = action.run;
     action = null;
+    // Every one of this screen's primary actions is a deliberate menu-level click or
+    // keypress, never live gameplay input — exactly the gesture `audio/engine.ts`'s
+    // `init()` is meant to be called from (see its doc for why that specificity
+    // matters: colliding with `game/loop.ts`'s frame budget instead of this).
+    // `noteGesture` is the same kind of gesture for the music bed, and a no-op
+    // once the bed is already playing, so it fires harmlessly from every screen.
+    void initAudio();
+    noteGesture();
     run();
   }
   window.addEventListener('keydown', onKey);
@@ -129,6 +187,8 @@ export function createScreens(root: HTMLElement): Screens {
     if (action === null) return;
     const run = action.run;
     action = null;
+    void initAudio();
+    noteGesture();
     run();
   });
 
@@ -170,6 +230,8 @@ export function createScreens(root: HTMLElement): Screens {
         ev.stopPropagation();
         const run = primary.run;
         action = null;
+        void initAudio();
+        noteGesture();
         run();
       });
       (primarySlot ?? card).append(btn);
@@ -603,19 +665,32 @@ export function createScreens(root: HTMLElement): Screens {
       let screen: IntroScreen = 'hook';
 
       /**
+       * Leave the intro for good, from any of the two ways in (SKIP INTRO, or the
+       * arena beat's own primary action reaching `nextScreen === 'fight'`).
+       * `disarmIntroFallback` runs first and synchronously — before `onFight()`,
+       * which is what eventually reaches `app.ts`'s `startRound` — so the fallback
+       * listener is never still attached during that call's own `screens.loading()`
+       * interstitial (see its own doc for why that window mattered).
+       */
+      function leaveIntro(): void {
+        disarmIntroFallback();
+        onFight();
+      }
+
+      /**
        * Leave the intro for good. Ticks the remembered flag on the way out, because
        * a player who pressed SKIP INTRO has said what they want for next time too —
        * `?intro=1` is the documented way back (`ui/intro.ts`).
        */
       function skip(): void {
         onSkipIntro?.(true);
-        onFight();
+        leaveIntro();
       }
 
       function advance(): void {
         const to = nextScreen(screen);
         if (to === 'fight') {
-          onFight();
+          leaveIntro();
           return;
         }
         screen = to;
@@ -642,6 +717,12 @@ export function createScreens(root: HTMLElement): Screens {
         );
       }
 
+      // The intro just mounted: attempt music with no gesture at all (Matt's
+      // playtest ask — see `attemptAutoStart()`'s doc for the autoplay-policy
+      // honesty of "attempt" vs. "guarantee"), and arm the broader gesture
+      // fallback for whichever browser says no.
+      attemptAutoStart();
+      armIntroFallback();
       show();
     },
 
@@ -708,6 +789,11 @@ export function createScreens(root: HTMLElement): Screens {
     hide(): void {
       kind = null;
       action = null;
+      // Safety net: `leaveIntro()` above already disarms it synchronously on every
+      // path out of the intro, but a listener left attached is a real page-lifetime
+      // hazard (see its own doc), so `hide()` — reached by every screen transition,
+      // not only the intro's own — disarms it too. Idempotent when it already is.
+      disarmIntroFallback();
       root.replaceChildren();
       root.classList.remove('active');
       delete root.dataset.screen;

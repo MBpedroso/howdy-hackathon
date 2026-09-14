@@ -129,6 +129,38 @@ describe('parseAnalysis', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('no observations');
   });
+
+  describe('the failure kind', () => {
+    // The property `AnalystRetryContext` reads to decide whether to echo the
+    // reply back — only `'no-json'` means the prose was real and worth keeping.
+    it("is 'no-json' when there is no fence and no balanced object anywhere", () => {
+      const result = parseAnalysis('Just some plain prose, no braces at all.');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.kind).toBe('no-json');
+    });
+
+    it("is 'invalid' for a fenced block with balanced braces that still fails to parse", () => {
+      // Braces balance (so extraction succeeds and there is something to hand to
+      // `JSON.parse`); the syntax inside them does not.
+      const result = parseAnalysis('```json\n{"observations": ["a"], "counterPlan":}\n```');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.kind).toBe('invalid');
+    });
+
+    it("is 'invalid' for valid JSON with the wrong shape", () => {
+      const result = parseAnalysis(JSON.stringify({ ...GOOD, playerArchetype: 'nope' }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.kind).toBe('invalid');
+    });
+
+    it("is 'no-json', not 'invalid', for a JSON array — there is no '{' to anchor on", () => {
+      // `extractJsonObject` only ever looks for `{...}`, so a reply that answers
+      // with a bare array reads as no object found at all, not a malformed one.
+      const result = parseAnalysis('[1,2,3]');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.kind).toBe('no-json');
+    });
+  });
 });
 
 describe('the prose half', () => {
@@ -230,17 +262,48 @@ describe('runAnalyst', () => {
     expect(result.observations).toEqual(GOOD.observations);
   });
 
-  it('retries once with the parse error appended, then succeeds', async () => {
+  /**
+   * The two retry modes `parseAnalysis`'s `kind` distinguishes (2026-09-10, live:
+   * `artifacts/server/rewrite-2026-09-10T16-53-53-446Z.json` — claude-cli/sonnet
+   * streamed 1909 clean characters of prose and then no fence at all, and the
+   * retry, echoing nothing, failed the same way twice).
+   */
+  it('retries with the parse error appended and no echo, when a JSON block failed to parse', async () => {
+    // A fenced block is present — `extractJsonObject` finds balanced braces — but
+    // `JSON.parse` itself throws, so this is `kind: 'invalid'`, not `'no-json'`.
+    const badJson =
+      'Some analysis prose about the round.\n\n```json\n{"observations": ["a"], "playerArchetype": "camper", "counterPlan":}\n```';
+    const provider = mockProvider([badJson, JSON.stringify(GOOD)]);
+    const result = await runAnalyst({ summary, round: 1 }, provider);
+
+    expect(result.calls).toBe(2);
+    expect(result.parseError).toContain('did not parse');
+    // The retry says what went wrong. It does not echo the unparseable reply
+    // back, and it re-sends the full replay: the model still has to write a
+    // fresh, correct reply from the data, not just reshape one it already had.
+    const retryPrompt = provider.promptOf(1);
+    expect(retryPrompt).toContain('could not be parsed');
+    expect(retryPrompt).not.toContain('Some analysis prose about the round');
+    expect(provider.calls[1]!.messages).toHaveLength(2);
+  });
+
+  it('retries as an extraction task, echoing the prose, when there was no JSON at all', async () => {
+    // No fence, no balanced `{...}` anywhere — `kind: 'no-json'`. The prose is
+    // real analysis, not a mistake, so the retry includes it verbatim and asks
+    // only for the missing shape.
     const provider = mockProvider(['I think the player camped.', JSON.stringify(GOOD)]);
     const result = await runAnalyst({ summary, round: 1 }, provider);
 
     expect(result.calls).toBe(2);
     expect(result.parseError).toContain('no JSON object');
-    // The retry says what went wrong. It does not echo the unparseable reply back.
     const retryPrompt = provider.promptOf(1);
-    expect(retryPrompt).toContain('could not be parsed');
-    expect(retryPrompt).not.toContain('I think the player camped.');
-    expect(provider.calls[1]!.messages).toHaveLength(2);
+    expect(retryPrompt).toContain('I think the player camped.');
+    expect(retryPrompt).not.toContain('could not be parsed');
+    expect(retryPrompt).toContain('ONLY the fenced JSON block');
+    // The replay summary is not re-sent: the prose already encodes it, and the
+    // retry is a single message rather than the usual two.
+    expect(retryPrompt).not.toContain('PLAYER POSITION HEAT MAP');
+    expect(provider.calls[1]!.messages).toHaveLength(1);
   });
 
   it('gives up after two bad replies, so the loop can fall back', async () => {

@@ -9,3 +9,8 @@ coverage/
 .DS_Store
 .vite/
 .turbo/
+
+# Claude Code manages parallel checkouts here; the settings file next to it is committed.
+.claude/worktrees/
+.vercel
+.env*

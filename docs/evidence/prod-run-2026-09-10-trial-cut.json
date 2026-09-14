@@ -1,0 +1,1264 @@
+{
+ "note": "First real run against the deployed stack, 2026-09-10 20:51 UTC. Web on Vercel, server on Fly (org without a credit card). The live loop ran: Analyst done at ~9 s, Coder wrote 3 candidates, Gate 1 and Gate 2 passed for candidate 0 ('Ballista I'), Gate 3 was at 35/200 matches when Fly's trial limit stopped the machine after 5 minutes of uptime ('Trial machine stopping. To run for longer than 5m0s, add a credit card'). The SSE body was cut, the browser saw ERR_HTTP2_PROTOCOL_ERROR, and the interlude fell back to a pre-approved strategy with the reason on screen. Streamed analysis/rewrite delta chunks are omitted here (3608 of 3623 events); the full client log is regenerable by re-running the production spec.",
+ "when": "2026-09-10T20:51:44.105Z",
+ "web": "https://rematch-beryl-eta.vercel.app",
+ "api": "https://rematch-api.fly.dev",
+ "wallMs": 23074,
+ "kind": "LIVE",
+ "verdictKind": "rejected",
+ "verdictText": "\u2717 NO APPROVAL\u2717 the rewrite failedUsing a pre-approved strategy \u2014 the rewrite stream broke: network error.",
+ "diffHead": "the boss is nowBallista I \u00b7 attempt 1 \u00b7 conservative",
+ "banner": "\u2717 the rewrite failedUsing a pre-approved strategy \u2014 the rewrite stream broke: network error.",
+ "clientErrors": [
+  "Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR"
+ ],
+ "flyLog": [
+  "2026-09-10T20:51:43Z runner[7840636bd35008] gru [warn] Trial machine stopping. To run for longer than 5m0s, add a credit card by visiting https://fly.io/trial.",
+  "2026-09-10T20:51:43Z app[7840636bd35008] gru [info] SIGINT \u2014 closing",
+  "2026-09-10T20:51:44Z proxy[7840636bd35008] gru [error] could not finish reading HTTP body from instance: error reading a body from connection"
+ ],
+ "eventCounts": {
+  "analysis.delta": 221,
+  "analysis.done": 1,
+  "done": 1,
+  "fallback": 1,
+  "replay": 1,
+  "rewrite.delta": 3387,
+  "rewrite.done": 1,
+  "trial.gate": 2,
+  "trial.progress": 8
+ },
+ "events": [
+  {
+   "type": "replay",
+   "summary": {
+    "seed": 1977791994,
+    "strategy": {
+     "name": "Cornerbreaker",
+     "rationale": "I watch which square of the floor you live in, and I slam that square.",
+     "version": 1
+    },
+    "outcome": "playerWon",
+    "durations": {
+     "ticks": 909,
+     "seconds": 15.15,
+     "firstBossHitTick": 36,
+     "firstPlayerHitTick": null
+    },
+    "player": {
+     "hpStart": 5,
+     "hpEnd": 5,
+     "dashes": 6,
+     "shots": 114,
+     "damageTaken": 0
+    },
+    "boss": {
+     "hpStart": 100,
+     "hpEnd": 0,
+     "damageTaken": 100,
+     "primitives": {
+      "move": 692,
+      "burst": 9,
+      "charge": 0,
+      "slam": 5,
+      "spawn": 3
+     },
+     "minionsSpawned": 3,
+     "damageToMinions": 13
+    },
+    "history": {
+     "playerPosHeat": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0.009901,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0.056106,
+      0.018702,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0.10341,
+      0.185919,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0.031903,
+      0,
+      0,
+      0.005501,
+      0.09681,
+      0,
+      0,
+      0,
+      0.044004,
+      0,
+      0,
+      0.045105,
+      0.018702,
+      0.0011,
+      0.0033,
+      0.135314,
+      0.056106,
+      0,
+      0,
+      0,
+      0.040704,
+      0.011001,
+      0.068207,
+      0.025303,
+      0.042904
+     ],
+     "playerDashDirs": [
+      4,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      2
+     ],
+     "playerShotsDuring": {
+      "move": 84,
+      "burst": 104,
+      "charge": 0,
+      "slam": 25,
+      "spawn": 16
+     }
+    },
+    "contract": {
+     "violations": 0,
+     "strategyKilled": false,
+     "droppedEvents": 0
+    },
+    "timeline": [
+     {
+      "tick": 1,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 1,
+      "kind": "bossSlamStart"
+     },
+     {
+      "tick": 9,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 25,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 33,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 36,
+      "kind": "bossHit",
+      "detail": 99
+     },
+     {
+      "tick": 41,
+      "kind": "bossSlamMiss",
+      "detail": 173.8366
+     },
+     {
+      "tick": 42,
+      "kind": "bossSpawn",
+      "detail": 1
+     },
+     {
+      "tick": 42,
+      "kind": "bossHit",
+      "detail": 98
+     },
+     {
+      "tick": 47,
+      "kind": "bossHit",
+      "detail": 97
+     },
+     {
+      "tick": 49,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 52,
+      "kind": "bossHit",
+      "detail": 96
+     },
+     {
+      "tick": 58,
+      "kind": "bossHit",
+      "detail": 95
+     },
+     {
+      "tick": 65,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 65,
+      "kind": "bossHit",
+      "detail": 94
+     },
+     {
+      "tick": 70,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 71,
+      "kind": "bossHit",
+      "detail": 93
+     },
+     {
+      "tick": 73,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 89,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 99,
+      "kind": "minionDown",
+      "detail": 1
+     },
+     {
+      "tick": 105,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 113,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 122,
+      "kind": "bossHit",
+      "detail": 92
+     },
+     {
+      "tick": 129,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 130,
+      "kind": "bossHit",
+      "detail": 91
+     },
+     {
+      "tick": 138,
+      "kind": "bossHit",
+      "detail": 90
+     },
+     {
+      "tick": 141,
+      "kind": "playerDash",
+      "detail": 0
+     },
+     {
+      "tick": 145,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 146,
+      "kind": "bossHit",
+      "detail": 89
+     },
+     {
+      "tick": 153,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 154,
+      "kind": "bossHit",
+      "detail": 88
+     },
+     {
+      "tick": 160,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 160,
+      "kind": "bossHit",
+      "detail": 87
+     },
+     {
+      "tick": 167,
+      "kind": "bossHit",
+      "detail": 86
+     },
+     {
+      "tick": 169,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 174,
+      "kind": "bossHit",
+      "detail": 85
+     },
+     {
+      "tick": 181,
+      "kind": "bossHit",
+      "detail": 84
+     },
+     {
+      "tick": 185,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 187,
+      "kind": "bossHit",
+      "detail": 83
+     },
+     {
+      "tick": 189,
+      "kind": "playerDash",
+      "detail": 0
+     },
+     {
+      "tick": 193,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 195,
+      "kind": "bossHit",
+      "detail": 82
+     },
+     {
+      "tick": 205,
+      "kind": "bossHit",
+      "detail": 81
+     },
+     {
+      "tick": 209,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 211,
+      "kind": "bossSlamStart"
+     },
+     {
+      "tick": 217,
+      "kind": "bossHit",
+      "detail": 80
+     },
+     {
+      "tick": 225,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 226,
+      "kind": "bossHit",
+      "detail": 79
+     },
+     {
+      "tick": 233,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 235,
+      "kind": "bossHit",
+      "detail": 78
+     },
+     {
+      "tick": 245,
+      "kind": "bossHit",
+      "detail": 77
+     },
+     {
+      "tick": 249,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 251,
+      "kind": "bossSlamMiss",
+      "detail": 288.2734
+     },
+     {
+      "tick": 252,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 254,
+      "kind": "bossHit",
+      "detail": 76
+     },
+     {
+      "tick": 263,
+      "kind": "bossHit",
+      "detail": 75
+     },
+     {
+      "tick": 265,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 271,
+      "kind": "bossHit",
+      "detail": 74
+     },
+     {
+      "tick": 273,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 279,
+      "kind": "bossHit",
+      "detail": 73
+     },
+     {
+      "tick": 287,
+      "kind": "bossHit",
+      "detail": 72
+     },
+     {
+      "tick": 289,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 295,
+      "kind": "bossHit",
+      "detail": 71
+     },
+     {
+      "tick": 303,
+      "kind": "bossHit",
+      "detail": 70
+     },
+     {
+      "tick": 305,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 311,
+      "kind": "bossHit",
+      "detail": 69
+     },
+     {
+      "tick": 313,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 320,
+      "kind": "bossHit",
+      "detail": 68
+     },
+     {
+      "tick": 328,
+      "kind": "bossHit",
+      "detail": 67
+     },
+     {
+      "tick": 329,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 336,
+      "kind": "bossHit",
+      "detail": 66
+     },
+     {
+      "tick": 337,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 344,
+      "kind": "bossHit",
+      "detail": 65
+     },
+     {
+      "tick": 352,
+      "kind": "bossHit",
+      "detail": 64
+     },
+     {
+      "tick": 353,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 360,
+      "kind": "bossHit",
+      "detail": 63
+     },
+     {
+      "tick": 368,
+      "kind": "bossHit",
+      "detail": 62
+     },
+     {
+      "tick": 369,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 374,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 376,
+      "kind": "bossHit",
+      "detail": 61
+     },
+     {
+      "tick": 377,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 382,
+      "kind": "bossHit",
+      "detail": 60
+     },
+     {
+      "tick": 388,
+      "kind": "bossHit",
+      "detail": 59
+     },
+     {
+      "tick": 393,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 395,
+      "kind": "bossHit",
+      "detail": 58
+     },
+     {
+      "tick": 403,
+      "kind": "bossHit",
+      "detail": 57
+     },
+     {
+      "tick": 409,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 410,
+      "kind": "bossHit",
+      "detail": 56
+     },
+     {
+      "tick": 417,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 418,
+      "kind": "bossHit",
+      "detail": 55
+     },
+     {
+      "tick": 421,
+      "kind": "bossSlamStart"
+     },
+     {
+      "tick": 427,
+      "kind": "bossHit",
+      "detail": 54
+     },
+     {
+      "tick": 433,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 436,
+      "kind": "bossHit",
+      "detail": 53
+     },
+     {
+      "tick": 444,
+      "kind": "bossHit",
+      "detail": 52
+     },
+     {
+      "tick": 449,
+      "kind": "playerDash",
+      "detail": 7
+     },
+     {
+      "tick": 449,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 452,
+      "kind": "bossHit",
+      "detail": 51
+     },
+     {
+      "tick": 457,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 460,
+      "kind": "bossHit",
+      "detail": 50
+     },
+     {
+      "tick": 461,
+      "kind": "bossSlamMiss",
+      "detail": 126.2311
+     },
+     {
+      "tick": 462,
+      "kind": "bossSpawn",
+      "detail": 2
+     },
+     {
+      "tick": 464,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 468,
+      "kind": "bossHit",
+      "detail": 49
+     },
+     {
+      "tick": 473,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 477,
+      "kind": "bossHit",
+      "detail": 48
+     },
+     {
+      "tick": 489,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 496,
+      "kind": "playerDash",
+      "detail": 7
+     },
+     {
+      "tick": 497,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 510,
+      "kind": "minionDown",
+      "detail": 2
+     },
+     {
+      "tick": 513,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 523,
+      "kind": "bossHit",
+      "detail": 47
+     },
+     {
+      "tick": 529,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 529,
+      "kind": "bossHit",
+      "detail": 46
+     },
+     {
+      "tick": 537,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 537,
+      "kind": "bossHit",
+      "detail": 45
+     },
+     {
+      "tick": 546,
+      "kind": "bossHit",
+      "detail": 44
+     },
+     {
+      "tick": 553,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 554,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 556,
+      "kind": "bossHit",
+      "detail": 43
+     },
+     {
+      "tick": 566,
+      "kind": "bossHit",
+      "detail": 42
+     },
+     {
+      "tick": 569,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 577,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 577,
+      "kind": "bossHit",
+      "detail": 41
+     },
+     {
+      "tick": 587,
+      "kind": "bossHit",
+      "detail": 40
+     },
+     {
+      "tick": 593,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 598,
+      "kind": "bossHit",
+      "detail": 39
+     },
+     {
+      "tick": 607,
+      "kind": "bossHit",
+      "detail": 38
+     },
+     {
+      "tick": 609,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 614,
+      "kind": "bossHit",
+      "detail": 37
+     },
+     {
+      "tick": 617,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 623,
+      "kind": "bossHit",
+      "detail": 36
+     },
+     {
+      "tick": 631,
+      "kind": "bossSlamStart"
+     },
+     {
+      "tick": 631,
+      "kind": "bossHit",
+      "detail": 35
+     },
+     {
+      "tick": 633,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 639,
+      "kind": "bossHit",
+      "detail": 34
+     },
+     {
+      "tick": 641,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 647,
+      "kind": "bossHit",
+      "detail": 33
+     },
+     {
+      "tick": 655,
+      "kind": "bossHit",
+      "detail": 32
+     },
+     {
+      "tick": 657,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 663,
+      "kind": "bossHit",
+      "detail": 31
+     },
+     {
+      "tick": 671,
+      "kind": "bossSlamMiss",
+      "detail": 296.1719
+     },
+     {
+      "tick": 671,
+      "kind": "bossHit",
+      "detail": 30
+     },
+     {
+      "tick": 672,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 673,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 679,
+      "kind": "bossHit",
+      "detail": 29
+     },
+     {
+      "tick": 681,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 687,
+      "kind": "bossHit",
+      "detail": 28
+     },
+     {
+      "tick": 695,
+      "kind": "bossHit",
+      "detail": 27
+     },
+     {
+      "tick": 697,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 703,
+      "kind": "bossHit",
+      "detail": 26
+     },
+     {
+      "tick": 711,
+      "kind": "bossHit",
+      "detail": 25
+     },
+     {
+      "tick": 713,
+      "kind": "playerDash",
+      "detail": 0
+     },
+     {
+      "tick": 713,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 719,
+      "kind": "bossHit",
+      "detail": 24
+     },
+     {
+      "tick": 721,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 726,
+      "kind": "bossHit",
+      "detail": 23
+     },
+     {
+      "tick": 735,
+      "kind": "bossHit",
+      "detail": 22
+     },
+     {
+      "tick": 737,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 746,
+      "kind": "bossHit",
+      "detail": 21
+     },
+     {
+      "tick": 752,
+      "kind": "bossHit",
+      "detail": 20
+     },
+     {
+      "tick": 753,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 760,
+      "kind": "bossHit",
+      "detail": 19
+     },
+     {
+      "tick": 761,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 762,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 767,
+      "kind": "bossHit",
+      "detail": 18
+     },
+     {
+      "tick": 775,
+      "kind": "bossHit",
+      "detail": 17
+     },
+     {
+      "tick": 777,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 783,
+      "kind": "bossHit",
+      "detail": 16
+     },
+     {
+      "tick": 791,
+      "kind": "bossHit",
+      "detail": 15
+     },
+     {
+      "tick": 793,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 797,
+      "kind": "bossHit",
+      "detail": 14
+     },
+     {
+      "tick": 801,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 804,
+      "kind": "bossHit",
+      "detail": 13
+     },
+     {
+      "tick": 806,
+      "kind": "playerDash",
+      "detail": 0
+     },
+     {
+      "tick": 810,
+      "kind": "bossHit",
+      "detail": 12
+     },
+     {
+      "tick": 817,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 818,
+      "kind": "bossHit",
+      "detail": 11
+     },
+     {
+      "tick": 825,
+      "kind": "bossHit",
+      "detail": 10
+     },
+     {
+      "tick": 833,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 833,
+      "kind": "bossHit",
+      "detail": 9
+     },
+     {
+      "tick": 840,
+      "kind": "bossHit",
+      "detail": 8
+     },
+     {
+      "tick": 841,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 841,
+      "kind": "bossSlamStart"
+     },
+     {
+      "tick": 849,
+      "kind": "bossHit",
+      "detail": 7
+     },
+     {
+      "tick": 857,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 859,
+      "kind": "bossHit",
+      "detail": 6
+     },
+     {
+      "tick": 869,
+      "kind": "bossHit",
+      "detail": 5
+     },
+     {
+      "tick": 873,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 878,
+      "kind": "bossHit",
+      "detail": 4
+     },
+     {
+      "tick": 881,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 881,
+      "kind": "bossSlamMiss",
+      "detail": 173.1547
+     },
+     {
+      "tick": 882,
+      "kind": "bossSpawn",
+      "detail": 3
+     },
+     {
+      "tick": 887,
+      "kind": "bossHit",
+      "detail": 3
+     },
+     {
+      "tick": 895,
+      "kind": "bossHit",
+      "detail": 2
+     },
+     {
+      "tick": 896,
+      "kind": "bossBurst",
+      "detail": 8
+     },
+     {
+      "tick": 897,
+      "kind": "playerShot"
+     },
+     {
+      "tick": 902,
+      "kind": "bossHit",
+      "detail": 1
+     },
+     {
+      "tick": 909,
+      "kind": "bossHit",
+      "detail": 0
+     },
+     {
+      "tick": 909,
+      "kind": "outcome",
+      "detail": "playerWon"
+     }
+    ],
+    "timelineTotal": 245
+   },
+   "round": 2
+  },
+  {
+   "type": "analysis.done",
+   "analysis": {
+    "observations": [
+     "The player lived mostly on the right side of the arena: cell 31 at x\u2248750, y\u2248350 for 18.6% of the round, plus cell 54 at x\u2248650, y\u2248650 for 13.5% and cell 30 at x\u2248650, y\u2248350 for 10.3%.",
+     "They never took damage in 909 ticks, and the first boss hit landed only at tick 36.",
+     "They dashed only 6 times, with 4 of 6 dashes (67%) going east and 2 of 6 (33%) southeast, so their movement was sparse and strongly rightward.",
+     "They punished burst and spawn heavily, firing 104 shots during burst and 16 during spawn, but only 25 during slam and 0 during charge; the first slam at tick 1 was answered by a shot immediately, and the later slam at tick 41 missed.",
+     "The evidence fits a cautious camper/kiter hybrid more than a brawler: they held the right edge, waited out pressure, and shot most aggressively in non-slam windows."
+    ],
+    "playerArchetype": "mixed",
+    "counterPlan": "Put pressure on the right half of the arena, especially around x=650\u2013800 and y=300\u2013700, because that is where they spent most of the round. Lean on slam and move to keep them from settling into that right-edge lane, but vary the landing square so they cannot prefire the same safe window. Use burst to punish their habit of unloading during burst phases, and spawn minions to block the x\u2248750,y\u2248350 perch and force a reposition before the next shot cycle."
+   },
+   "raw": "The player lived mostly on the right side of the arena: cell 31 at x\u2248750, y\u2248350 for 18.6% of the round, plus cell 54 at x\u2248650, y\u2248650 for 13.5% and cell 30 at x\u2248650, y\u2248350 for 10.3%. They never took damage in 909 ticks, and the first boss hit landed only at tick 36. They dashed only 6 times, with 4 of 6 dashes (67%) going east and 2 of 6 (33%) southeast, so their movement was sparse and strongly rightward. They punished burst and spawn heavily, firing 104 shots during burst and 16 during spawn, but only 25 during slam and 0 during charge; the first slam at tick 1 was answered by a shot immediately, and the later slam at tick 41 missed. The evidence fits a cautious camper/kiter hybrid more than a brawler: they held the right edge, waited out pressure, and shot most aggressively in non-slam windows.\n\n```json\n{\n  \"observations\": [\n    \"The player lived mostly on the right side of the arena: cell 31 at x\u2248750, y\u2248350 for 18.6% of the round, plus cell 54 at x\u2248650, y\u2248650 for 13.5% and cell 30 at x\u2248650, y\u2248350 for 10.3%.\",\n    \"They never took damage in 909 ticks, and the first boss hit landed only at tick 36.\",\n    \"They dashed only 6 times, with 4 of 6 dashes (67%) going east and 2 of 6 (33%) southeast, so their movement was sparse and strongly rightward.\",\n    \"They punished burst and spawn heavily, firing 104 shots during burst and 16 during spawn, but only 25 during slam and 0 during charge; the first slam at tick 1 was answered by a shot immediately, and the later slam at tick 41 missed.\",\n    \"The evidence fits a cautious camper/kiter hybrid more than a brawler: they held the right edge, waited out pressure, and shot most aggressively in non-slam windows.\"\n  ],\n  \"playerArchetype\": \"mixed\",\n  \"counterPlan\": \"Put pressure on the right half of the arena, especially around x=650\u2013800 and y=300\u2013700, because that is where they spent most of the round. Lean on slam and move to keep them from settling into that right-edge lane, but vary the landing square so they cannot prefire the same safe window. Use burst to punish their habit of unloading during burst phases, and spawn minions to block the x\u2248750,y\u2248350 perch and force a reposition before the next shot cycle.\"\n}\n```",
+   "calls": 1,
+   "promptChars": 5348,
+   "usage": {
+    "inputTokens": 1779,
+    "outputTokens": 629,
+    "cacheReadTokens": 0
+   },
+   "ms": 9015.808932000014
+  },
+  {
+   "type": "rewrite.done",
+   "attempt": 1,
+   "source": "export const meta = {\n  name: 'Ballista I',\n  rationale: 'You keep to the right wall, so I plant my aim there and fire only when you are far enough to regret it.',\n  version: 2,\n};\n\nconst QUIET_AFTER_ATTACK = 120;\nconst BURST_MIN_RANGE = 290;\nconst BURST_MAX_RANGE = 640;\nconst RETARGET_EVERY = 90;\nconst LEAD_TICKS = 12;\n\nexport function init() {\n  return { anchor: 31, nextAtk: 0, drift: 1, phase: 0 };\n}\n\nexport function decide(view, mem) {\n  const b = view.boss;\n  const p = view.player;\n\n  if ((view.tick | 0) - (mem.phase | 0) >= RETARGET_EVERY) {\n    mem.phase = view.tick | 0;\n    mem.anchor = pickAnchor(view.history.playerPosHeat);\n    mem.drift = rand() < 0.5 ? 1 : -1;\n  }\n\n  const ax = mem.anchor % 8;\n  const ay = (mem.anchor - ax) / 8;\n  const cellW = view.arena.w / 8;\n  const cellH = view.arena.h / 8;\n\n  // Guard the player's favored right-side lanes, but keep moving.\n  const gx = clamp(ax * cellW + cellW * 0.5, 80, view.arena.w - 80);\n  const gy = clamp(ay * cellH + cellH * 0.5, 80, view.arena.h - 80);\n\n  const dxp = p.x - b.x;\n  const dyp = p.y - b.y;\n  const dist2 = dxp * dxp + dyp * dyp;\n  const farEnough = dist2 >= BURST_MIN_RANGE * BURST_MIN_RANGE;\n  const notTooFar = dist2 <= BURST_MAX_RANGE * BURST_MAX_RANGE;\n\n  if (b.cooldowns.burst === 0 && view.tick >= (mem.nextAtk | 0) && farEnough && notTooFar) {\n    mem.nextAtk = (view.tick | 0) + QUIET_AFTER_ATTACK;\n    const vx = finite(p.vx) ? p.vx : 0;\n    const vy = finite(p.vy) ? p.vy : 0;\n    const lead = LEAD_TICKS / Math.max(1, Math.sqrt(dist2) / 18);\n    const tx = p.x + vx * lead * LEAD_TICKS * 0.25 - b.x;\n    const ty = p.y + vy * lead * LEAD_TICKS * 0.25 - b.y;\n    return { type: 'burst', angle: Math.atan2(safe(ty), safe(tx)), count: 3 };\n  }\n\n  // Reposition instead of punishing contact: drift off the player's line when close.\n  let tx = gx - b.x;\n  let ty = gy - b.y;\n  if (dist2 < 170 * 170) {\n    tx = b.x - p.x + (mem.drift * 48);\n    ty = b.y - p.y;\n  } else if (p.x > 580) {\n    tx += 36;\n  } else {\n    tx -= 18;\n  }\n\n  const mag = Math.sqrt(tx * tx + ty * ty) || 1;\n  return { type: 'move', dx: tx / mag, dy: ty / mag };\n}\n\nfunction pickAnchor(heat) {\n  let best = 31;\n  let bestV = -1;\n  for (let i = 0; i < heat.length; i++) {\n    const v = heat[i];\n    if (typeof v === 'number' && v > bestV) {\n      bestV = v;\n      best = i;\n    }\n  }\n  return best;\n}\n\nfunction clamp(v, lo, hi) {\n  return v < lo ? lo : v > hi ? hi : v;\n}\n\nfunction finite(v) {\n  return typeof v === 'number' && v === v && v !== Infinity && v !== -Infinity ? v : 0;\n}\n\nfunction safe(v) {\n  return finite(v);\n}",
+   "diff": "===================================================================\n--- strategy.js (previous)\t\n+++ strategy.js (attempt 1)\t\n@@ -1,157 +1,77 @@\n-// Round 1 \u2014 shipped, hand-written, balance-tested.\n-//\n-// Started as `@rematch/contract`'s `cornerbreaker` reference fixture with different\n-// `meta`, and now differs from it in one more way: its resting state is a patrol\n-// across the cell it is guarding rather than `idle` (see the note on note 4 below).\n-// The fixture stayed as it was \u2014 it is a *calibration* corpus for the harness, and\n-// `test/balance.test.ts` uses it as the counter-camper control \u2014 so the two files have\n-// deliberately parted company.\n-//\n-// It is the Round 1 boss because it is the fairest of the four fixtures against a\n-// human-shaped opponent: over 60 seeds with the engine's scripted mid-range player it\n-// loses every time in ~17 s, taking half a heart on the way -- winnable on a first try\n-// (spec AC 4), which is what Round 1 has to be, and every one of its threats is a\n-// readable telegraph. If playtesting says\n-// it is *too* soft, the fix is a harder Round 1 strategy (the `chaser` fixture sits at\n-// 63% player wins with 1.15 of 5 HP left), never a change to an engine constant.\n-//\n-// It is ALSO the honest starting point for the story: it already adapts, in-round, by\n-// reading `history.playerPosHeat`. The interlude's Coder agent replaces this file from\n-// Round 2 on; nothing else about the game changes when it does.\n-//\n-// Measured against the engine's scripted mid-range player over 60 seeds: player wins\n-// 1.00, average 16.6 s, 4.52 of 5 HP left \u2014 the same fight it was before the ACTIVE\n-// fixes. Against Gate 3's reference panel it is 0.60 (Camper 1.00, Kiter 0.00,\n-// Rusher 1.00, Dodger 0.40) with a longest motionless run of 1 tick, where it used to\n-// be 0.48 with a run of 169. Both halves of that shift are the same bug: while two\n-// minions were alive the boss asked for a third every tick, which the engine refuses\n-// at the cap \u2014 so it froze *and* never reached its own burst branch. Round 1 has no\n-// fairness band (it is the boss the player meets before any rewrite), and the number\n-// it is held to is the scripted player's, which has not moved.\n export const meta = {\n-  name: 'Cornerbreaker',\n-  rationale: 'I watch which square of the floor you live in, and I slam that square.',\n-  version: 1,\n+  name: 'Ballista I',\n+  rationale: 'You keep to the right wall, so I plant my aim there and fire only when you are far enough to regret it.',\n+  version: 2,\n };\n \n-// The resting patrol. `PATROL_RADIUS / PATROL_LEG` is 2.59 px/tick, just under the\n-// boss's own 2.6, so the boss tracks the patrol target exactly and is never left\n-// standing. 44 px is well inside a 100 px heat cell, so the boss still reads as\n-// guarding the square it slams.\n-const PATROL_LEG = 34;\n-/** Half the width of the patrol. `PATROL_LEG * 1.29` is 2.59 px/tick, just under\n- *  the boss's own 2.6, so it tracks the target exactly instead of jittering around\n- *  it \u2014 derived rather than typed, so `PATROL_LEG` alone is the dial. */\n-const PATROL_RADIUS = PATROL_LEG * 1.29;\n-/** How far the patrol's anchor is held off a wall, so no leg can clamp. */\n-const PATROL_MARGIN = PATROL_RADIUS + 34;\n-const PATROL_EDGE = 34;\n+const QUIET_AFTER_ATTACK = 120;\n+const BURST_MIN_RANGE = 290;\n+const BURST_MAX_RANGE = 640;\n+const RETARGET_EVERY = 90;\n+const LEAD_TICKS = 12;\n \n-/**\n- * `spawn`'s own cooldown is 300 ticks, but a `spawn` refused at the two-minion cap\n- * keeps its cooldown *and* costs a contract violation \u2014 so a boss that asks whenever\n- * the cooldown is ready asks again every single tick for as long as both minions are\n- * alive, and stands perfectly still doing it. That was 169 motionless ticks against\n- * the reference panel, and it is why this cadence is a tick counter rather than a\n- * cooldown check. Slower than the cooldown, on purpose.\n- */\n-const SPAWN_EVERY = 380;\n-\n export function init() {\n-  return { targetCell: -1, refreshedAt: -1, lastSpawn: -999 };\n+  return { anchor: 31, nextAtk: 0, drift: 1, phase: 0 };\n }\n \n export function decide(view, mem) {\n-  // Refresh the read of the heat map every second; it is a rolling summary.\n-  if (view.tick - mem.refreshedAt >= 60 || mem.targetCell < 0) {\n-    mem.targetCell = hottestCell(view.history.playerPosHeat);\n-    mem.refreshedAt = view.tick;\n+  const b = view.boss;\n+  const p = view.player;\n+\n+  if ((view.tick | 0) - (mem.phase | 0) >= RETARGET_EVERY) {\n+    mem.phase = view.tick | 0;\n+    mem.anchor = pickAnchor(view.history.playerPosHeat);\n+    mem.drift = rand() < 0.5 ? 1 : -1;\n   }\n \n+  const ax = mem.anchor % 8;\n+  const ay = (mem.anchor - ax) / 8;\n   const cellW = view.arena.w / 8;\n   const cellH = view.arena.h / 8;\n-  const col = mem.targetCell % 8;\n-  const row = (mem.targetCell - col) / 8;\n-  const hotX = clamp(col * cellW + cellW / 2, 0, view.arena.w);\n-  const hotY = clamp(row * cellH + cellH / 2, 0, view.arena.h);\n \n-  const boss = view.boss;\n-  if (boss.cooldowns.slam === 0) {\n-    return { type: 'slam', x: hotX, y: hotY };\n-  }\n-  if (boss.cooldowns.spawn === 0 && view.tick - mem.lastSpawn > SPAWN_EVERY) {\n-    mem.lastSpawn = view.tick;\n-    return { type: 'spawn', x: hotX, y: hotY };\n-  }\n+  // Guard the player's favored right-side lanes, but keep moving.\n+  const gx = clamp(ax * cellW + cellW * 0.5, 80, view.arena.w - 80);\n+  const gy = clamp(ay * cellH + cellH * 0.5, 80, view.arena.h - 80);\n \n-  const dx = view.player.x - boss.x;\n-  const dy = view.player.y - boss.y;\n-  const dist = Math.sqrt(dx * dx + dy * dy);\n-  if (boss.cooldowns.burst === 0 && dist < 300) {\n-    return { type: 'burst', angle: Math.atan2(dy, dx), count: 8 };\n-  }\n+  const dxp = p.x - b.x;\n+  const dyp = p.y - b.y;\n+  const dist2 = dxp * dxp + dyp * dyp;\n+  const farEnough = dist2 >= BURST_MIN_RANGE * BURST_MIN_RANGE;\n+  const notTooFar = dist2 <= BURST_MAX_RANGE * BURST_MAX_RANGE;\n \n-  // 4. Otherwise walk to the hot cell and camp the camper \u2014 and once it is standing\n-  //    on the cell, patrol *across* it instead of stopping.\n-  //\n-  //    The earlier version returned `idle` here, and a human playtest is what found\n-  //    out what that means: a boss that has arrived at a stale hot cell, with the\n-  //    player out of burst range and both its cooldowns spent, stands perfectly\n-  //    still until something expires. Against the reference panel that was 169\n-  //    motionless ticks \u2014 nearly three seconds of a boss that reads as crashed \u2014\n-  //    and no gate could see it, because `idle` is legal, free of cooldown, the\n-  //    cheapest possible `decide`, and a *stationary* boss is easy to shoot, so\n-  //    freezing actively helped the win rate stay in band. Gate 3's ACTIVE\n-  //    assertion exists now; `patrol` is what satisfies it.\n-  const tx = hotX - boss.x;\n-  const ty = hotY - boss.y;\n-  const tmag = Math.sqrt(tx * tx + ty * ty);\n-  if (tmag < 4) {\n-    return patrol(view, hotX, hotY);\n+  if (b.cooldowns.burst === 0 && view.tick >= (mem.nextAtk | 0) && farEnough && notTooFar) {\n+    mem.nextAtk = (view.tick | 0) + QUIET_AFTER_ATTACK;\n+    const vx = finite(p.vx) ? p.vx : 0;\n+    const vy = finite(p.vy) ? p.vy : 0;\n+    const lead = LEAD_TICKS / Math.max(1, Math.sqrt(dist2) / 18);\n+    const tx = p.x + vx * lead * LEAD_TICKS * 0.25 - b.x;\n+    const ty = p.y + vy * lead * LEAD_TICKS * 0.25 - b.y;\n+    return { type: 'burst', angle: Math.atan2(safe(ty), safe(tx)), count: 3 };\n   }\n-  return { type: 'move', dx: tx / tmag, dy: ty / tmag };\n-}\n \n-/**\n- * The resting state: a triangle wave in x through (`ax`, `ay`), never `idle`.\n- *\n- * **Straight legs, on purpose.** A circular orbit was tried first, in the Round 2\n- * candidate this pattern comes from, and it took that boss's panel win rate from\n- * 0.38 to 0.72 \u2014 \"too hard\" \u2014 because every reference bot (and every competent\n- * human) leads its shots off the boss's last-tick velocity, and a curve defeats a\n- * linear lead permanently. A boss that is unhittable by construction is not a\n- * harder boss, it is a broken one. A 34-tick straight leg is led correctly for 33\n- * of its 34 ticks.\n- *\n- * The anchor is pulled `PATROL_MARGIN` away from the walls before the wave is\n- * built: an un-clamped patrol across a corner cell spends a quarter of each cycle\n- * walking into the arena edge, where a `move` displaces nothing and the boss is\n- * just as motionless as if it had returned `idle`.\n- */\n-function patrol(view, ax, ay) {\n-  const boss = view.boss;\n-  const cx = clamp(ax, PATROL_MARGIN, view.arena.w - PATROL_MARGIN);\n-  const cy = clamp(ay, PATROL_EDGE, view.arena.h - PATROL_EDGE);\n-  const phase = view.tick % (PATROL_LEG * 2);\n-  const leg = phase < PATROL_LEG ? phase : PATROL_LEG * 2 - phase;\n-  const tx = cx + ((leg / PATROL_LEG) * 2 - 1) * PATROL_RADIUS - boss.x;\n-  const ty = cy - boss.y;\n-  const tmag = Math.sqrt(tx * tx + ty * ty);\n-  // The target is under the boss this tick. It moves every tick, so this cannot\n-  // repeat: nudge along the patrol axis rather than standing still for one frame.\n-  if (tmag < 0.001) {\n-    return { type: 'move', dx: phase < PATROL_LEG ? 1 : -1, dy: 0 };\n+  // Reposition instead of punishing contact: drift off the player's line when close.\n+  let tx = gx - b.x;\n+  let ty = gy - b.y;\n+  if (dist2 < 170 * 170) {\n+    tx = b.x - p.x + (mem.drift * 48);\n+    ty = b.y - p.y;\n+  } else if (p.x > 580) {\n+    tx += 36;\n+  } else {\n+    tx -= 18;\n   }\n-  return { type: 'move', dx: tx / tmag, dy: ty / tmag };\n+\n+  const mag = Math.sqrt(tx * tx + ty * ty) || 1;\n+  return { type: 'move', dx: tx / mag, dy: ty / mag };\n }\n \n-function hottestCell(heat) {\n-  let best = 0;\n-  let bestValue = -1;\n-  for (let i = 0; i < heat.length; i = i + 1) {\n+function pickAnchor(heat) {\n+  let best = 31;\n+  let bestV = -1;\n+  for (let i = 0; i < heat.length; i++) {\n     const v = heat[i];\n-    if (typeof v === 'number' && v > bestValue) {\n-      bestValue = v;\n+    if (typeof v === 'number' && v > bestV) {\n+      bestV = v;\n       best = i;\n     }\n   }\n@@ -161,3 +81,11 @@\n function clamp(v, lo, hi) {\n   return v < lo ? lo : v > hi ? hi : v;\n }\n+\n+function finite(v) {\n+  return typeof v === 'number' && v === v && v !== Infinity && v !== -Infinity ? v : 0;\n+}\n+\n+function safe(v) {\n+  return finite(v);\n+}\n",
+   "meta": {
+    "name": "Ballista I",
+    "rationale": "You keep to the right wall, so I plant my aim there and fire only when you are far enough to regret it.",
+    "version": 2
+   },
+   "candidate": 0,
+   "candidates": 3,
+   "dial": "conservative"
+  },
+  {
+   "type": "trial.gate",
+   "attempt": 1,
+   "gate": {
+    "gate": 1,
+    "name": "static",
+    "ok": true,
+    "ms": 5.506099999998696,
+    "detail": {
+     "violations": 0,
+     "sourceBytes": 2588
+    }
+   },
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.gate",
+   "attempt": 1,
+   "gate": {
+    "gate": 2,
+    "name": "fuzz",
+    "ok": true,
+    "ms": 309.0766410000506,
+    "detail": {
+     "seed": 1592654542,
+     "states": 500,
+     "sequence": {
+      "ticks": 60,
+      "failures": 0,
+      "memoryBytes": 45
+     },
+     "valid": 560,
+     "invalid": 0,
+     "onCooldown": 0,
+     "failures": {},
+     "byReason": {},
+     "byPrimitive": {},
+     "elapsedMs": {
+      "samples": 560,
+      "p50": 0.015625,
+      "p99": 0.015625,
+      "max": 0.0234375
+     }
+    }
+   },
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 0,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 5,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 10,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 15,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 20,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 25,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 30,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "trial.progress",
+   "attempt": 1,
+   "matchesDone": 35,
+   "matchesTotal": 200,
+   "gate": "balance",
+   "candidate": 0,
+   "candidates": 3
+  },
+  {
+   "type": "fallback",
+   "reason": "error",
+   "message": "the rewrite stream broke: network error"
+  },
+  {
+   "type": "done",
+   "result": {
+    "approved": false,
+    "attempts": [],
+    "reason": "error",
+    "message": "the rewrite stream broke: network error"
+   }
+  }
+ ]
+}

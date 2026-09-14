@@ -22,6 +22,8 @@
  * pre-fight interstitial (the same "boss learned" banner, moved off the live fight
  * by a second playtest finding) before Round 2's simulation takes its first tick.
  */
+import { readFileSync } from 'node:fs';
+
 import { expect, test, type Page } from '@playwright/test';
 
 import { armReplay, collectErrors, loadFixture, waitForRound } from './helpers.ts';
@@ -205,6 +207,12 @@ test('plays all four beats, shows a rejection and an approval, and starts round 
   await expect(boss).toContainText('says');
   await expect(boss).toContainText('where you live');
 
+  // A run with no calibration in it has no strip and keeps its meter — this is the
+  // screenshot that must not move when the Judge's search is added to the panel.
+  await expect(page.locator('.il-cal')).toHaveCount(0);
+  await expect(page.getByTestId('il-beat-trial')).not.toHaveAttribute('data-calibrated', '1');
+  await expect(page.locator('.il-meter-wrap')).toBeVisible();
+
   await root.screenshot({ path: `${ARTIFACTS}interlude-approved.png` });
   await page.getByTestId('il-beat-trial').screenshot({ path: `${ARTIFACTS}interlude-cast-judge.png` });
 
@@ -361,4 +369,276 @@ test('the 45-second deadline shows the AC 5 fallback instead of hanging', async 
   const origin = page.getByTestId('boss-origin');
   await expect(origin).toHaveText('pre-approved');
   await expect(origin).not.toHaveText('written for you');
+});
+
+/**
+ * The Judge's own calibration, on screen — the strip, the sentence, the shipped diff.
+ *
+ * The loop can now fix a candidate that only misses the *number*: it rewrites the one
+ * constant the file declares for it (`const PRESSURE`), re-runs all four gates, and
+ * bisects until the panel rate lands in the band (`packages/agents/src/calibrate.ts`).
+ * Three things then have to be true on screen, and none of them is testable without a
+ * browser:
+ *
+ *  1. the search is visible as arithmetic — the chain of throttles with the rate
+ *     measured at each, under the gate rows of the file it re-measured;
+ *  2. an APPROVED stamp sitting under that file's own `✗ Gate 3` row explains itself,
+ *     in the rates and in words;
+ *  3. the diff the player is left looking at includes the change that actually
+ *     shipped, labelled with the two files it compares.
+ *
+ * ## Why the stream is stubbed, and what is real in it
+ *
+ * No *local* source emits these events: the mock script and the three committed
+ * recordings all predate calibration (`src/interlude/mock.ts`,
+ * `public/recorded/*.json`), and the events only exist on the live server path, which
+ * costs money and needs a key — neither of which an e2e run may assume. So this test
+ * intercepts the recorded source's own fetch and serves a run whose first two beats
+ * are the **real** 2026-09-03 `mimic-camper` recording (replay + the Analyst's
+ * streamed prose, spliced out of the committed asset) and whose Trial beat is a
+ * synthetic calibration stream written here.
+ *
+ * That is stated in the run's own header, so the screen says it too: the provenance
+ * badge reads the stub's model name and the disclosure line under it says which half
+ * is synthetic. Everything downstream of the fetch is production code — the source,
+ * the event union's own type guard, the reducer, and every pixel of the panel.
+ */
+/** The file the Coder wrote. No throttle in it: the Judge's block is what adds one. */
+const CODER_SOURCE = [
+  'export const meta = { name: "Metronome II", rationale: "you camp; I bring the fight to the corner", version: 1 };',
+  '',
+  'export function init() {',
+  '  return { t: 0 };',
+  '}',
+  '',
+  'export function decide(view, mem) {',
+  '  mem.t += 1;',
+  '  return mem.t % 40 === 0 ? { type: "burst", dir: 0 } : { type: "move", x: view.player.x, y: view.player.y };',
+  '}',
+].join('\n');
+
+/**
+ * The file that shipped: the same source with the harness's block appended.
+ *
+ * Shaped like `throttleBlock` in `packages/agents/src/calibrate.ts` — the two renames
+ * on `init`/`decide` and the `const THROTTLE` line the interlude reads back — rather
+ * than copied whole, because what this test is about is the *diff being shown*, not
+ * the wrapper's own behaviour (which `packages/agents/test/calibrate.test.ts` owns).
+ */
+const SHIPPED_SOURCE = `${CODER_SOURCE.replace('export function init(', 'function __initRaw(').replace(
+  'export function decide(',
+  'function __decideRaw(',
+)}
+
+// ---- calibrated by the Judge (deterministic; not written by the Coder) ----
+const THROTTLE = 0.71;
+const THROTTLE_HOLD = THROTTLE >= 1 ? 0 : Math.round((1 / THROTTLE - 1) * 45);
+
+export function init() {
+  const mem = __initRaw();
+  mem.__judge = { holdUntil: 0 };
+  return mem;
+}
+
+export function decide(view, mem) {
+  return __decideRaw(view, mem);
+}
+`;
+
+const STUB_META = {
+  name: 'Metronome II',
+  rationale: 'you camp; I bring the fight to the corner',
+  version: 1,
+};
+
+/**
+ * The synthetic run served to the recorded source.
+ *
+ * Beats 1-2 are lifted verbatim from the committed recording (everything before its
+ * first `rewrite.delta`); beat 4 is one candidate that fails Gate 3 on FAIR alone and
+ * is then calibrated into the band in two steps.
+ */
+function calibrationRun(): unknown {
+  const real = JSON.parse(
+    readFileSync(new URL('../public/recorded/mimic-camper.json', import.meta.url), 'utf8'),
+  ) as { at: number[]; events: Array<{ type: string }> };
+  const upTo = real.events.findIndex((event) => event.type === 'rewrite.delta');
+  const head = real.events.slice(0, upTo);
+
+  const band = [0.35, 0.5];
+  const events = [
+    ...head,
+    { type: 'rewrite.delta', attempt: 1, delta: CODER_SOURCE },
+    { type: 'rewrite.done', attempt: 1, source: CODER_SOURCE, diff: `--- strategy.js (previous)\n+++ strategy.js (next)\n@@ -1,3 +1,7 @@\n+${CODER_SOURCE.split('\n').join('\n+')}\n`, meta: STUB_META },
+    { type: 'trial.gate', attempt: 1, gate: { gate: 1, name: 'static', ok: true, ms: 4 } },
+    { type: 'trial.gate', attempt: 1, gate: { gate: 2, name: 'fuzz', ok: true, ms: 61 } },
+    { type: 'trial.progress', attempt: 1, matchesDone: 0, matchesTotal: 200, gate: 'balance' },
+    { type: 'trial.progress', attempt: 1, matchesDone: 200, matchesTotal: 200, gate: 'balance' },
+    {
+      type: 'trial.gate',
+      attempt: 1,
+      gate: {
+        gate: 3,
+        name: 'balance',
+        ok: false,
+        ms: 1042,
+        reason: '0.91 vs panel — outside the band 0.35–0.50 for round 2 (too hard)',
+        detail: { band, panel: { winRate: 0.91 }, mimic: { winRate: 0.88 } },
+      },
+    },
+    // The Judge's search: the same file at two other numbers, each a full trial.
+    {
+      type: 'calibrate.step',
+      attempt: 1,
+      step: 1,
+      pressure: 0.5,
+      panel: 0.18,
+      ok: false,
+      reason: '0.18 vs panel — outside the band 0.35–0.50 for round 2 (too easy)',
+    },
+    { type: 'calibrate.step', attempt: 1, step: 2, pressure: 0.71, panel: 0.44, ok: true },
+    { type: 'calibrate.done', attempt: 1, steps: 2, pressure: 0.71, approved: true },
+    { type: 'verdict', attempt: 1, approved: true },
+    {
+      type: 'done',
+      result: {
+        approved: true,
+        source: SHIPPED_SOURCE,
+        meta: STUB_META,
+        attempts: [],
+        analysis: { observations: [], playerArchetype: 'camper', counterPlan: 'crowd the corner' },
+      },
+    },
+  ];
+
+  return {
+    provider: 'e2e',
+    model: 'calibration-stub',
+    round: 2,
+    archetype: 'camper',
+    recordedAt: '2026-09-11T00:00:00.000Z',
+    approved: true,
+    attempts: 1,
+    knownIssue:
+      'SYNTHETIC TRIAL BEAT · beats 1-2 are the real 2026-09-03 mimic-camper recording; the Coder file, the gates and the calibration steps in this run were written by the e2e spec, so the spec controls every number; the committed recording silo-r2-calibrated carries the real ones.',
+    timing: { method: 'e2e stub: beats 1-2 keep the recording’s cadence, the rest is paced by the spec' },
+    // Beats 1-2 keep their measured offsets; the synthetic tail is paced evenly after
+    // the last of them so the screen is watchable rather than instantaneous.
+    at: [...real.at.slice(0, upTo), ...Array.from({ length: events.length - upTo }, (_v, i) => (real.at[upTo - 1] ?? 0) + (i + 1) * 260)],
+    events,
+  };
+}
+
+test('the Judge calibrates a candidate into the band, and says so in numbers', async ({ page }) => {
+  const errors = collectErrors(page);
+  const run = JSON.stringify(calibrationRun());
+
+  await page.route('**/recorded/calibration-stub.json', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: run });
+  });
+
+  await winRound1(page, 'agent=recorded&run=calibration-stub&speed=20&autofight=0');
+  await page.waitForFunction(() => window.__rematch?.interlude?.state.done === true, undefined, {
+    timeout: 30_000,
+  });
+
+  // ------------------------------------------------------------------ the strip
+  const strip = page.getByTestId('il-cal-0');
+  await expect(strip).toBeVisible();
+  // The whole search in one line, starting at the value the *Coder* wrote — which is
+  // not in the stream at all; it is read out of the file the Rewrite panel is
+  // displaying (`readPressure`).
+  await expect(page.getByTestId('il-cal-head-0')).toHaveText(
+    'CALIBRATED · throttle 1.00 → 0.50 → 0.71 · shipped at 0.71 (2 steps)',
+  );
+  await expect(strip).toHaveAttribute('data-state', 'ok');
+  // Why an APPROVED stamp can sit under this candidate's own `✗ Gate 3` row.
+  await expect(strip).toContainText('Gate 3 missed the band');
+  const steps = strip.locator('.il-cal-step');
+  await expect(steps).toHaveCount(2);
+  // The rate measured at each value, and the harness's sentence where one failed.
+  await expect(steps.nth(0)).toContainText('throttle 0.50');
+  await expect(steps.nth(0)).toContainText('panel 0.18');
+  await expect(steps.nth(0)).toContainText('too easy');
+  await expect(steps.nth(0)).toHaveAttribute('data-ok', 'false');
+  await expect(steps.nth(1)).toContainText('throttle 0.71');
+  await expect(steps.nth(1)).toContainText('panel 0.44');
+  await expect(steps.nth(1)).toHaveAttribute('data-ok', 'true');
+  // The rejection it started from is untouched, verbatim (spec §2.2).
+  await expect(page.getByTestId('il-gates')).toContainText('0.91 vs panel');
+
+  // ---------------------------------------------------------------- the verdict
+  const verdict = page.getByTestId('il-verdict');
+  await expect(verdict).toHaveAttribute('data-kind', 'approved');
+  // 44%, not the 91% its own Gate 3 row shows: the rate quoted is the shipped
+  // file's, measured at the value the search landed on.
+  await expect(verdict).toContainText('✓ APPROVED — 44%');
+  await expect(page.getByTestId('il-stamp-raw')).toHaveText(
+    '0.44 vs panel after the Judge throttled the boss to 0.71 (2 steps)',
+  );
+  await expect(page.locator('.il-stamp-plain')).toHaveText('Metronome II is fair once the Judge eased it off');
+  // The Judge's own status line, in its own register — no spinner, nothing thinking.
+  await expect(page.getByTestId('il-status-trial')).toHaveText('✓ approved Metronome II');
+
+  // ----------------------------------------------- the diff that actually ships
+  const shipped = page.getByTestId('il-shipped');
+  await expect(shipped).toBeVisible();
+  await expect(page.getByTestId('il-shipped-head')).toContainText('throttle 1.00 → 0.71');
+  await expect(page.getByTestId('il-shipped-head')).toContainText('applied to the file above');
+  const shippedDiff = page.getByTestId('il-shipped-diff');
+  // The block the harness appends, as added lines — including the line that says
+  // who wrote it, which is the point of showing this diff at all.
+  await expect(shippedDiff).toContainText('+// ---- calibrated by the Judge');
+  await expect(shippedDiff).toContainText('+const THROTTLE = 0.71;');
+  await expect(shippedDiff).toContainText('-export function decide(view, mem) {');
+
+
+  // ------------------------------------------------ nothing on this panel is cut
+  // The strip used to live inside `.il-gates`, a ~40 px scroller, and the winning
+  // `✓ throttle 0.71` row was sliced in half by its bottom edge — which reads as a
+  // rendering bug in the one place the product is claiming rigour. It now has its
+  // own block that sizes to its content, so this asserts the geometry rather than
+  // the markup: every line of the strip inside its box, the box not scrolling, and
+  // the stamp with both of its sentences still inside the panel.
+  const fit = await page.evaluate(() => {
+    const box = document.querySelector('[data-testid="il-cals"]') as HTMLElement | null;
+    const panel = document.querySelector('[data-testid="il-beat-trial"]') as HTMLElement | null;
+    const stamp = document.querySelector('[data-testid="il-verdict"]') as HTMLElement | null;
+    if (box === null || panel === null || stamp === null) return null;
+    const b = box.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    const lines = Array.from(box.querySelectorAll<HTMLElement>('.il-cal-head, .il-cal-step, .il-cal-note'));
+    const clipped = lines.filter((line) => {
+      const r = line.getBoundingClientRect();
+      return r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.bottom > p.bottom;
+    }).length;
+    return {
+      lines: lines.length,
+      clipped,
+      boxScrolls: box.scrollHeight - box.clientHeight,
+      stampInside: stamp.getBoundingClientRect().bottom <= p.bottom + 0.5,
+      gatesInside: box.closest('.il-gates') === null,
+    };
+  });
+  // head + two steps + footnote.
+  expect(fit).toMatchObject({ lines: 4, clipped: 0, boxScrolls: 0, stampInside: true, gatesInside: true });
+  // The finished meter stands down for the strip: `200 / 200` describes the Coder's
+  // file only, and each step simulated another 200 with no bar of its own.
+  await expect(page.getByTestId('il-beat-trial')).toHaveAttribute('data-calibrated', '1');
+  await expect(page.locator('.il-meter-wrap')).toBeHidden();
+
+  const state = await page.evaluate(() => window.__rematch?.interlude?.state);
+  expect(state?.calibrations.map((c) => c.pressure)).toEqual([0.5, 0.71]);
+  expect(state?.pressure).toBe(0.71);
+  expect(state?.calibratedDiff).toBe(true);
+  expect(state?.panelRate).toBe(0.44);
+  // Not measured during calibration, so not quoted: the Mimic rate on screen would
+  // otherwise be the pre-calibration file's.
+  expect(state?.mimicRate).toBe(null);
+
+  await page.getByTestId('il-root').screenshot({ path: `${ARTIFACTS}interlude-calibration.png` });
+  await page.getByTestId('il-beat-trial').screenshot({ path: `${ARTIFACTS}interlude-calibration-trial.png` });
+  await page.getByTestId('il-beat-rewrite').screenshot({ path: `${ARTIFACTS}interlude-calibration-shipped.png` });
+
+  expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 });

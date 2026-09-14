@@ -57,16 +57,20 @@ open 'http://localhost:5173/?agent=mock&autostart=1'       # the scripted one
 
 ### Recorded runs — the demo video's source
 
-`public/recorded/` holds three runs from `pnpm eval:agents` on 2026-09-03
-(`gpt-5.4-mini`, round 2, 200 Gate 3 matches per candidate), listed in `index.json`:
+`public/recorded/` holds five runs, listed in `index.json`. The two newest are real
+local runs on `claude-cli` (`sonnet`, 2026-09-11, 200 Gate 3 matches per candidate),
+recorded from the server's own artifact with `record:run --server`; the other three are
+`pnpm eval:agents` runs from 2026-09-03 (`gpt-5.4-mini`):
 
 | `?run=` | What happens | Approved | Wall |
 |---|---|---|---|
-| `mimic-camper` *(default)* | 3 candidates rejected by Gate 3, then approval on attempt 2 | `Warden I` | 23.5 s |
+| `silo-r2-calibrated` *(default)* | Coder's counter 0.78 vs panel, too hard; the Judge throttles it to 0.50 in one calibration step → 0.49, approved on attempt 1 | `Silo I` | 44.5 s |
+| `cistern-r3-calibrated` | Round 3: 0.77 vs panel, four calibration steps to throttle 0.77 → 0.60 in band, ADAPTED met | `Cistern I` | 56.7 s |
+| `mimic-camper` | 3 candidates rejected by Gate 3, then approval on attempt 2 | `Warden I` | 23.5 s |
 | `dodger-a` | 8 candidates rejected across 3 attempts, then approval | `Lantern III` | 35.8 s |
 | `kiter-a` | 7 candidates rejected across 3 attempts, then approval | `Warden I` | 39.8 s |
 
-All three were picked for the same reason: each is **approved after at least one Gate 3
+All five share the same shape: each is **approved after at least one Gate 3
 rejection**, which is the shape spec AC 6 asks for. The terminal `done` carries the
 source the harness actually approved, and the next round really loads it through
 QuickJS — `e2e/recorded.spec.ts` proves that by reading the boss's name off the Round 2
@@ -123,10 +127,10 @@ The e2e suite does exactly this; `?speed=` makes the mock run faster than real t
 | `?agent=recorded` | Replay a real recorded run (`public/recorded/`). Offline, free, badge reads `RECORDED RUN`. |
 | `?run=<name>` | Which recorded run to play. Default: the first in `public/recorded/index.json`. |
 | `?agent=sse` | Force the live server source, with **no** mock safety net — so a broken server is visible instead of being papered over. |
-| `?speed=<n>` | Divide every mock **or recorded** delay by `n`. The mock is ~25 s at `1`, `mimic-camper` 23.5 s; the e2e suite runs at `20`. |
+| `?speed=<n>` | Divide every mock **or recorded** delay by `n`. The mock is ~25 s at `1`, `silo-r2-calibrated` 44.5 s; the e2e suite runs at `20`. |
 | `?interlude=0` | Keep the pre-interlude "Round N cleared" screen. Used by `e2e/controls.spec.ts` to test the outcome path without a 25-second overlay in the way. |
 | `?autofight=0` | Do not auto-continue 3 s after the interlude finishes; wait for the FIGHT button. |
-| `?deadline=<ms>` | Shorten the 45 s interlude deadline, to see the spec AC 5 fallback path on a machine where everything works. The value is also sent to the server as `budgetMs`, which clamps *its* loop to match — so this shortens the whole run, not just the client's patience. |
+| `?deadline=<ms>` | Set the interlude deadline outright, in either direction. Shorten it to see the spec AC 5 fallback path on a machine where everything works; lengthen it for a slow provider. The value is also sent to the server as `budgetMs`, which clamps *its* loop to match — so this sets the whole run, not just the client's patience. It beats the default **and** anything the local server advertises: without it, a probed `/api/health` reporting a `deadlineMs` larger than 45 s raises the round's budget to that number, capped at 180 s (spec §13 delta 25). |
 | `?debug=1` | Show the determinism footer under the HUD: `tick`, the session/round seed pair, tick+render ms, and the sandbox runner's call/idle/failure counts. **Off by default since 2026-09-08** (`docs/REVIEW-2026-09-08.md`, question 5): it is the clearest evidence in the UI that the simulation is seed-deterministic, and it is also technical clutter on screen during every normal fight, so it is a flag rather than a fixture. `?debug=0` and `?debug=false` are off; bare `?debug` is on. |
 
 ## The cast (Analyst, Coder, Judge)

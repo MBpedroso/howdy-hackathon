@@ -28,7 +28,14 @@
 import { CONSTANTS } from '@rematch/contract';
 import { ENGINE_CONSTANTS, TELEGRAPHS, type GameState } from '@rematch/engine';
 
-import { createEffectTracker, type Effect, type EffectTracker } from './effects.ts';
+import {
+  createEffectTracker,
+  ghosts,
+  SPARK_KINDS,
+  sparks,
+  type Effect,
+  type EffectTracker,
+} from './effects.ts';
 import { createHabitHighlightTracker, type HabitHighlight, type HabitHighlightTracker } from './habitHighlight.ts';
 import type { HotCell } from './habitCells.ts';
 import { alpha, PALETTE as C } from './palette.ts';
@@ -245,6 +252,54 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   // ---------------------------------------------------------------- effects
 
+  /**
+   * The 90s hit spark: a handful of short radial lines thrown out of the impact
+   * point and gone within the effect's own lifetime.
+   *
+   * Two colours alternate — white plus the colour of whoever landed the blow — so
+   * the burst reads as sparks rather than as a second ring. The geometry comes from
+   * `sparks(e.seed)`, which is a pure function of the event's index in the log: the
+   * same replay throws the same sparks, and drawing the same tick twice is
+   * identical, which is what the e2e screenshots rely on.
+   */
+  function drawSparks(e: Effect, t: number, fade: number): void {
+    // Warm when the boss landed it on you, cool when you landed it on something:
+    // the palette's one rule (`palette.ts`) applies to sparks too.
+    const warm = e.kind === 'playerHit' || e.kind === 'chargeHit';
+    const accent = warm ? C.telegraphSlam : C.player;
+    ctx.lineWidth = 2;
+    for (const [i, s] of sparks(e.seed).entries()) {
+      const cos = Math.cos(s.angle);
+      const sin = Math.sin(s.angle);
+      // The whole line flies outward; it does not stretch, it travels.
+      const near = 4 + (s.length + 12) * t;
+      const far = near + s.length * fade;
+      ctx.strokeStyle = alpha(i % 2 === 0 ? accent : C.spark, fade);
+      ctx.beginPath();
+      ctx.moveTo(e.x + cos * near, e.y + sin * near);
+      ctx.lineTo(e.x + cos * far, e.y + sin * far);
+      ctx.stroke();
+    }
+  }
+
+  /**
+   * The sprite flash: the struck body overpainted near-white for four ticks.
+   *
+   * Clipped to the collision circle, like `drawFace` and for the same reason — a
+   * flash that spilled past the hitbox would make the fight lie about what can be
+   * hit (SPEC §13 delta 22).
+   */
+  function flashBody(x: number, y: number, r: number, a: number): void {
+    if (a <= 0) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.clip();
+    ctx.fillStyle = alpha(C.spark, a);
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    ctx.restore();
+  }
+
   function drawEffect(e: Effect, tick: number): void {
     const t = (tick - e.born) / e.ttl;
     if (t < 0 || t > 1) return;
@@ -284,6 +339,14 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     }
   }
 
+  /** Everything `drawEffect` draws, plus the spark fan for the kinds that hurt. */
+  function drawEffectWithSparks(e: Effect, tick: number): void {
+    const t = (tick - e.born) / e.ttl;
+    if (t < 0 || t > 1) return;
+    drawEffect(e, tick);
+    if (SPARK_KINDS.includes(e.kind)) drawSparks(e, t, 1 - t);
+  }
+
   // ----------------------------------------------------------------- actors
 
   function drawProjectiles(state: GameState): void {
@@ -302,13 +365,25 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     }
   }
 
+  /**
+   * Minions are the boss's clones: the same mascot the boss is wearing, shrunk to
+   * the minion's collision circle, so a Jupiter boss spawns little Jupiters and an
+   * Earth boss little Earths. What keeps them from reading as *the* boss is the
+   * colour language — the violet disc under the face and the violet ring — and
+   * the size. Follows `fighters.boss`, so the pick screen
+   * decides the litter too. Cosmetic: the face is clipped to the hitbox exactly as
+   * the boss's is, and nothing here reads back into the simulation.
+   */
   function drawMinions(state: GameState): void {
     for (const m of state.minions) {
       const r = E.minion.radius;
       // Materialization grace: a minion that cannot hit you yet is drawn hollow.
       const arming = m.hitCooldown > E.minion.hitCooldown;
       disc(m.x, m.y, r, alpha(C.minion, arming ? 0.25 : 1));
-      ring(m.x, m.y, r + 3, alpha(C.minion, 0.55), 2);
+      // No tint over the face: at a 10 px radius a wash turns Jupiter's stripes to
+      // mud, and the violet ring below is tell enough. Arming minions are ghosted.
+      drawFace(fighters.boss, m.x, m.y, r, arming ? 0.35 : 1);
+      ring(m.x, m.y, r + 3, alpha(C.minion, 0.9), 2.5);
       const frac = m.hp / E.minion.hp;
       ctx.beginPath();
       ctx.arc(m.x, m.y, r + 7, -Math.PI / 2, -Math.PI / 2 + TAU * frac);
@@ -364,6 +439,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     // punched through the mascot, so it is drawn only when there is no face.
     const faced = drawFace(fighters.boss, b.x, b.y, r, 1);
     if (!faced) disc(b.x, b.y, r - 9, alpha(C.void, 0.55));
+    flashBody(b.x, b.y, r, effects.flash('boss', state.tick));
     ring(b.x, b.y, r + 2, alpha(C.boss, 0.8), 2);
 
     // Facing tick. It starts at the rim rather than inside the body when a face is
@@ -395,11 +471,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     const dashing = p.dashTicksLeft > 0;
 
     if (dashing) {
-      for (const point of trail) {
-        const age = state.tick - point.tick;
-        const fade = 1 - age / 12;
-        if (fade <= 0) continue;
-        disc(point.x, point.y, r * (0.35 + 0.5 * fade), alpha(C.player, 0.22 * fade));
+      // Afterimages, not a smear: two or three discrete copies of the player at the
+      // *collision* radius, stepped in alpha. Same radius as the body on purpose —
+      // a ghost drawn smaller than the hitbox would misreport where you just were.
+      for (const g of ghosts(trail, state.tick)) {
+        disc(g.x, g.y, r, alpha(C.player, g.alpha * 0.4));
+        ring(g.x, g.y, r, alpha(C.player, g.alpha), 1.5);
       }
       disc(p.x, p.y, r + 12, alpha(C.player, 0.18));
     }
@@ -411,6 +488,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     // The blink is "that hit did nothing", and it has to survive having a face on
     // top of it — so the face blinks with the body instead of covering it.
     const pFaced = drawFace(fighters.player, p.x, p.y, r, blinking ? 0.4 : 1);
+    flashBody(p.x, p.y, r, effects.flash('player', state.tick));
     ring(p.x, p.y, r + 3, alpha(dashing ? C.playerShot : C.player, 0.7), 2);
 
     // Aim line. From the centre on a bare disc; from the rim over a face, for the
@@ -468,11 +546,13 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     drawBoss(state);
     drawPlayer(state, effects.trail());
 
-    for (const e of effects.effects()) drawEffect(e, tick);
+    for (const e of effects.effects()) drawEffectWithSparks(e, tick);
 
+    // `hitFlash` is now a hard 2-frame step rather than a ramp (`effects.ts`), so
+    // this pass is on at one strength or off — the arcade's palette swap.
     const flash = effects.hitFlash(tick);
     if (flash > 0) {
-      ctx.fillStyle = alpha(C.boss, 0.16 * flash);
+      ctx.fillStyle = alpha(C.boss, 0.22 * flash);
       ctx.fillRect(0, 0, ARENA, ARENA);
     }
   }

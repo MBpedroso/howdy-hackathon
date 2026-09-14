@@ -14,7 +14,18 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { hashValue, summarizeReplay, type GameState, type PlayerInput } from '@rematch/engine';
 import { createSandbox, type SandboxFactory } from '@rematch/sandbox';
 import type { StrategyRunner } from '@rematch/contract';
-import { BOT_KINDS, PANEL, camper, dodger, kiter, makeBot, makeMimic, rusher, type PlayerBot } from '../src/bots/index.ts';
+import {
+  BOT_KINDS,
+  PANEL,
+  accuracyFromSummary,
+  camper,
+  dodger,
+  kiter,
+  makeBot,
+  makeMimic,
+  rusher,
+  type PlayerBot,
+} from '../src/bots/index.ts';
 import { playMatchState, playerSeed, runMatchWith, summarizeMatch } from '../src/sim/runMatch.ts';
 import { readGood } from './helpers.ts';
 
@@ -195,6 +206,54 @@ describe('the Mimic', () => {
     };
     const result = runMatchWith(chaser, makeMimic(empty), 1);
     expect(result.ticks).toBeGreaterThan(0);
+  });
+
+  /**
+   * Calibration (analysis item 3): `accuracy` used to be fixed at 0.72 regardless
+   * of who the Mimic imitated. It is now derived from the summary's real hit rate
+   * (`boss.damageTaken / player.shots`) unless a caller overrides it — and that
+   * override still has to work, because Gate 3's `accuracy` probe path
+   * (`measureMimicWinRate`'s `opts.accuracy`) and every existing `makeMimic`
+   * caller that passes one rely on it.
+   */
+  describe('accuracy calibration', () => {
+    it('derives a sharper accuracy for a summary with a higher measured hit rate', () => {
+      const sharp: ReturnType<typeof summarizeReplay> = {
+        ...summarizeMatch(idle, camper(), 11),
+        player: { ...summarizeMatch(idle, camper(), 11).player, shots: 100 },
+        boss: { ...summarizeMatch(idle, camper(), 11).boss, damageTaken: 100 },
+      };
+      const wild = { ...sharp, player: { ...sharp.player, shots: 100 }, boss: { ...sharp.boss, damageTaken: 20 } };
+      expect(accuracyFromSummary(sharp)).toBeGreaterThan(accuracyFromSummary(wild));
+    });
+
+    it('never derives a blind (0) or laser-perfect (1) accuracy, even from a degenerate summary', () => {
+      const base = summarizeMatch(idle, camper(), 11);
+      const noHits = { ...base, player: { ...base.player, shots: 200 }, boss: { ...base.boss, damageTaken: 0 } };
+      const aboveHundredPercent = { ...base, player: { ...base.player, shots: 2 } }; // damageTaken unchanged, hits > shots
+      for (const summary of [noHits, aboveHundredPercent]) {
+        const acc = accuracyFromSummary(summary);
+        expect(acc).toBeGreaterThan(0);
+        expect(acc).toBeLessThan(1);
+      }
+    });
+
+    it('falls back to the old fixed default when a summary carries no shots at all', () => {
+      const base = summarizeMatch(idle, camper(), 11);
+      const noShots = { ...base, player: { ...base.player, shots: 0 } };
+      expect(accuracyFromSummary(noShots)).toBe(0.72);
+    });
+
+    it('an explicit opts.accuracy still overrides the derived value', () => {
+      const summary = summarizeMatch(idle, camper(), 11);
+      const derived = accuracyFromSummary(summary);
+      const overridden = makeMimic(summary, { accuracy: derived + 0.1 > 1 ? derived - 0.1 : derived + 0.1 });
+      // The override took effect: replaying with the bare derived accuracy (no
+      // override) and with the override must not collapse to the same trace.
+      const overriddenTrace = inputTrace(chaser, overridden, 5);
+      const derivedTrace = inputTrace(chaser, makeMimic(summary), 5);
+      expect(hashValue(overriddenTrace)).not.toBe(hashValue(derivedTrace));
+    });
   });
 });
 

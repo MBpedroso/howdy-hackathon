@@ -34,12 +34,14 @@
  * a few seconds; the rates are stable to ±0.03 at this count (see the AI-DEV-LOG).
  */
 import { describe, expect, it } from 'vitest';
-import { ACTIVITY, ADAPTED_MIN, BAND, gate3Balance } from '../src/index.ts';
+import { ACTIVITY, BAND, adaptedMinFor, gate3Balance } from '../src/index.ts';
 import { readCandidate, readGood, readSummary, type GoodFixture } from './helpers.ts';
 
 /** Half of these go to the panel, half to the Mimic. */
 const MATCHES = 120;
 const [LO, HI] = BAND[2];
+/** Round 2's ADAPTED target. Advisory there, and this suite is a round-2 suite. */
+const ADAPTED_GOAL = adaptedMinFor(2);
 
 type Row = {
   name: string;
@@ -99,7 +101,7 @@ describe('balance regression', () => {
       ' round 2',
     ];
     const lines = [
-      `\nGate 3, round 2 — band ${LO.toFixed(2)}–${HI.toFixed(2)}, ADAPTED >= ${ADAPTED_MIN.toFixed(2)}, ACTIVE <= ${ACTIVITY.maxIdleRunTicks} ticks, ${MATCHES} matches each`,
+      `\nGate 3, round 2 — band ${LO.toFixed(2)}–${HI.toFixed(2)}, ADAPTED >= ${ADAPTED_GOAL.toFixed(2)}, ACTIVE <= ${ACTIVITY.maxIdleRunTicks} ticks, ${MATCHES} matches each`,
       header.join(' '),
       ...rows.map((r) =>
         [
@@ -154,7 +156,7 @@ describe('balance regression', () => {
     const candidate = rows.find((r) => r.name === 'round2-candidate')!;
     expect(candidate.panel).toBeGreaterThanOrEqual(LO);
     expect(candidate.panel).toBeLessThanOrEqual(HI);
-    expect(candidate.mimic).toBeGreaterThanOrEqual(ADAPTED_MIN);
+    expect(candidate.mimic).toBeGreaterThanOrEqual(ADAPTED_GOAL);
     expect(candidate.idleRun).toBeLessThanOrEqual(ACTIVITY.maxIdleRunTicks);
     expect(candidate.approved).toBe(true);
   }, 120_000);

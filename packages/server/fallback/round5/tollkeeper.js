@@ -9,7 +9,7 @@
 // player who only shoots when the screen is clear.
 //
 // It is the only boss here that is genuinely good at every range but one. Measured
-// against the panel it takes 1.00 off a kiter and 1.00 off a perfect dodger, 0.52 off a
+// against the panel it takes 1.00 off a kiter and 1.00 off a perfect dodger, 0.96 off a
 // camper — and 0.00 off a rusher.
 //
 // That last number is the whole design. Its hole is deliberate and it is the one every
@@ -20,18 +20,31 @@
 // The reload roll is the balance dial and also the boss's tell: a bit over a third of
 // its breaths are spent reloading, and those pauses are the windows to cross in.
 //
+// ## Retuned 2026-09-11, for round 5's new band (spec §13, delta 24)
+//
+// This is the one file in the pool that needed nothing invented: it was *detuned* to
+// fit the old 0.55-0.70 ceiling and the detune is simply given back. When the resting
+// `idle` became a patrol (below), this boss reached 0.74 and `SPAWN_EVERY` was pushed
+// from 400 to 725 to pay for it — which is what took the camper's rate down to 0.52,
+// on a boss whose whole design is a minion standing in the cell the player lives in.
+// Round 5's band is 0.65-0.95 now, so the siege can keep its guns: `SPAWN_EVERY` 725 ->
+// 500 puts the camper back at 0.96 and the panel at 0.74, which is where this boss
+// measured before the ceiling required it to be worse.
+//
+// Nothing else changed, and the hole stays open: 0.00 against a rusher, by design.
+//
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round5/tollkeeper.js
 // --round 5 --matches 200`:
 //
-//     panel 0.63   (Camper 0.52, Kiter 1.00, Rusher 0.00, Dodger 1.00)   band 0.55-0.70
-//     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
+//     panel 0.74   (Camper 0.96, Kiter 1.00, Rusher 0.00, Dodger 1.00)   band 0.65-0.95
+//     0.733 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.08 inside both edges
+//     longest motionless run 1 tick of the 90 Gate 3's ACTIVE assertion allows
 //
-// Two things moved when the resting `idle` became a patrol and the retreat learned not
-// to grind into a wall. A defensive player used to beat this boss by walking it into a
-// corner, where it froze for 343 consecutive ticks; now it slides along the wall, and
-// nothing that keeps its distance beats it any more. That took the panel rate to 0.74,
-// so `SPAWN_EVERY` went from 400 to 725 — which is where the camper's 0.52 comes from,
-// and it is the reason this boss is still beatable by simply walking in.
+// The resting `idle` became a patrol and the retreat learned not to grind into a wall
+// on 2026-09-04: a defensive player used to beat this boss by walking it into a corner,
+// where it froze for 343 consecutive ticks. Now it slides along the wall, and nothing
+// that keeps its distance beats it any more.
 //
 // Reproducible: the seed set is fixed (`seedsFor`), and where this strategy rolls
 // `rand()` that PRNG is seeded per match, so the numbers above are the same on every
@@ -72,7 +85,7 @@ const BACK_OFF = 190;      // never trade at contact
 const BURST_MIN = 300;
 const BURST_MAX = 470;
 const ZONE_CELLS = 1.5;    // "inside the zone", in heat-map cells
-const SPAWN_EVERY = 725;
+const SPAWN_EVERY = 500;
 // The balance dial, and the gun crew's rhythm. Once per breath the battery rolls
 // whether it is firing or reloading; `rand()` is the engine's seeded PRNG, so the
 // match replays byte-for-byte but the player cannot time the gaps by counting.

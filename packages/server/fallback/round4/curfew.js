@@ -10,8 +10,7 @@
 // cooldown on where the player *is*: its cone bursts live in a narrow 240-372 px band
 // that only just grazes the ring a kiting player holds, and it walks backwards rather
 // than trade at contact. The one exception is a slam on its own feet when someone is
-// inside `CONTACT`, which is the only price it charges for aggression — and not a
-// large one: the Rusher bot, which dives everything, beats this boss 1.00 of the time.
+// inside `CONTACT`, which is the only price it charges for aggression.
 //
 // What it actually beats is habit. Measured against the panel: a camper 1.00, a
 // kiting player 0.48 — and that 0.48 is bought by the *minion* standing in the zone,
@@ -19,10 +18,24 @@
 // always standing and this boss measures 0.55, at 460 it is barely ever standing and it
 // measures 0.32, with nothing usable in between. The dial is `ENFORCE_CHANCE` below.
 //
+// ## Retuned 2026-09-11, for round 4's new band (spec §13, delta 24)
+//
+// Round 4's band moved to 0.60-0.75 and this boss sat at 0.55, losing every match to
+// the Rusher. The cause was a number that had never been derived from anything:
+// `CONTACT`, the range inside which the curfew applies to the boss's own feet, was 70.
+// A slam covers 110 px and the Rusher holds 95 (its own `KNIFE_RANGE`: the boss's
+// radius, the player's, and 55 px of clearance) — so the one price this boss charged
+// for aggression was posted 25 px inside where aggression actually stands, and was
+// never collected. `CONTACT` is the slam's own radius now, which is the only value
+// that means what the comment says it means. Rusher 0.00 -> 0.40, one edit, nothing
+// else touched: `ENFORCE_CHANCE`, the cone band and the retreat are all unchanged.
+//
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round4/curfew.js
 // --round 4 --matches 200`:
 //
-//     panel 0.55   (Camper 1.00, Kiter 0.48, Rusher 0.00, Dodger 0.72)   band 0.50-0.65
+//     panel 0.65   (Camper 1.00, Kiter 0.48, Rusher 0.40, Dodger 0.72)   band 0.60-0.75
+//     0.700 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.05 inside both edges
 //     longest motionless run 1 tick of the 90 Gate 3's ACTIVE assertion allows
 //
 // Two things moved when the resting `idle` became a patrol and the retreat learned not
@@ -68,7 +81,10 @@ const REFRESH = 50;
 const ZONE_CELLS = 1.7;
 const HOLD = 260;          // preferred distance from the player
 const BACK_OFF = 200;
-const CONTACT = 70;       // inside this the curfew applies to the boss's own feet
+/** Inside this the curfew applies to the boss's own feet. It is the slam's own radius
+ *  (110 px), not a smaller number that feels like "on top of me": a Rusher stands at
+ *  95 px and a 70 px threshold never fired at it at all. */
+const CONTACT = 110;
 const BURST_MIN = 240;
 const BURST_MAX = 372;     // just far enough to graze a kiter's 340 px ring
 const SPAWN_EVERY = 300;   // a standing minion is most of this boss's pressure

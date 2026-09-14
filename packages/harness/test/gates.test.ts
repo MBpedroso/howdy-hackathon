@@ -13,8 +13,8 @@ import { CONSTANTS } from '@rematch/contract';
 import { MONOTONIC_STEP_MS } from '@rematch/sandbox';
 import {
   ACTIVITY,
-  ADAPTED_MIN,
   BAND,
+  adaptedMinFor,
   DEFAULT_MATCHES,
   MEASURE_SLACK,
   gate1Static,
@@ -23,7 +23,18 @@ import {
   gate3Plan,
   gate4Perf,
 } from '../src/index.ts';
+import { readFileSync } from 'node:fs';
 import { GOOD_FIXTURES, readBad, readCandidate, readGood, readSummary } from './helpers.ts';
+
+/**
+ * A strategy that really ships, read from where the server keeps it.
+ *
+ * Gate 3's round-3-and-up assertions need a file that passes FAIR and ACTIVE on its
+ * own, and the pool is where those live — `activity.test.ts` reads them the same way.
+ */
+function readShipped(path: string): string {
+  return readFileSync(new URL(`../../server/${path}`, import.meta.url), 'utf8');
+}
 
 describe('Gate 1 — static', () => {
   it.each(GOOD_FIXTURES)('%s passes', (name) => {
@@ -295,7 +306,7 @@ describe('Gate 3 — balance', () => {
     const [lo, hi] = BAND[2];
     expect(detail.panel.winRate).toBeGreaterThanOrEqual(lo);
     expect(detail.panel.winRate).toBeLessThanOrEqual(hi);
-    expect(detail.mimic.winRate).toBeGreaterThanOrEqual(ADAPTED_MIN);
+    expect(detail.mimic.winRate).toBeGreaterThanOrEqual(adaptedMinFor(2));
     // The budget is split down the middle (spec §6.2), N/2 each.
     expect(detail.panel.matches).toBe(DEFAULT_MATCHES / 2);
     expect(detail.mimic.matches).toBe(DEFAULT_MATCHES / 2);
@@ -348,10 +359,107 @@ describe('Gate 3 — balance', () => {
     };
     // The premise of the test: it really did miss ADAPTED.
     expect(detail.adapted.met).toBe(false);
-    expect(detail.mimic.winRate).toBeLessThan(ADAPTED_MIN);
+    expect(detail.mimic.winRate).toBeLessThan(adaptedMinFor(2));
     // …and it shipped anyway, with the miss on the record.
     expect(result.ok).toBe(true);
     expect(detail.adapted.blocking).toBe(false);
+  }, 60_000);
+
+  /**
+   * Delta 24, the other half: the same shortfall **rejects** from round 3.
+   *
+   * `fallback/round4/bellringer` is the clean case, and it has to be a real shipped
+   * file rather than a fixture: the claim is that a boss can be fair, active and
+   * still refused for not having read this player, so the file has to pass FAIR and
+   * ACTIVE on its own. Against a Mimic of the kiter replay — a player it was not
+   * written for — it scores 0.50, and round 4 asks for 0.85.
+   */
+  it('rejects a fair, active boss that did not adapt, from round 3', async () => {
+    const result = await gate3Balance(readShipped('fallback/round4/bellringer.js'), {
+      round: 4,
+      matches: 40,
+      mimicSummary: readSummary('kiter'),
+    });
+    const detail = result.detail as {
+      panel: { winRate: number };
+      adapted: { met: boolean; blocking: boolean };
+      thresholds: { adaptedMin: number; adaptedBlocking: boolean };
+    };
+    // The premise: FAIR and ACTIVE had nothing to say.
+    const [lo, hi] = BAND[4];
+    expect(detail.panel.winRate).toBeGreaterThanOrEqual(lo);
+    expect(detail.panel.winRate).toBeLessThanOrEqual(hi);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // ADAPTED alone refused it, and the sentence is as concrete as FAIR's — this is
+    // the string the Coder gets back verbatim on the retry (spec §6.3).
+    expect(result.reason).toMatch(/^0\.\d\d vs Mimic — didn't adapt \(need >= 0\.85 for round 4\)$/);
+    expect(result.reason).not.toMatch(/not blocking/);
+    expect(detail.adapted).toEqual({ met: false, blocking: true });
+    expect(detail.thresholds).toMatchObject({ adaptedMin: 0.85, adaptedBlocking: true });
+  }, 60_000);
+
+  /** Each blocking round asks for its own number, and says which round asked. */
+  it('escalates the ADAPTED threshold 0.75 / 0.85 / 0.95 across rounds 3, 4 and 5', async () => {
+    for (const [round, min] of [
+      [3, '0.75'],
+      [4, '0.85'],
+      [5, '0.95'],
+    ] as const) {
+      const result = await gate3Balance(readGood('idle'), {
+        round,
+        matches: 40,
+        mimicSummary: readSummary('camper'),
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain(`didn't adapt (need >= ${min} for round ${round})`);
+    }
+  }, 60_000);
+
+  /**
+   * The relative route still satisfies a blocking round, and it is the reason
+   * blocking is survivable: a candidate that cannot reach the absolute number can
+   * still prove it adapted by beating the boss it replaces against the same Mimic.
+   */
+  it('accepts the relative route in a blocking round, and names both routes when it fails', async () => {
+    const source = readShipped('fallback/round4/bellringer.js');
+    const opts = { round: 4, matches: 40, mimicSummary: readSummary('kiter') } as const;
+
+    // 0.50 vs the Mimic is short of 0.85, but 0.10 clear of an incumbent at 0.35.
+    const beaten = await gate3Balance(source, { ...opts, adaptedBase: 0.35 });
+    const beatenDetail = beaten.detail as { adapted: { met: boolean } };
+    expect(beatenDetail.adapted.met).toBe(true);
+    expect(beaten.ok).toBe(true);
+
+    // Against a stronger incumbent neither route is met, and the sentence carries the
+    // arithmetic of both so the Coder knows which one is closer.
+    const missed = await gate3Balance(source, { ...opts, adaptedBase: 0.71 });
+    expect(missed.ok).toBe(false);
+    if (missed.ok) return;
+    expect(missed.reason).toContain(
+      "didn't adapt (need >= 0.85 for round 4, or >= 0.81 = incumbent 0.71 + 0.10)",
+    );
+  }, 60_000);
+
+  /**
+   * Round 2 is untouched by delta 24, and this is the assertion that says so: the
+   * numbers round 2 reports are quoted in the recorded run and in `SYSTEM.md` §6.
+   */
+  it('leaves round 2 advisory: the same miss that rejects in round 4 ships in round 2', async () => {
+    const result = await gate3Balance(readCandidate(), {
+      round: 2,
+      matches: 40,
+      mimicSummary: readSummary('kiter'),
+      adaptedBase: 0.71,
+    });
+    expect(result.ok).toBe(true);
+    const detail = result.detail as {
+      adapted: { met: boolean; blocking: boolean };
+      thresholds: { adaptedMin: number; adaptedBlocking: boolean };
+    };
+    expect(detail.adapted).toEqual({ met: false, blocking: false });
+    expect(detail.thresholds).toMatchObject({ adaptedMin: 0.7, adaptedBlocking: false });
   }, 60_000);
 
   /**
@@ -463,7 +571,7 @@ describe('Gate 3 — balance', () => {
     const round5 = await gate3Balance(source, { round: 5, matches: 40 });
     expect(round2.ok).toBe(true);
     expect(round5.ok).toBe(false);
-    if (!round5.ok) expect(round5.reason).toMatch(/too easy \(band 0\.55–0\.70 for round 5/);
+    if (!round5.ok) expect(round5.reason).toMatch(/too easy \(band 0\.65–0\.95 for round 5/);
   }, 60_000);
 
   it('reports one progress bar across both halves of the budget', async () => {

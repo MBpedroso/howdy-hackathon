@@ -15,6 +15,16 @@ export function readHarnessFixture(name: string): string {
   return readFileSync(new URL(`../../harness/test/fixtures/${name}.js`, import.meta.url), 'utf8');
 }
 
+/**
+ * A fixture this package owns, because it is about this package's own mechanism:
+ * `too-hard-pacer` is the round 2 fallback with its measured levers turned up until
+ * it is over the band, and it exists so the Judge's throttle can be tested against a
+ * file that really is too hard (see `test/calibrate.test.ts`).
+ */
+export function readAgentFixture(name: string): string {
+  return readFileSync(new URL(`./fixtures/${name}.js`, import.meta.url), 'utf8');
+}
+
 export function cannedSummary(name: CannedName): ReplaySummary {
   return loadCanned(name).summary;
 }

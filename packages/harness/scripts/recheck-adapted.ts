@@ -35,7 +35,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ReplaySummary } from '@rematch/engine';
-import { ADAPTED_MARGIN, ADAPTED_MIN, adapted, bandFor, gate3Balance, measureMimicWinRate } from '../src/index.ts';
+import { ADAPTED_MARGIN, adapted, adaptedMinFor, bandFor, gate3Balance, measureMimicWinRate } from '../src/index.ts';
 
 const ROOT = new URL('../../../', import.meta.url).pathname;
 
@@ -106,7 +106,7 @@ const round1Source = readFileSync(ROUND1, 'utf8');
 
 console.log(`eval:       ${evalPath}`);
 console.log(`candidates: ${candidates.length} unique sources`);
-console.log(`ADAPTED:    absolute >= ${ADAPTED_MIN}, or base + ${ADAPTED_MARGIN}\n`);
+console.log(`ADAPTED:    absolute >= ${adaptedMinFor(2)}, or base + ${ADAPTED_MARGIN}\n`);
 
 // ---------------------------------------------------------------- the baselines
 const replays = [...new Set(candidates.map((c) => c.replay))].sort();
@@ -206,7 +206,7 @@ if (argv.includes('--write')) {
         generatedAt: new Date().toISOString(),
         eval: evalPath,
         matches: MATCHES,
-        thresholds: { adaptedMin: ADAPTED_MIN, adaptedMargin: ADAPTED_MARGIN, fair: bandFor(2) },
+        thresholds: { adaptedMin: adaptedMinFor(2), adaptedMargin: ADAPTED_MARGIN, fair: bandFor(2) },
         baselines: Object.fromEntries(bases),
         summary: {
           graded: rows.length,

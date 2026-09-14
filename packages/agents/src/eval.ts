@@ -41,6 +41,14 @@ export type EvalRun = {
   modelCalls: number;
   /** Files written across every attempt — `attempts x K` when nothing was skipped. */
   candidatesEvaluated: number;
+  /**
+   * Extra gate passes the Judge's own throttle search spent (`src/calibrate.ts`),
+   * summed over every candidate of every attempt.
+   *
+   * Absent when the run throttled nothing, so an eval JSON from before the throttle
+   * existed and one whose candidates all landed on their own are the same shape.
+   */
+  calibrationSteps?: number;
   events: RewriteEvent[];
   result: RewriteResult;
 };
@@ -165,6 +173,10 @@ async function runOne(
     .map((g) => `${g.gate} ${g.name}`);
 
   const candidatesEvaluated = result.attempts.reduce((n, a) => n + (a.candidates?.length ?? 1), 0);
+  const calibrationSteps = result.attempts.reduce(
+    (n, a) => n + (a.candidates ?? []).reduce((m, c) => m + (c.calibration?.steps ?? 0), 0),
+    0,
+  );
 
   return {
     replay: name,
@@ -172,6 +184,7 @@ async function runOne(
     approved: result.approved,
     attempts: result.attempts.length,
     candidatesEvaluated,
+    ...(calibrationSteps === 0 ? {} : { calibrationSteps }),
     gatesFailed,
     ...(result.approved ? { strategyName: result.meta.name } : { failureReason: result.reason }),
     ms,
@@ -242,6 +255,7 @@ export function formatEvalTable(report: EvalReport): string {
     'appr',
     'att',
     'cand',
+    'calib',
     'gates rejected'.padEnd(22),
     'strategy / why'.padEnd(22),
     '   wall',
@@ -257,6 +271,9 @@ export function formatEvalTable(report: EvalReport): string {
       (r.approved ? ' ✓  ' : ' ✗  ').padEnd(4),
       String(r.attempts).padStart(3),
       String(r.candidatesEvaluated).padStart(4),
+      // Blank rather than 0 when nothing was calibrated: the column has to read as
+      // "the Judge did not need to touch this run", not as a measurement of zero.
+      (r.calibrationSteps === undefined ? '—' : String(r.calibrationSteps)).padStart(5),
       (r.gatesFailed.join(', ') || '—').padEnd(22).slice(0, 22),
       (r.strategyName ?? r.failureReason ?? '—').padEnd(22).slice(0, 22),
       `${(r.ms / 1000).toFixed(1)}s`.padStart(7),

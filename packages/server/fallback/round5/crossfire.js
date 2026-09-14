@@ -5,20 +5,35 @@
 // that away. It finds the wall the player is nearest to, walks to the *opposite* side
 // of them, and squeezes: the slam goes into the escape lane between the player and open
 // space rather than onto the player themselves, and the cone burst goes down the
-// squeeze line, so dodging the shots means dodging into the wall.
+// squeeze line — at where the player will be when it arrives — so dodging the shots
+// means dodging into the wall.
 //
 // The arena is 800x800 and the player moves 3.6 px/tick against the boss's 2.6, so
 // this can never be a trap the player cannot escape — they are always faster. What it
 // costs them is the ground they wanted, and a player pressed into a corner has no room
 // to read the next telegraph. The counter is to break the squeeze early and cross the
-// middle, which is why this boss opens the middle to do it — and it works: a player who
-// simply holds a long orbit and never lets the wall get behind them beats this boss
-// 0.92 of the time, which is the widest hole of any Round 5 boss here.
+// middle, which is why this boss opens the middle to do it.
+//
+// ## Retuned 2026-09-11, for round 5's new band (spec §13, delta 24)
+//
+// Round 5's band moved to 0.65-0.95 and this boss sat at 0.61, with one hole doing all
+// the damage: a player who simply held a long orbit beat it 0.92 of the time. The
+// reason was arithmetic, not design. A boss projectile travels 5.5 px/tick, so a cone
+// thrown 340 px down the squeeze line is 62 ticks in the air, and a kiter orbiting at
+// 3.6 px/tick is 220 px from where it was aimed by the time it arrives. This boss was
+// not missing its shots; it was aiming at a place the player had already left.
+//
+// `leadAngle` solves the intercept — two passes, no new primitive, nothing fired more
+// often, `PRESS_CHANCE` untouched at 0.50 — and Kiter goes 0.08 -> 0.52. The squeeze
+// still has its counter: cross the middle before the wall is behind you, and none of
+// this geometry gets set up in the first place.
 //
 // Measured through Gate 3 at 200 matches — `pnpm harness packages/server/fallback/round5/crossfire.js
 // --round 5 --matches 200`:
 //
-//     panel 0.61   (Camper 1.00, Kiter 0.08, Rusher 0.52, Dodger 0.84)   band 0.55-0.70
+//     panel 0.73   (Camper 1.00, Kiter 0.52, Rusher 0.44, Dodger 0.96)   band 0.65-0.95
+//     0.750 at the 120 matches `fallback.test.ts` re-checks, so both counts sit
+//       at least 0.08 inside both edges
 //     longest motionless run 0 ticks of the 90 Gate 3's ACTIVE assertion allows
 //
 // Holding the pressing post used to mean standing on it — up to 485 consecutive
@@ -124,9 +139,11 @@ export function decide(view, mem) {
     };
   }
 
-  // 3. The cone down the squeeze line, so sidestepping it costs ground too.
+  // 3. The cone down the squeeze line, so sidestepping it costs ground too — thrown
+  //    at where the player will be when it arrives rather than at where they are
+  //    (`leadAngle`), because at this range those are two different places.
   if (cd.burst === 0 && armed && dist > CONE_MIN && dist < CONE_MAX) {
-    return { type: 'burst', angle: angle, count: 5 };
+    return { type: 'burst', angle: leadAngle(boss, player, angle), count: 5 };
   }
 
   // 4. The charge is used to shut the lane, not to deal damage: it goes down the
@@ -162,6 +179,35 @@ export function decide(view, mem) {
   return { type: 'move', dx: tx / tmag, dy: ty / tmag };
 }
 
+
+/**
+ * Where to aim a cone so the shots and the player arrive together.
+ *
+ * A boss projectile travels 5.5 px/tick, so a cone thrown 340 px down the squeeze line
+ * is 62 ticks in the air — and a player orbiting at 3.6 px/tick is 220 px from where it
+ * was aimed by the time it gets there. Aiming at the present position is therefore not
+ * aiming at all at this range, which is most of why a kiting player used to walk
+ * through this boss. Two passes of the standard intercept iteration: guess the time of
+ * flight from the present range, move the player along their own velocity by that much,
+ * re-measure.
+ */
+function leadAngle(boss, player, fallback) {
+  const SHOT_SPEED = 5.5;
+  const vx = typeof player.vx === 'number' && isFinite(player.vx) ? player.vx : 0;
+  const vy = typeof player.vy === 'number' && isFinite(player.vy) ? player.vy : 0;
+  let t = 0;
+  let ax = player.x;
+  let ay = player.y;
+  for (let i = 0; i < 2; i = i + 1) {
+    ax = player.x + vx * t;
+    ay = player.y + vy * t;
+    t = Math.sqrt((ax - boss.x) * (ax - boss.x) + (ay - boss.y) * (ay - boss.y)) / SHOT_SPEED;
+  }
+  const lx = ax - boss.x;
+  const ly = ay - boss.y;
+  if (Math.sqrt(lx * lx + ly * ly) < 0.001) return fallback;
+  return Math.atan2(ly, lx);
+}
 
 /** The resting patrol: a triangle wave in x through (`ax`, `ay`). Never `idle`. */
 function patrol(view, ax, ay) {

@@ -1,0 +1,53 @@
+# Fly.io config for @rematch/server — the PAID path, kept but NOT used for the submission.
+# Decision 2026-09-11: zero spend. The published site is the static web alone, playing a
+# recorded real run (README "Deploy"). This file and the Dockerfile stay because they were
+# built and verified end to end (docs/evidence/prod-run-2026-09-10-trial-cut.json), and a
+# card on the Fly org is the only thing between them and a live loop.
+# Deploy with `fly deploy --ha=false`.
+#
+# One machine, never scaled to zero: a cold start inside the interlude's 45 s budget is a
+# bug, and the daily spend cap (REMATCH_MAX_REWRITES_PER_DAY) lives in process memory, so
+# a second machine would silently double it. `shared-cpu-2x` because a no-payment-method
+# org is limited to 2 cores and no performance machines (tried 2026-09-10); Gate 3 keeps
+# its 200 matches on 2 workers and simply takes longer. REMATCH_MATCHES is the knob if
+# the 40 s deadline starts being hit. The OpenAI key is a secret, not env:
+#   fly secrets set OPENAI_API_KEY=… -a rematch-api
+
+app = 'rematch-api'
+primary_region = 'gru'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  HOST = '0.0.0.0'
+  PORT = '8080'
+  REMATCH_ARTIFACT_DIR = '/tmp/rematch-artifacts'
+  REMATCH_MATCHES = '200'
+  REMATCH_MAX_REWRITES_PER_DAY = '40'
+  REMATCH_ORIGIN = 'https://rematch-beryl-eta.vercel.app,https://rematch-portfolio-5152.vercel.app'
+  REMATCH_PROVIDER = 'openai'
+  REMATCH_WORKERS = '2'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 40
+    soft_limit = 20
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/api/health'
+
+[[vm]]
+  size = 'shared-cpu-2x'
+  memory = '2gb'

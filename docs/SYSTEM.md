@@ -325,28 +325,69 @@ is what makes the rejections in the interlude evidence rather than anecdote.
 |---|---|---|---|
 | 1 | `static` | any `staticCheck` violation → reject. Names the first 3 with line numbers, counts the rest | ~1–4 ms |
 | 2 | `fuzz` | 500 seeded states (corner cases first) + 60 consecutive ticks, in QuickJS. **Any** runner failure (throw / timeout / memory), even 1 in 500 → reject. Invalid-action rate > **2%** → reject. On-cooldown-action rate > **20%** → reject | ~30–60 ms |
-| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR** (rejects): panel win rate ∈ `BAND[round]`. **ACTIVE** (rejects): longest motionless run ≤ **90 ticks** (1.5 s), p90 idle fraction ≤ **0.25**, and range over a match ≥ **56 px**. **ADAPTED** (reported, not enforced since 2026-09-08 — SPEC §13 delta 23): Mimic win rate ≥ **0.70** | seconds — worker-parallel |
+| 3 | `balance` | `matches` (default **200**) split half vs the Mimic, half across the four panel bots, fixed seed set. **FAIR** (rejects): panel win rate ∈ `BAND[round]`. **ACTIVE** (rejects): longest motionless run ≤ **90 ticks** (1.5 s), p90 idle fraction ≤ **0.25**, and range over a match ≥ **56 px**. **ADAPTED**: Mimic win rate ≥ `ADAPTED_MIN[round]` — **0.70 reported and not enforced in round 2** (SPEC §13 delta 23), **0.75 / 0.85 / 0.95 and rejecting in rounds 3 / 4 / 5** (delta 24); either the absolute number or the incumbent's rate against the same Mimic + **0.10** satisfies it | seconds — worker-parallel |
 | 4 | `perf` | `decide` **p99 ≤ 2 ms** over ~2000 calls: 60% from real match trajectories vs the four bots, 40% topped up from Gate 2's corpus. Measured with an 8× relaxed deadline and judged against the real one, so the reported number is honest. A memory failure is fatal regardless of timing | ~60 ms |
 
 Gate 1 is first because it costs ~1 ms: a strategy that mentions `Date` never boots a
 QuickJS runtime (spec AC 8, asserted in `packages/harness/test/runGates.test.ts` by
 handing Gate 2 a sandbox that throws if it is ever used).
 
+### Calibration — the Judge's one knob (2026-09-11)
+
+The gates cost about a second per candidate; a Coder call on `claude-cli` costs 20–37 s
+and the Analyst 14–27 s. Three real rounds showed what that buys when the Coder is asked
+to *aim* a number: for a 0.35–0.50 band it wrote 0.56, 0.00, 0.84, 0.57, 0.65 — every
+file a plausible counter to that player, every file too hot or too cold — and the 90 s
+budget ran out after two attempts. So the aiming moved to the side that is cheap and
+deterministic. `agents/src/calibrate.ts`: when a candidate fails Gate 3 on **FAIR too
+hard only** — ACTIVE clean, ADAPTED not blocking, both read from `detail`, never from the
+sentence — the loop appends a marked block that renames the Coder's `init`/`decide` and
+wraps them with a `THROTTLE ∈ [0.1, 1]`: after each attack the boss is held for
+`round((1/THROTTLE − 1) × 45)` ticks and marches straight legs while held (a curve would
+make it *harder* to hit — measured, 0.46 → 0.53 on the round-2 fallback — so the rest is
+the repo's own square patrol). Every value goes through **all four gates** again; the
+search brackets ×0.5, then bisects at the geometric midpoint, six steps at most, and ships
+the first value that passes. Downward only: a boss that is too easy still goes back to the
+Coder, because a knob that is forbidden from touching what the boss reads cannot add a
+read.
+
+Two things it is not. It is not a model call — the Judge stays a pure function of source
+and seed, and the appended block says in its first line who wrote it. And it is not the
+learning: the throttle changes how *often* the same read of the player lands, not what
+is read. The first design asked the **Coder** to declare the knob; live, its `PRESSURE`
+scaled slam odds while the kills came from burst and minions, and the panel measured
+0.86 → 0.90 → 0.84 across 1.0 / 0.5 / 0.25 (`docs/evidence/local-live-2026-09-11-coder-knob-flat.json`).
+A knob wired by a language model is not monotone; one owned by the harness is, by
+construction (fixture `too-hard-pacer.js`: 0.75 → 0.41 → 0.00). First live results, same
+provider: round 2 approved in 44 s (0.78 → 0.49 at throttle 0.5), round 3 in 57 s
+(0.77 → 0.60 at 0.771, ADAPTED met) — `docs/evidence/local-live-2026-09-11-r{2,3}-throttle.json`.
+The attempt also ends at the first approval now; siblings that land afterwards are
+logged with their source and `skippedReason: 'approved-sibling'`, not judged.
+
 ### The fairness band (`gates/balanceConfig.ts`)
 
 ```
-ADAPTED :  win_rate(boss vs Mimic)  >= 0.70          reported, does not reject"
-FAIR    :  win_rate(boss vs panel)  in BAND[round]   "…but a different approach still beats it"
-ACTIVE  :  longest motionless run   <= 90 ticks      "…and it never looks crashed"
-           boss range over a match   >= 56 px        "…and it is not stuck in one spot"
+ADAPTED :  win_rate(boss vs Mimic)  >= ADAPTED_MIN[round]   round 2 reports it; 3-5 reject on it
+       or  win_rate(boss vs Mimic)  >= incumbent + 0.10     "…or better than the boss it replaces"
+FAIR    :  win_rate(boss vs panel)  in BAND[round]          "…but a different approach still beats it"
+ACTIVE  :  longest motionless run   <= 90 ticks             "…and it never looks crashed"
+           boss range over a match   >= 56 px               "…and it is not stuck in one spot"
 ```
 
-| Round | Band vs panel | Midpoint the Coder is told to aim at |
-|---|---|---|
-| 2 | 0.35 – 0.50 | 0.43 |
-| 3 | 0.45 – 0.60 | 0.53 |
-| 4 | 0.50 – 0.65 | 0.58 |
-| 5 | 0.55 – 0.70 | 0.63 |
+| Round | Band vs panel (FAIR) | Midpoint the Coder is told to aim at | ADAPTED vs the Mimic |
+|---|---|---|---|
+| 2 | 0.35 – 0.50 | 0.43 | ≥ 0.70, reported only |
+| 3 | 0.50 – 0.65 | 0.57 | ≥ 0.75, **rejects** |
+| 4 | 0.60 – 0.75 | 0.68 | ≥ 0.85, **rejects** |
+| 5 | 0.65 – 0.95 | 0.80 | ≥ 0.95, **rejects** |
+
+The two columns escalate for different reasons, and that is the point of the split
+(SPEC §13, delta 24). FAIR is the cap on raw strength, so it rises slowly: a round that
+got harder only by raising it would be a boss that spams more at four scripted bots.
+ADAPTED rises fast and blocks from round 3, because the difficulty the player is meant to
+feel over a fight is the boss reading *them* — a rate against a bot rebuilt from their own
+replay, which no amount of firing buys. Round 2 is unchanged in both columns: its numbers
+are the ones the recorded run and §6 below quote.
 
 The panel is `Camper`, `Kiter`, `Rusher`, `Dodger` — four bots that play nothing like the
 human. The **Mimic** is rebuilt from *this* player's replay: heat-map-weighted
@@ -942,6 +983,53 @@ of the round's band, which is only a meaningful choice because several were meas
 
 ---
 
+### 8.3 Contexts, tools and one worked parallel day
+
+§8 names the lanes; this says what each role could see and do, because "agents ran in
+parallel" is only evidence if the boundaries were real.
+
+| Role | Context it was given | Context it was denied | Tools |
+|---|---|---|---|
+| **Human** | everything; asked before every milestone and every irreversible step | — | the game itself (playtest), the PR |
+| **Orchestrator** (one Fable 5.1 session) | spec, `AI-DEV-LOG.md`, a per-project memory directory, a delegation policy that names what may never be delegated (final numbers, business rules, commits) | raw file dumps — it reads *conclusions* returned by subagents, not the files they read | shell, git, the Playwright screenshots in `artifacts/web/`, the subagents below |
+| **Explore** subagents (Sonnet) | one question and a search breadth ("which files style the HUD"; "which artifacts does the rulebook require") | write access; the running conversation | read-only search |
+| **Implementation** subagents (Opus) | a brief with the *public* surface of what they consume, an explicit list of files they own, acceptance criteria, and the lessons already paid for | every file outside their list; other agents' work in flight; e2e (one Playwright server per port) | edit, unit tests, typecheck, build |
+| **Writer** subagents (Opus) | the facts to record and the log's voice | numbers they did not witness — they leave a `<!-- VERIFY: fill -->` placeholder the orchestrator replaces | edit on one file |
+| **Reviewer** | the diff | the conversation that produced it | Greptile on the PR |
+
+The rules in the table are written down once, in the repo's [`CLAUDE.md`](../CLAUDE.md),
+and the two that must not depend on an agent's memory — no paid eval runs, no
+`--no-verify` — are enforced by the harness, not remembered: a permission denial in
+`.claude/settings.json` for `pnpm eval:agents`, and a PreToolUse hook
+(`.claude/hooks/deny-unsafe.sh`) for the flags a prefix rule cannot see — `--no-verify`,
+force-push, `REMATCH_ALLOW_SPEND=`. The command is refused before the model gets to argue. The deterministic controls that sit under all
+of this are §7's: the pre-commit hook runs
+`pnpm verify` regardless of what any agent believes about its work, the structural
+"costume" tests fail the build if a cosmetic module reaches a simulation module, and the
+replay hash asserts in unit and e2e that no visual change moved the simulation.
+
+**Worked example — 2026-09-10, the '90s restyle** (log entry of the same date). Handoff
+document written by the orchestrator → one Explore subagent mapped the visual surface and
+every e2e assertion a restyle had to keep → two Opus implementers launched in one message
+on disjoint file sets (CSS/font/CRT ‖ canvas effects), each forbidden to run e2e → the
+orchestrator ran e2e once, read every screenshot at 1280×800, 1440×900 and phone width,
+and made the only correction (scanline opacity) itself → `pnpm verify` → a writer
+subagent drafted the log entry with the placeholder above. Wall-clock: launched
+in the same message, they ran 5.6 and 10.5 min, so the shorter one overlapped entirely. Integration
+cost: zero conflicts, because the file ownership lists did not intersect.
+
+**A development-side autonomous loop, with the artifact.** Same evening, after one human
+sentence ("the minion should be a small clone of the boss"): the orchestrator drew the
+boss's face on the minion with a violet wash → added a screenshot spec and ran it →
+observed at a 4× crop that the wash turned Jupiter's stripes to mud at a 10 px radius →
+removed the wash and thickened the ring → re-ran the spec and re-cropped → shipped. No
+human prompt between the first action and the last verification; the human's next
+message was about deployment. Evidence: `artifacts/web/fight-minions.png` (regenerable
+by `pnpm --filter @rematch/web test:e2e`), the spec `e2e/screenshots.spec.ts` ("minions
+wear the boss's face"), and the dated log entry. The product-level loop in §6 is the
+bigger exhibit; this one is here because it is the shape the rulebook asks for, on the
+build side, and small enough to verify in a minute.
+
 ## 9. Known limitations
 
 Honest list, reconciled with §6 on 2026-09-08. It previously carried the marker "at
@@ -979,10 +1067,17 @@ The marker is gone because a dated list nobody re-dates is worse than no marker.
    which says the fight is winnable, not that it is fun or readable. The renderer agent's
    own finding sharpens the risk: ~100% of player damage comes from un-telegraphed
    bullets, so the boss's two telegraphs are honest but are not where the difficulty lives.
-3. **Not deployed (AC 9).** The recommendation is a split deployment (static web on
-   Vercel, server as an always-on Node process) and it is a pending human decision, not
-   code. All-Vercel is survivable but degrades Gate 3 to ~60 matches — which weakens the
-   *verifier*, the thing the project is arguing for.
+3. **The live URL plays a recorded run, not a live loop (AC 9, decided).** The split
+   deployment was built and verified (server on Fly, web on Vercel — `Dockerfile`,
+   `fly.toml`, `vercel.json`) and a real loop ran on it on 2026-09-10 until Fly's no-card
+   trial stopped the machine mid-Gate-3
+   ([`evidence/prod-run-2026-09-10-trial-cut.json`](evidence/prod-run-2026-09-10-trial-cut.json)).
+   The human then chose zero spend: the published site is the static web alone, and its
+   interlude replays a real `gpt-5.4-mini` run from disk, badged `RECORDED RUN · model ·
+   date` so nobody mistakes it for live. All-Vercel serverless was the free alternative
+   and was declined for the reason above: it caps Gate 3 at ~60 matches, weakening the
+   *verifier*. The live loop runs locally (`pnpm dev`, `REMATCH_PROVIDER=claude-cli`) and
+   is how the recordings are made.
 4. **Round 2 is the only round with real loop evidence.** Rounds 3–5 have bands, bots and
    a balance-tested fallback pair each, but no recorded rewrite. `BalanceRound` is typed
    `2 | 3 | 4 | 5`, so this is coverage, not capability.

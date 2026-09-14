@@ -37,25 +37,42 @@
  *    no verdict, and a verdict is the only thing worth having. Worst case the loop
  *    overshoots by one gate, which is why `deadlineMs` defaults to 40 s inside the
  *    45 s interlude budget (spec AC 5).
+ *
+ * 5. **The Judge aims the number, the model writes the boss.** A candidate that comes
+ *    in over the band and fails Gate 3 on FAIR alone is not rewritten — it is
+ *    *throttled*: `src/calibrate.ts` wraps its own `decide` to force a rest between
+ *    its attacks, brackets that rest downwards and re-runs the whole trial at each
+ *    value, at ~1 s a step against 20-37 s for a Coder call. Nothing about that is an
+ *    exception to the four properties above: the wrapper is fixed text, the search is
+ *    arithmetic over numbers the sandbox measured, no model is called, and a
+ *    throttled file ships only by passing the same four gates at the same thresholds
+ *    as any other. The throttle only ever subtracts, so a boss *under* the band is
+ *    still the Coder's problem and goes back to it with the rejection.
  */
 import { createTwoFilesPatch } from 'diff';
 import type { ReplaySummary } from '@rematch/engine';
 import type { StrategyMeta } from '@rematch/contract';
 import {
   ALL_GATES,
+  BOT_KINDS,
   GATE_NAMES,
+  SEED_OFFSET,
   bandFor,
   gate3Plan,
   getSandbox,
   measureMimicWinRate,
   runGates,
+  seedsFor,
+  simulate,
   type BalanceRound,
+  type BotSpec,
   type Gate3Options,
   type GateNumber,
   type GateResult,
   type RunGatesOptions,
 } from '@rematch/harness';
 import { runAnalyst } from './analyst.ts';
+import { calibrate, canThrottle, type CalibrationRun } from './calibrate.ts';
 import { runCoder, type CoderResult } from './coder.ts';
 import { renderPlayerProfile } from './context/playerProfile.ts';
 import { extractMeta } from './meta.ts';
@@ -69,6 +86,7 @@ import {
   type CandidateOutcome,
   type CoderBracket,
   type CoderDial,
+  type CoderIncumbent,
   type CoderRejection,
 } from './context/prompts.ts';
 import { isAbortError, type LLMProvider, type LLMUsage } from './provider.ts';
@@ -120,17 +138,46 @@ export const MAX_CANDIDATES = 6;
 export const CANDIDATE_GATE_RESERVE_MS = 5_000;
 
 /**
- * How long an attempt waits for its slowest candidate after the first one lands.
+ * The **floor** on how long an attempt waits for its slowest candidate after the
+ * first one lands.
  *
  * Model latency is the loop's only heavy tail: measured over a ten-replay round-2
  * eval the Coder's p50 was 8.2 s and its worst call was 36.7 s — one straggler that
  * consumed a whole 40 s run on its own and returned a truncated file. K candidates
  * make that tail *cheap* to cut, because the attempt already has two other files:
- * once one has arrived, a sibling still streaming six seconds later is abandoned
- * rather than waited on.
+ * once one has arrived, a sibling still streaming is abandoned rather than waited
+ * on.
+ *
+ * It was the whole grace until 2026-09-11, and as a fixed number it is a landmine.
+ * Three live interludes on `REMATCH_PROVIDER=claude-cli` each judged exactly one
+ * candidate of three, and the arithmetic is not ambiguous — the attempt ended
+ * 25 649 / 19 981 / 27 770 ms after it started against first-candidate Coder calls
+ * of 19 646 / 13 979 / 21 767 ms, i.e. **6 000 ms after the first reply landed, to
+ * within 3 ms, in all three**
+ * (`artifacts/server/rewrite-2026-09-11T16-18-39-211Z.json` and the two after it).
+ * The run deadline was 43 s and had 17 s left. Both siblings were still streaming
+ * normally; this constant killed them. See `STRAGGLER_LATENCY_RATIO` for what
+ * replaced it.
  */
 export const STRAGGLER_GRACE_MS = 6_000;
 export const STRAGGLER_ENV = 'REMATCH_STRAGGLER_MS';
+
+/**
+ * The grace, as a multiple of how long the attempt's *first* answered call took.
+ *
+ * A straggler is a call that has gone wrong, and "gone wrong" is only definable
+ * relative to what a healthy call on this provider costs right now. Six seconds is
+ * a long tail behind an 8 s p50 and noise behind a 20 s one, and the loop already
+ * holds a direct measurement of the latter: the call that just landed. So the grace
+ * is `max(configured floor, firstCallMs × ratio)` — the API providers keep the 6 s
+ * they were tuned with (8.2 s × 0.6 ≈ 5 s, under the floor), and `claude-cli` gets
+ * ~12 s off a 20 s call instead of being cut at 6 s.
+ *
+ * `REMATCH_STRAGGLER_MS` still overrides the floor, and the run deadline still
+ * bounds everything above it — this only stops an *unset* environment variable from
+ * silently amputating two thirds of every attempt.
+ */
+export const STRAGGLER_LATENCY_RATIO = 0.6;
 
 /** `REMATCH_CANDIDATES=3`. Clamped to 1..`MAX_CANDIDATES`; anything unparseable is the default. */
 export function resolveCandidates(env: Record<string, string | undefined> = process.env): number {
@@ -266,6 +313,22 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
       ...(gate3Opts.workers === undefined ? {} : { workers: gate3Opts.workers }),
     }).catch(() => undefined);
 
+    /**
+     * The other half of the incumbent's scorecard: its rates against the scripted
+     * panel, on Gate 3's own panel seeds.
+     *
+     * Nothing in the loop needs this to *judge* anything — it exists only so the
+     * first Coder call has a measured point instead of an adjective (see
+     * `incumbentAnchor`). Chained behind `adaptedBase` rather than started beside
+     * it: both are `simulate()` calls that want every core, and two at once inside
+     * the Analyst's window would contend for the same worker pool for no gain. The
+     * pair together is ~2 s against an Analyst call that measured 14-16 s on the
+     * `claude-cli` path, so the first Coder prompt never waits on it.
+     */
+    const incumbentPanel: Promise<readonly { name: string; winRate: number }[] | undefined> = adaptedBase
+      .then(() => measurePanelRates(input.prevSource, gate3Opts))
+      .catch(() => undefined);
+
     // ---------------------------------------------------------------- Analysis
     let analysis: Analysis;
     try {
@@ -315,6 +378,24 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
      * cached system prompt staying byte-identical (spec §6.3).
      */
     const profile = renderPlayerProfile(input.summary);
+    /**
+     * The incumbent's scorecard, for the first attempt's prompt only.
+     *
+     * Awaited here rather than inside the attempt because both measurements were
+     * started before the Analyst's model call and the Analyst is the slow one; by
+     * this line they have long since resolved, and neither can reject.
+     */
+    const incumbent: CoderIncumbent | undefined = await (async (): Promise<CoderIncumbent | undefined> => {
+      const perBot = await incumbentPanel;
+      const mimic = await adaptedBase;
+      if (perBot === undefined && mimic === undefined) return undefined;
+      const name = input.prevMeta?.name ?? input.summary.strategy?.name ?? extractMeta(input.prevSource)?.name;
+      return {
+        ...(name === undefined ? {} : { name }),
+        ...(perBot === undefined ? {} : { perBot }),
+        ...(mimic === undefined ? {} : { mimic }),
+      };
+    })();
     const stragglerMs = input.stragglerMs ?? resolveStragglerMs();
     let prevSource = input.prevSource;
     let rejection: CoderRejection | undefined;
@@ -342,8 +423,10 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
      * that was already correct — measured over a ten-replay eval, one replay spent
      * all three attempts at 0.44 / 0.00.
      *
-     * Since 2026-09-08 the rejection reaching this branch is ACTIVE rather than
-     * ADAPTED: an in-band boss that merely misses the Mimic goal now ships. The
+     * Since 2026-09-08 the rejection reaching this branch **in round 2** is ACTIVE
+     * rather than ADAPTED: an in-band round-2 boss that merely misses the Mimic goal
+     * ships. From round 3 ADAPTED rejects again (spec §13, delta 24), so this branch
+     * is once more the common one there — which is what it was written for. The
      * mode survives because the instruction is the same either way — the pressure
      * is right, so change where it goes, not how much of it there is. `mimic` is
      * still the ranking key, because among several fair-but-rejected files the one
@@ -382,9 +465,16 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
       const onRunAbort = (): void => attemptAbort.abort();
       controller.signal.addEventListener('abort', onRunAbort, { once: true });
       let straggler: NodeJS.Timeout | undefined;
-      const armStraggler = (): void => {
+      /**
+       * Armed by the first call to answer, and scaled by how long that call took —
+       * see `STRAGGLER_LATENCY_RATIO`. `firstMs` is that call's own wall clock, so
+       * it is a measurement of this provider on this machine in this attempt
+       * rather than a constant tuned against a different one.
+       */
+      const armStraggler = (firstMs: number): void => {
         if (straggler !== undefined || candidateCount <= 1) return;
-        straggler = setTimeout(() => attemptAbort.abort(), stragglerMs);
+        const grace = Math.max(stragglerMs, Math.round(firstMs * STRAGGLER_LATENCY_RATIO));
+        straggler = setTimeout(() => attemptAbort.abort(), grace);
         (straggler as unknown as { unref?: () => void }).unref?.();
       };
 
@@ -401,6 +491,9 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
             ...(rejection === undefined ? {} : { rejection }),
             ...(dial === undefined ? {} : { dial }),
             ...(bracket === undefined || candidateCount <= 1 ? {} : { bracket }),
+            // First attempt only: `coderPrompt` drops it once a rejection exists,
+            // but not sending it at all keeps the retry prompts byte-cheap too.
+            ...(rejection !== undefined || incumbent === undefined ? {} : { incumbent }),
             profile,
           },
           providers.coder,
@@ -415,31 +508,101 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           // unhandled promise.
         ).then<Settled, Settled>(
           (value) => {
-            armStraggler();
+            armStraggler(value.ms);
             return { ok: true, value };
           },
           (error: unknown) => ({ ok: false, error }),
         ),
       );
 
-      // Gates run one candidate at a time, in index order — each starting as soon
-      // as its own model call lands and the previous candidate's gates are done.
-      // Sequential rather than concurrent on purpose: `simulate()` already spends
-      // every core on Gate 3's worker pool, so three pools at once contend for the
-      // same cores and finish *later* — measured on a 12-core machine, three
-      // 200-match Gate 3 runs take 2.27-2.35 s one after another and 2.55-2.59 s
-      // all at once. Sequential is both faster and deterministic for the tests.
+      // Gates run one candidate at a time — sequential on purpose, because
+      // `simulate()` already spends every core on Gate 3's worker pool, so three
+      // pools at once contend for the same cores and finish *later*: measured on a
+      // 12-core machine, three 200-match Gate 3 runs take 2.27-2.35 s one after
+      // another and 2.55-2.59 s all at once.
+      //
+      // But in **completion order**, not index order, since 2026-09-11. The K model
+      // calls really are concurrent (`providerClaudeCli` spawns one child process
+      // each, nothing shared between them), and `await pending[index]` still made
+      // the *gates* wait on candidate 0 — so a sibling that had already landed sat
+      // unjudged while the loop blocked on a slower call, and then the deadline
+      // arrived. Racing the outstanding calls means the first file to exist is the
+      // first file measured, which is the only ordering that survives a budget
+      // shorter than two Coder calls.
+      //
+      // Deterministic where it matters: `Promise.race` over already-settled
+      // promises resolves in iteration order, so mock providers that resolve
+      // immediately are judged 0, 1, 2 exactly as before.
       const logs: CandidateLog[] = [];
       let coderError: Error | undefined;
 
-      for (let index = 0; index < candidateCount; index += 1) {
-        const settled = await (pending[index] as Promise<Settled>);
+      const outstanding = new Map(
+        pending.map((promise, index) => [
+          index,
+          (promise as Promise<Settled>).then((settled) => ({ index, settled })),
+        ]),
+      );
+
+      /**
+       * Set the moment a candidate passes every gate, and the attempt's off switch.
+       *
+       * Once one file is shippable the rest are dead weight: the attempt cannot ship
+       * two bosses, and `chooseCandidate` would pick this one over any later pass
+       * anyway. Measured on a live round 3 run
+       * (`artifacts/server/rewrite-2026-09-11T18-47-05-340Z.json`) candidate 0 was
+       * approved at ~40 s and the loop then waited for candidates 1 and 2, gated
+       * both, and spent four more calibration steps on candidate 1 — 10-15 s of an
+       * interlude in which nothing that happened could change the outcome.
+       *
+       * **Every** outstanding sibling is dropped, not only the ones still streaming.
+       * A file that has already landed still costs a full `runTrial` and possibly a
+       * six-step throttle search, which is exactly the time this is reclaiming; in
+       * that live run both siblings had landed long before candidate 0 approved, so
+       * cutting only the unfinished ones would have saved nothing. They are logged
+       * with their source and marked `skipped` so the artifact still shows what the
+       * attempt wrote.
+       */
+      let approvedIndex: number | undefined;
+
+      while (outstanding.size > 0) {
+        const { index, settled } = await Promise.race(outstanding.values());
+        outstanding.delete(index);
+        if (approvedIndex !== undefined) {
+          // A sibling of an approved candidate. Its own model call may have been
+          // aborted by `attemptAbort` below, in which case there is no file to log
+          // and the rejection is this loop's own doing rather than a failure.
+          if (!settled.ok) continue;
+          const skippedDial = dials[index];
+          const skippedDiff = unifiedDiff(prevSource, settled.value.source, attempt);
+          const skippedMeta = extractMeta(settled.value.source);
+          emit({
+            type: 'rewrite.done',
+            attempt,
+            source: settled.value.source,
+            diff: skippedDiff,
+            ...(skippedMeta === null ? {} : { meta: skippedMeta }),
+            ...tagOf(index, candidateCount),
+            ...(skippedDial === undefined ? {} : { dial: skippedDial.name }),
+          });
+          const skippedLog = candidateLog(
+            index,
+            skippedDial?.name,
+            settled.value,
+            skippedDiff,
+            skippedMeta?.name,
+          );
+          skippedLog.skipped = true;
+          skippedLog.skippedReason = 'approved-sibling';
+          logs.push(skippedLog);
+          continue;
+        }
         if (!settled.ok) {
           coderError ??= settled.error as Error;
           continue;
         }
         const coder = settled.value;
         const dial = dials[index];
+        const tag = tagOf(index, candidateCount);
         const diff = unifiedDiff(prevSource, coder.source, attempt);
         // Parsed, not loaded: this file may be one Gate 1 is about to reject, and
         // the interlude wants the boss's name on the diff either way.
@@ -450,7 +613,7 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           source: coder.source,
           diff,
           ...(candidateMeta === null ? {} : { meta: candidateMeta }),
-          ...tagOf(index, candidateCount),
+          ...tag,
           ...(dial === undefined ? {} : { dial: dial.name }),
         });
 
@@ -462,6 +625,7 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
         // skipped so the attempt still produces a verdict.
         if (logs.length > 1 && (remaining() < CANDIDATE_GATE_RESERVE_MS || controller.signal.aborted)) {
           log.skipped = true;
+          log.skippedReason = 'deadline';
           continue;
         }
 
@@ -474,29 +638,126 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           // Awaited here, on the first candidate that reaches the gates: by now the
           // Analyst's model call has already covered its ~100 matches.
           await adaptedBase,
-          tagOf(index, candidateCount),
+          tag,
         );
         log.approved = trial.ok;
         if (!trial.ok) log.reason = trial.reason;
-        const panel = panelRate(log.gates);
         const label = `${dial?.name ?? `candidate ${index + 1}`} (attempt ${attempt})`;
-        if (panel !== undefined) {
-          log.panel = panel;
-          measured.push({ label, panel, source: coder.source });
-          const mimic = balanceRates(log.gates.find((g) => g.gate === 3))?.mimic;
+        /** The gates of the file the Coder actually wrote, before any calibration. */
+        const ownGates = log.gates;
+
+        /**
+         * THE THROTTLE — the Judge aims the number (`src/calibrate.ts`).
+         *
+         * Only when Gate 3 rejected this file on FAIR alone *and* it was over the
+         * band. A boss that is also frozen or also blind has something wrong that no
+         * rest between its attacks fixes, and a boss *under* the band cannot be
+         * helped by a knob that only subtracts — both go back to the Coder with the
+         * rejection, exactly as before. The direction comes from
+         * `detail.panel.winRate` against `detail.band`, never from the reason
+         * sentence: that string is the Coder's feedback channel and nothing in the
+         * loop parses it (property 1 of this file's header).
+         */
+        const miss = trial.ok ? undefined : fairMiss(log.gates);
+        const calibration: CalibrationRun | undefined =
+          miss === undefined || !canThrottle(coder.source)
+            ? undefined
+            : await calibrate({
+                source: coder.source,
+                band: miss.band,
+                panel: miss.panel,
+                // One gate pass per step needs the same room a candidate does.
+                hasBudget: () => remaining() >= CANDIDATE_GATE_RESERVE_MS && !controller.signal.aborted,
+                measure: async (source) => {
+                  const gates: GateResult[] = [];
+                  // `quiet`, not `emit`: the candidate's own gate list and progress
+                  // meter describe the file the Coder wrote, and a second series
+                  // inside one candidate would contradict the first. The steps are
+                  // reported as `calibrate.step` instead.
+                  const step = await runTrial(source, attempt, input, quiet, gates, await adaptedBase, tag);
+                  const rates = balanceRates(gates.find((g) => g.gate === 3));
+                  const stepPanel = panelRate(gates);
+                  return {
+                    gates,
+                    ok: step.ok,
+                    ...(step.ok ? {} : { reason: step.reason }),
+                    ...(stepPanel === undefined ? {} : { panel: stepPanel }),
+                    ...(rates?.mimic === undefined ? {} : { mimic: rates.mimic }),
+                  };
+                },
+                onStep: (step) =>
+                  emit({
+                    type: 'calibrate.step',
+                    attempt,
+                    ...tag,
+                    step: step.step,
+                    pressure: step.throttle,
+                    ...(step.panel === undefined ? {} : { panel: step.panel }),
+                    ok: step.ok,
+                    ...(step.reason === undefined ? {} : { reason: step.reason }),
+                  }),
+              });
+
+        if (calibration !== undefined) {
+          const won = calibration.approved;
+          if (won !== undefined) {
+            // The calibrated file *is* the candidate from here on: same source bar one
+            // constant, judged by all four gates at the same thresholds, so the diff
+            // the player is shown has to be the file that ships.
+            log.source = won.source;
+            log.diff = unifiedDiff(prevSource, won.source, attempt);
+            log.gates = won.gates;
+            log.approved = true;
+            delete log.reason;
+            const wonMeta = extractMeta(won.source);
+            if (wonMeta?.name !== undefined) log.name = wonMeta.name;
+          }
+          log.pressure = calibration.to;
+          log.calibration = { steps: calibration.steps.length, from: calibration.from, to: calibration.to };
+          emit({
+            type: 'calibrate.done',
+            attempt,
+            ...tag,
+            steps: calibration.steps.length,
+            pressure: calibration.to,
+            approved: won !== undefined,
+          });
+        }
+
+        // Every file this candidate measured — the Coder's own and each calibration
+        // step — feeds the run's bisection, because a step that measured 0.16 is a
+        // lower bound the *next attempt's* bracket can interpolate inside.
+        const points: { label: string; source: string; gates: readonly GateResult[]; ok: boolean }[] = [
+          { label, source: coder.source, gates: ownGates, ok: trial.ok },
+          ...(calibration?.steps ?? []).map((step) => ({
+            label: `${label} at throttle ${step.throttle}`,
+            source: step.source,
+            gates: step.gates,
+            ok: step.ok,
+          })),
+        ];
+        for (const point of points) {
+          const measuredPanel = panelRate(point.gates);
+          if (measuredPanel === undefined) continue;
+          measured.push({ label: point.label, panel: measuredPanel, source: point.source });
+          const mimic = balanceRates(point.gates.find((g) => g.gate === 3))?.mimic;
           // FAIR but rejected anyway: keep the best of these, ranked by Mimic rate,
           // because the next attempt's job is to fix the other assertion without
           // touching the rate that already works.
           if (
-            !trial.ok &&
-            panel >= bandLo &&
-            panel <= bandHi &&
+            !point.ok &&
+            measuredPanel >= bandLo &&
+            measuredPanel <= bandHi &&
             mimic !== undefined &&
             (fairButBlind === undefined || mimic > fairButBlind.mimic)
           ) {
-            fairButBlind = { label, source: coder.source, mimic };
+            fairButBlind = { label: point.label, source: point.source, mimic };
           }
         }
+        // The shipped file's rate, which after a successful calibration is the
+        // winning step's rather than the Coder's.
+        const panel = panelRate(log.gates);
+        if (panel !== undefined) log.panel = panel;
 
         // Per-candidate verdicts only exist when there are candidates to tell
         // apart; at K = 1 the attempt-level verdict below is the only one, exactly
@@ -505,16 +766,29 @@ export async function rewrite(input: RewriteInput, emit: Emit = (): void => {}):
           emit({
             type: 'verdict',
             attempt,
-            approved: trial.ok,
-            ...(trial.ok ? {} : { reason: trial.reason }),
+            approved: log.approved,
+            ...(log.approved ? {} : { reason: log.reason }),
             ...(panel === undefined ? {} : { panel }),
-            ...tagOf(index, candidateCount),
+            ...tag,
           });
+        }
+
+        // The attempt has its answer. Stop the siblings still streaming — the same
+        // abort the straggler cut uses — and let the drain above record whatever has
+        // already landed. See `approvedIndex`.
+        if (log.approved) {
+          approvedIndex = index;
+          attemptAbort.abort();
         }
       }
 
       if (straggler !== undefined) clearTimeout(straggler);
       controller.signal.removeEventListener('abort', onRunAbort);
+      // Judged in completion order, *reported* in candidate order: `AttemptLog.chosen`
+      // is an index into this array and the retry's comparison table reads down it,
+      // so a row order that depended on which model call happened to answer first
+      // would make two identical runs produce two different artifacts.
+      logs.sort((a, b) => a.candidate - b.candidate);
 
       if (logs.length === 0) {
         const aborted = controller.signal.aborted || (coderError !== undefined && isAbortError(coderError));
@@ -670,6 +944,127 @@ function sumCoder(logs: readonly CandidateLog[]): AttemptLog['coder'] {
     ...(selfRetry === undefined ? {} : { selfRetry }),
     ...(staticInvalid === undefined ? {} : { staticInvalid }),
   };
+}
+
+/**
+ * The incumbent boss's rates against the scripted panel — the first attempt's
+ * anchor (`incumbentAnchor`).
+ *
+ * It is `gate3Balance`'s panel half and nothing else: the same four bots from
+ * `BOT_KINDS`, the same `perBotSeeds` arithmetic out of `gate3Plan`, the same
+ * `SEED_OFFSET.panel`. Same seeds is the whole point — a number the Coder is told
+ * to beat has to have been measured on the matches it will be measured on, or the
+ * difference between the two is noise about which seeds each one drew.
+ *
+ * It lives here rather than in `@rematch/harness` because it is prompt context, not
+ * a verdict: nothing in the gates reads it, and a gate module that exported a
+ * "measure this for the prompt" helper would invite exactly the confusion the
+ * project's §6.3 argument is about. Returns `undefined` on any failure — a source
+ * that will not load is not a baseline, and it must not cost the player a rewrite.
+ */
+async function measurePanelRates(
+  source: string,
+  opts: Pick<Gate3Options, 'matches' | 'accuracy' | 'workers'>,
+): Promise<readonly { name: string; winRate: number }[] | undefined> {
+  try {
+    const { perBotSeeds } = gate3Plan(opts);
+    const specs: BotSpec[] = BOT_KINDS.map((kind) =>
+      opts.accuracy === undefined ? { kind } : { kind, accuracy: opts.accuracy },
+    );
+    const result = await simulate({
+      source,
+      ...(opts.workers === undefined ? {} : { workers: opts.workers }),
+      bots: specs,
+      seeds: seedsFor(perBotSeeds, SEED_OFFSET.panel),
+    });
+    const perBot = result.perBot.map((b) => ({ name: b.name, winRate: b.winRate }));
+    return perBot.length === 0 ? undefined : perBot;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An emit that goes nowhere. Used for a calibration step's gates (see the loop). */
+const quiet: Emit = (): void => {};
+
+/**
+ * Gate 3's FAIR miss, when the boss was **too hard** and that was the **only** thing
+ * the gate complained about.
+ *
+ * This is the throttle's trigger, and it is read structurally out of `detail` rather
+ * than out of the rejection sentence — the sentence is the Coder's feedback channel
+ * and the loop's first property is that nothing here parses it. Three things have to
+ * hold for a rest between the attacks to be the right answer:
+ *
+ *  - the panel rate is *above* the round's band. The throttle only ever subtracts
+ *    pressure, so a boss under the band is not a boss it can help; that one goes back
+ *    to the Coder with its rejection, which is where it always went.
+ *  - ACTIVE is satisfied, because the throttle replaces a held attack with a step of
+ *    movement and a boss that was already standing still stays standing still.
+ *  - ADAPTED is not the *blocking* failure, because the throttle never changes what
+ *    the boss reads — the same slam goes to the same cell, it just goes less often —
+ *    so a boss that learned nothing learns nothing at any throttle.
+ *
+ * Any other shape — Gate 1 or 2 rejected the file, the simulation could not run, a
+ * `detail` this cannot read — returns `undefined`, and the candidate is judged
+ * exactly as it was before the throttle existed.
+ */
+export function fairMiss(
+  gates: readonly GateResult[],
+): { panel: number; band: [number, number] } | undefined {
+  const result = gates.find((g) => g.gate === 3);
+  if (result === undefined || result.ok) return undefined;
+  const detail = result.detail;
+  if (typeof detail !== 'object' || detail === null) return undefined;
+  const record = detail as Record<string, unknown>;
+
+  const band = record['band'];
+  const lo = Array.isArray(band) ? band[0] : undefined;
+  const hi = Array.isArray(band) ? band[1] : undefined;
+  if (typeof lo !== 'number' || typeof hi !== 'number') return undefined;
+
+  const panelNode = record['panel'];
+  const panel =
+    typeof panelNode === 'object' && panelNode !== null
+      ? (panelNode as { winRate?: unknown }).winRate
+      : undefined;
+  if (typeof panel !== 'number') return undefined;
+  // Above the band and nowhere else: see this function's doc comment.
+  if (panel <= hi) return undefined;
+
+  const thresholds = record['thresholds'];
+  const activity = record['activity'];
+  if (typeof thresholds !== 'object' || thresholds === null) return undefined;
+  if (typeof activity !== 'object' || activity === null) return undefined;
+  const num = (node: object, key: string): number | undefined => {
+    const value = (node as Record<string, unknown>)[key];
+    return typeof value === 'number' ? value : undefined;
+  };
+  const idleRun = num(activity, 'longestIdleRun');
+  const idleP90 = num(activity, 'idleFractionP90');
+  const span = num(activity, 'minSpanPx');
+  const maxIdleRun = num(thresholds, 'maxIdleRunTicks');
+  const maxIdleP90 = num(thresholds, 'maxIdleFractionP90');
+  const minSpan = num(thresholds, 'minSpanPx');
+  if (
+    idleRun === undefined ||
+    idleP90 === undefined ||
+    span === undefined ||
+    maxIdleRun === undefined ||
+    maxIdleP90 === undefined ||
+    minSpan === undefined
+  ) {
+    return undefined;
+  }
+  if (idleRun > maxIdleRun || idleP90 > maxIdleP90 || span < minSpan) return undefined;
+
+  const adapted = record['adapted'];
+  if (typeof adapted === 'object' && adapted !== null) {
+    const { met, blocking } = adapted as { met?: unknown; blocking?: unknown };
+    if (blocking === true && met !== true) return undefined;
+  }
+
+  return { panel, band: [lo, hi] };
 }
 
 /** Gate 3's panel win rate, out of the gate results an attempt collected. */
