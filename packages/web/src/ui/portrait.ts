@@ -71,6 +71,10 @@ export function createPortrait(id: AgentId, options: PortraitOptions): HTMLEleme
   img.height = options.size;
   img.addEventListener('load', () => {
     img.dataset.ok = '1';
+    // The raster is up; the stand-in under it goes away. Both files have alpha, so
+    // leaving the SVG ball beneath a transparent crop drew a face inside a face —
+    // a human saw it on the published site on 2026-09-14.
+    wrap.dataset.loaded = '1';
   });
   img.addEventListener('error', () => {
     // The art is not there. Leave the placeholder as the portrait and stop asking.
@@ -121,6 +125,7 @@ export function createFighterFace(id: FighterId, size: number, baseUrl?: string)
   img.height = size;
   img.addEventListener('load', () => {
     img.dataset.ok = '1';
+    wrap.dataset.loaded = '1'; // same reason as `createPortrait`: the crop is transparent
   });
   img.addEventListener('error', () => {
     img.remove();

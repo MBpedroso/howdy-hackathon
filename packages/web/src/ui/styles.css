@@ -990,6 +990,10 @@ body {
  * a missing file is a stand-in rather than a broken-image glyph for one frame. */
 .rm-face-img { opacity: 0; object-fit: contain; transition: opacity 140ms linear; }
 .rm-face-img[data-ok='1'] { opacity: 1; }
+/* Once the raster has loaded the stand-in is hidden, not just covered: both the
+ * mascot crops and the agent portraits have alpha, so a covered SVG still showed
+ * through as a second face inside the first. */
+.rm-face[data-loaded='1'] .rm-face-ph, .rm-portrait[data-loaded='1'] .rm-portrait-ph { visibility: hidden; }
 
 /* ---- pick your fighter: two radio grids, cosmetic only */
 

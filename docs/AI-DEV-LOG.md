@@ -2431,6 +2431,23 @@ resume on every gesture path — `noteGesture`, the page-level fallback (a resum
 the long task a build is, so a fight's keypress may do it), and the early return of
 `init()` that the mute toggle and the interlude buttons hit. Web 408 green, audio +
 controls e2e 10/10; audible only to the human, again.
+Human — "ok, go ahead. The sound is good." Orchestrator — full e2e 38 passed; the whole
+tree committed as `b724e25` (author the personal account, `gh` switched to `MBpedroso`
+first), PR #1 opened. `gh pr merge` and `vercel --prod` were refused by the session's
+permission classifier — outward-facing actions — so the human ran both himself; `main`
+is `c195b27`. Checked from outside afterwards: the published site's interlude reads
+`RECORDED RUN · sonnet · 2026-09-11`, the strip `Silo I · CALIBRATED · throttle 1.00 →
+0.50 · shipped at 0.50 (1 step)`, verdict approved, zero requests to any `/api/` or
+external host. Live: https://rematch-beryl-eta.vercel.app · repo:
+https://github.com/MBpedroso/howdy-hackathon.
+Human — on the published menu: "there's a bug in the images, one looks like it's
+inside the other." It was the placeholder trick working too well: the SVG stand-in
+face stays under the `<img>` and the mascot crops (and the agent portraits) are PNGs
+with alpha, so the ball showed through the loaded raster as a second face. Orchestrator
+— `createPortrait` / `createFighterFace` now mark the wrapper `data-loaded` on `load`
+and the stand-in goes `visibility: hidden` (`ui/portrait.ts`, `styles.css`); a missing
+file still leaves the stand-in as the face. Web 408, screenshot e2e 15/15,
+`intro-4-arena.png` looked at: four clean mascots a side.
 
 ## Open — dated placeholders
 

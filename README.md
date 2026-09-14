@@ -5,7 +5,7 @@ boss's strategy to counter you. A second, deterministic verifier refuses to ship
 rewrite until it proves the fight is still fair — and you watch it happen, rejections
 included.
 
-**Status: `pnpm verify` green — 1309 tests + 36 e2e. Live: [rematch-beryl-eta.vercel.app](https://rematch-beryl-eta.vercel.app) — static web, interlude replays a real recorded run (zero-spend decision, see *Deploy*). The live loop runs locally.**
+**Status: `pnpm verify` green — 1321 tests + 38 e2e. Live: [rematch-beryl-eta.vercel.app](https://rematch-beryl-eta.vercel.app) — static web, interlude replays a real recorded run (zero-spend decision, see *Deploy*). The live loop runs locally.**
 
 ## 60-second demo
 
@@ -143,7 +143,7 @@ jury read as an unfinished screen to the other.
 [rematch-beryl-eta.vercel.app](https://rematch-beryl-eta.vercel.app). Its interlude
 replays a real `claude-cli`/`sonnet` run from disk and says so on screen: `RECORDED RUN ·
 sonnet · 2026-09-11`, calibration strip included. No server, no key, no spend.
-Verified from outside on 2026-09-11: the scripted player wins Round 1 on the published
+Verified from outside on 2026-09-14: the scripted player wins Round 1 on the published
 site, the interlude opens on the recorded run, zero requests leave for any `/api/` or
 external host (`artifacts/web/deployed-interlude-recorded.png`).
 
